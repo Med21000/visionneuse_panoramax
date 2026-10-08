@@ -9,6 +9,7 @@ Deux modes :
 """
 
 from collections import OrderedDict
+from datetime import datetime
 
 from qgis.core import Qgis, QgsMessageLog, QgsSettings
 from qgis.PyQt.QtCore import QStandardPaths, QTimer, QUrl, Qt, pyqtSignal
@@ -36,6 +37,18 @@ import re
 
 from . import api
 from .pano_widget import PanoWidget
+
+
+def _is_blank(img):
+    """Image vide ou d'une seule couleur (capture d'un rendu non accessible)."""
+    if img is None or img.isNull() or img.width() < 2 or img.height() < 2:
+        return True
+    first = img.pixel(0, 0)
+    for i in range(1, 11):
+        for j in range(1, 11):
+            if img.pixel(img.width() * i // 12, img.height() * j // 12) != first:
+                return False
+    return True
 
 
 def capture_dir():
@@ -441,6 +454,11 @@ class PanoramaxDock(QDockWidget):
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(capture_dir())))
         self.btn_capture.setMenu(menu)
         bar.addWidget(self.btn_capture)
+        btn_thumb = QPushButton("🖼 Capture vignette")
+        btn_thumb.setToolTip("Enregistrer la visionneuse telle qu'affichée (avec les mesures) en image PNG, "
+                             "copiée aussi dans le presse-papiers")
+        btn_thumb.clicked.connect(self.capture_thumbnail)
+        bar.addWidget(btn_thumb)
         self.btn_measure = QToolButton()
         self.btn_measure.setText("📐 Mesure")
         self.btn_measure.setCheckable(True)
@@ -827,6 +845,43 @@ class PanoramaxDock(QDockWidget):
         self.btn_capture.setEnabled(False)
         self.btn_capture.setText("📷 Téléchargement…")
         api.fetch(href, lambda data, error: self._on_capture_image(item, view, data, error))
+
+    def capture_thumbnail(self):
+        """Capture d'écran de la visionneuse, mesures et réticule compris."""
+        from qgis.PyQt.QtWidgets import QApplication
+
+        widget = self.web if self.web is not None else getattr(self, "img", None)
+        item = self._current_item
+        if widget is None or not item:
+            self.message.emit("Aucune photo affichée : choisissez d'abord une photo.", 1, "")
+            return
+        img = widget.grab().toImage()
+        if _is_blank(img):
+            # Rendu web non capturable directement : on tente une copie de l'écran
+            screen = widget.screen() if hasattr(widget, "screen") else QApplication.primaryScreen()
+            top_left = widget.mapToGlobal(widget.rect().topLeft()) - screen.geometry().topLeft()
+            img = screen.grabWindow(0, top_left.x(), top_left.y(), widget.width(), widget.height()).toImage()
+        if _is_blank(img):
+            self.message.emit("Capture de la visionneuse impossible sur cet affichage (Wayland ?) : "
+                              "utilisez « Capture HD ».", 1, "")
+            return
+        img = img.convertToFormat(QImage.Format.Format_RGB32)
+        try:
+            from . import capture
+            heading = self._view["heading"] if self._view else api.item_heading(item)
+            img = capture.add_caption(img, capture.caption_for(item, heading))
+        except ImportError:  # numpy absent : capture sans cartouche
+            pass
+        props = item.get("properties", {}) or {}
+        date = re.sub(r"[^0-9]", "", (props.get("datetime") or ""))[:8] or "sansdate"
+        name = "panoramax_vignette_{}_{}_{}.png".format(
+            date, (item.get("id") or "")[:8], datetime.now().strftime("%H%M%S"))
+        path = os.path.join(capture_dir(), name)
+        if img.save(path, "PNG"):
+            QApplication.clipboard().setImage(img)
+            self.message.emit("Vignette enregistrée et copiée : {}".format(path), 3, path)
+        else:
+            self.message.emit("Impossible d'écrire {}".format(path), 1, "")
 
     def _on_capture_image(self, item, view, data, error):
         from qgis.PyQt.QtWidgets import QApplication

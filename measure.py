@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Mesures dans QGIS : triangulation, distance au sol et hauteur.
+"""Mesures dans QGIS : triangulation, largeur et hauteur.
 
 - Triangulation : viser un objet au centre de la visionneuse, changer de photo,
   le viser à nouveau ; le point d'intersection s'affiche sur la carte et peut
   être enregistré dans la couche « Panoramax – points triangulés ».
-- Distance au sol / hauteur : deux clics dans la photo, calculés par
-  l'hypothèse du sol plat (voir ground.py) ; les points s'affichent sur la carte.
+- Largeur / hauteur : deux clics dans la photo, prolongés jusqu'au terrain
+  (voir ground.py et terrain.py) ; les points s'affichent sur la carte.
 """
 
 from datetime import datetime
@@ -223,7 +223,7 @@ class Triangulator:
 
 
 # --------------------------------------------------------------------------
-# Distance au sol et hauteur
+# Largeur et hauteur
 # --------------------------------------------------------------------------
 class MeasureItem(QgsMapCanvasItem):
     """Points mesurés au sol, segment éventuel et étiquette du résultat."""
@@ -308,8 +308,8 @@ class MeasureItem(QgsMapCanvasItem):
 
 
 class GroundMeasure:
-    """Deux clics dans la photo : distance au sol ("ground"), largeur perpendiculaire
-    à la route ("width") ou hauteur ("height").
+    """Deux clics dans la photo : largeur perpendiculaire à la route ("width") ou
+    hauteur d'un objet ("height").
 
     Chaque clic qui doit toucher le sol porte le profil du terrain le long de sa
     visée (clés "profile" et "terrain", voir terrain.py) ; sans profil, sol plat.
@@ -317,7 +317,7 @@ class GroundMeasure:
 
     def __init__(self, canvas):
         self.canvas = canvas
-        self.mode = "ground"
+        self.mode = "width"
         self.camera_height = DEFAULT_CAMERA_HEIGHT
         self.clicks = []  # dicts : pic, lon, lat, yaw, elev, profile, terrain
         self.result = None
@@ -362,12 +362,11 @@ class GroundMeasure:
                 if self.mode == "width":
                     axis = self.clicks[0].get("axis")
                     if axis is None:
-                        raise ground.GroundError("Axe de la route inconnu pour cette photo : utilisez "
-                                                 "« Distance au sol ».")
+                        raise ground.GroundError("Axe de la route inconnu pour cette photo : largeur "
+                                                 "impossible à calculer.")
                     self.result = ground.measure_width(self.camera_height, *self.clicks, axis)
                 else:
-                    fn = ground.measure_distance if self.mode == "ground" else ground.measure_height
-                    self.result = fn(self.camera_height, *self.clicks)
+                    self.result = ground.measure_height(self.camera_height, *self.clicks)
             elif len(self.clicks) == 1:
                 ground._ground_point(self.camera_height, self.clicks[0])  # contrôle du premier clic
         except ground.GroundError as exc:
@@ -390,6 +389,21 @@ class GroundMeasure:
             points = [ground._ground_point(self.camera_height, self.clicks[0])[1]]
         self.item.set_data(points, label, extra)
 
+    def viewer_marks(self):
+        """Repères à afficher dans la visionneuse (voir PanoramaxDock.set_measure_marks)."""
+        points = []
+        for c in self.clicks:
+            pos = c.get("pos") or [None, None]
+            points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1],
+                           "abs_yaw": c["yaw"], "elev": c["elev"]})
+        # Visionneuse web : seuls les clics dont la position dans la photo est connue
+        label = ""
+        if self.result:
+            symbol = {"width": "↔ ", "height": "↕ "}.get(self.mode, "")
+            label = "{}{} m ± {} m".format(symbol, _num(self.result["value"], 2), _num(self.result["uncertainty"], 2))
+        # Hauteur : trait vertical sur l'objet, l'étiquette se met à côté (vers le centre de la vue)
+        return {"points": points, "label": label, "beside": self.mode == "height"}
+
     def _terrain_label(self):
         labels = []
         for c in self.clicks:
@@ -402,12 +416,7 @@ class GroundMeasure:
     def status(self):
         n = len(self.clicks)
         prefix = (self.error + " ") if self.error else ""
-        if self.mode == "ground":
-            if n == 0:
-                return prefix + "Cliquez dans la photo sur le sol, au premier point."
-            if n == 1 and not self.error:
-                return "Cliquez sur le sol au second point (même photo ou autre photo)."
-        elif self.mode == "width":
+        if self.mode == "width":
             if n == 0:
                 return prefix + "Cliquez au pied du premier bord (bordure, marquage, limite de chaussée…)."
             if n == 1 and not self.error:
@@ -421,12 +430,7 @@ class GroundMeasure:
         if self.error:
             return self.error + " Cliquez à nouveau pour recommencer."
         r = self.result
-        if self.mode == "ground":
-            text = "Distance : {} m (±{} m) · points à {} m de la photo".format(
-                _num(r["value"], 2), _num(r["uncertainty"], 2), " / ".join(_num(d) for d in r["ranges"]))
-            if r.get("dz") is not None:
-                text += " · dénivelé {}{} m".format("+" if r["dz"] >= 0 else "", _num(r["dz"], 2))
-        elif self.mode == "width":
+        if self.mode == "width":
             text = "Largeur : {} m (±{} m) perpendiculairement à la route · en biais {} m · axe {}° ({})".format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["oblique"], 2), _num(r["axis"], 0),
                 self.clicks[0].get("axis_source") or "?")

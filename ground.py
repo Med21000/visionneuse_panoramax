@@ -5,8 +5,8 @@ La caméra est à une hauteur connue au-dessus du sol. Un clic donne une
 direction (cap, élévation) ; on suit ce rayon jusqu'à ce qu'il passe sous le
 terrain, décrit par un profil d'altitudes le long de la visée (MNT ou service
 d'altimétrie). Sans profil, le sol est supposé plat et horizontal. On en déduit
-la position des points au sol, les distances entre points et la hauteur d'un
-objet (pied puis sommet).
+la position des points au sol, la largeur d'une voie (perpendiculairement à son
+axe) et la hauteur d'un objet (pied puis sommet).
 
 La précision chute vite avec la distance (une erreur d'inclinaison de 0,5°
 déplace un point situé à 15 m de plus d'un mètre) : réservé aux objets proches.
@@ -91,24 +91,6 @@ def _spread(fn, clicks):
     return worst
 
 
-def measure_distance(camera_height, a, b):
-    """Distance horizontale au sol entre deux clics (dicts lon, lat, yaw, elev, profile).
-
-    Les clics peuvent venir de deux photos différentes : chacun est placé depuis
-    la position de sa photo. Le dénivelé n'est donné que si les deux profils sont
-    de vraies altitudes (pas le sol plat).
-    """
-    def dist(clicks):
-        (_, p, _), (_, q, _) = (_ground_point(camera_height, c) for c in clicks)
-        x, y = _local(q[0], q[1], p[0], p[1])
-        return math.hypot(x, y)
-
-    (d1, p1, z1), (d2, p2, z2) = _ground_point(camera_height, a), _ground_point(camera_height, b)
-    absolute = all(c.get("terrain", FLAT) != FLAT for c in (a, b))
-    return {"points": [p1, p2], "ranges": [d1, d2], "value": dist([a, b]),
-            "dz": (z2 - z1) if absolute else None, "uncertainty": _spread(dist, [a, b])}
-
-
 def measure_width(camera_height, a, b, axis):
     """Largeur perpendiculaire à un axe (cap de la route) entre deux clics au sol.
 
@@ -133,7 +115,7 @@ def measure_width(camera_height, a, b, axis):
     w = math.hypot(px, py)
     foot = offset(p[0], p[1], math.degrees(math.atan2(px, py)), w)
     return {"points": [p1, foot], "clicked": p2, "ranges": [d1, d2], "value": w,
-            "oblique": math.hypot(w, along), "axis": axis % 360, "dz": None,
+            "oblique": math.hypot(w, along), "axis": axis % 360,
             "uncertainty": _spread(width, [a, b])}
 
 
@@ -153,4 +135,4 @@ def measure_height(camera_height, base, top):
     h = height([base, top])
     if h <= 0:
         raise GroundError("Le sommet est sous le pied : cliquez d'abord au pied, puis au sommet.")
-    return {"points": [p], "ranges": [d], "value": h, "dz": None, "uncertainty": _spread(height, [base, top])}
+    return {"points": [p], "ranges": [d], "value": h, "uncertainty": _spread(height, [base, top])}

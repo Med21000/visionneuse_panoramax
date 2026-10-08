@@ -41,6 +41,10 @@ class PanoWidget(QWidget):
         self.message = "Cliquez sur « Choisir sur la carte » puis sur la carte."
         self._drag = None
         self._press = None
+        self._measuring = False  # mesure par clics : curseur en croix fine
+        self.marks = []  # repères de mesure : [(cap absolu, élévation)]
+        self.mark_label = ""
+        self.mark_beside = False  # étiquette à côté du trait (hauteur), vers le centre
 
     # ------------------------------------------------------------------
     def set_message(self, text):
@@ -87,6 +91,39 @@ class PanoWidget(QWidget):
         return ((self.azimuth + math.degrees(math.atan2(ix, f))) % 360,
                 math.degrees(math.atan2(-iy, math.hypot(ix, f))))
 
+    def screen_pos(self, yaw, elev):
+        """Position à l'écran d'une direction (cap, élévation), inverse de direction_at."""
+        if self.pixmap is None or self.pixmap.isNull() or self.width() == 0:
+            return None
+        vw, vh = float(self.width()), float(self.height())
+        if self.is360:
+            H = float(self.pixmap.height())
+            vfov = min(170.0, self.fov * vh / max(vw, 1.0))
+            vfov = min(H, vfov / 180.0 * H) / H * 180.0
+            dyaw = (yaw - self.heading + 540.0) % 360.0 - 180.0
+            return QPointF(vw / 2.0 + dyaw / self.fov * vw, vh / 2.0 - elev / vfov * vh)
+        pw, ph = float(self.pixmap.width()), float(self.pixmap.height())
+        scale = min(vw / pw, vh / ph)
+        dyaw = (yaw - self.azimuth + 540.0) % 360.0 - 180.0
+        if abs(dyaw) >= 89.0:
+            return None
+        f = (pw / 2.0) / math.tan(math.radians(self.flat_fov) / 2.0)
+        ix = f * math.tan(math.radians(dyaw))
+        iy = -math.tan(math.radians(elev)) * math.hypot(ix, f)
+        return QPointF(vw / 2.0 + ix * scale, vh / 2.0 + iy * scale)
+
+    def set_measuring(self, on):
+        self._measuring = bool(on)
+        self.setCursor(self._base_cursor())
+        self.update()
+
+    def set_marks(self, marks, label="", beside=False):
+        self.marks, self.mark_label, self.mark_beside = list(marks), label or "", bool(beside)
+        self.update()
+
+    def _base_cursor(self):
+        return Qt.CursorShape.CrossCursor if self._measuring else Qt.CursorShape.OpenHandCursor
+
     def _emit(self):
         if self.pixmap is not None:
             h, f = self.current_view()
@@ -121,7 +158,7 @@ class PanoWidget(QWidget):
                 self.clicked.emit(*direction)
         self._press = None
         self._drag = None
-        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setCursor(self._base_cursor())
 
     def wheelEvent(self, event):  # noqa: N802
         if not self.is360:
@@ -153,6 +190,7 @@ class PanoWidget(QWidget):
             self._paint_360(p)
         else:
             self._paint_flat(p)
+        self._paint_marks(p)
         self._paint_compass(p)
 
     def _paint_flat(self, p):
@@ -185,6 +223,43 @@ class PanoWidget(QWidget):
             p.drawPixmap(QRectF(tx, 0, tw, vh), self.pixmap, QRectF(sx, src_y, sw, src_h))
             tx += tw
 
+    def _paint_marks(self, p):
+        pts = [self.screen_pos(y, e) for y, e in self.marks]
+        pts = [q for q in pts if q is not None]
+        if not pts:
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        red = QColor(229, 57, 53)
+        if len(pts) == 2:
+            p.setPen(QPen(QColor(255, 255, 255, 215), 4))
+            p.drawLine(pts[0], pts[1])
+            p.setPen(QPen(red, 1.5))
+            p.drawLine(pts[0], pts[1])
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for q in pts:
+            p.setPen(QPen(QColor(255, 255, 255), 3))
+            p.drawEllipse(q, 5, 5)
+            p.setPen(QPen(red, 1.5))
+            p.drawEllipse(q, 5, 5)
+        if self.mark_label:
+            at = QPointF((pts[0].x() + pts[-1].x()) / 2.0, (pts[0].y() + pts[-1].y()) / 2.0)
+            font = QFont(self.font())
+            font.setBold(True)
+            p.setFont(font)
+            w = p.fontMetrics().horizontalAdvance(self.mark_label) + 14
+            h = p.fontMetrics().height() + 4
+            if self.mark_beside and len(pts) == 2:
+                # À côté du trait, du côté du centre de la vue, pour ne pas masquer l'objet
+                x = at.x() - 14 - w if at.x() > self.width() / 2.0 else at.x() + 14
+                rect = QRectF(x, at.y() - h / 2.0, w, h)
+            else:
+                rect = QRectF(at.x() - w / 2.0, at.y() - h - 10, w, h)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(255, 255, 255, 235))
+            p.drawRoundedRect(rect, 4, 4)
+            p.setPen(QPen(QColor(183, 28, 28)))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.mark_label)
+
     def _paint_compass(self, p):
         heading, fov = self.current_view()
         names = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"]
@@ -202,6 +277,10 @@ class PanoWidget(QWidget):
         if self.is360 or self.crosshair:
             # Repère central (axe de visée)
             c = QPointF(self.width() / 2.0, self.height() / 2.0)
-            p.setPen(QPen(QColor(229, 57, 53) if self.crosshair else QColor(255, 111, 0, 200), 1.5))
+            if self.crosshair:  # réticule de visée : rouge vif sur liseré blanc
+                p.setPen(QPen(QColor(255, 255, 255, 230), 3.5))
+                p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8))
+                p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()))
+            p.setPen(QPen(QColor(255, 23, 68) if self.crosshair else QColor(255, 111, 0, 200), 1.5))
             p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8))
             p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()))

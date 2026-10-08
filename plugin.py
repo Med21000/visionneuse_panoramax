@@ -112,7 +112,8 @@ class PanoramaxPlugin:
             self.dock.measureModeChanged.connect(self._on_measure_mode)
             self.dock.photoClicked.connect(self._on_photo_clicked)
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
-            self.dock.terrainLayerChanged.connect(self._on_terrain_layer)
+            self.dock.terrainChanged.connect(self._on_terrain_changed)
+            self.terrain.use_ign = self.dock.use_ign()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -280,7 +281,7 @@ class PanoramaxPlugin:
             self.cursor = None
 
     # ------------------------------------------------------------------
-    # Mesures : triangulation, distance au sol, hauteur
+    # Mesures : triangulation, largeur, hauteur
     # ------------------------------------------------------------------
     def _ensure_triangulator(self):
         if self.triangulator is None:
@@ -302,6 +303,12 @@ class PanoramaxPlugin:
             ground.set_mode(mode)
         return ground
 
+    def _show_measure(self, text):
+        """Texte de la mesure dans le panneau et repères dans la visionneuse."""
+        self.dock.set_measure_status(text)
+        active = self.dock.btn_measure.isChecked() and self.dock.measure_mode() != "tri"
+        self.dock.set_measure_marks(self.ground.viewer_marks() if active and self.ground is not None else None)
+
     def _clear_measures(self):
         for tool in (self.triangulator, self.ground):
             if tool is not None:
@@ -310,52 +317,52 @@ class PanoramaxPlugin:
     def _on_measure_toggled(self, checked):
         if not checked:
             self._clear_measures()
-        self.dock.set_measure_status(self._active_measure().status())
+        self._show_measure(self._active_measure().status())
 
     def _on_measure_mode(self, mode):
         self._clear_measures()
-        self.dock.set_measure_status(self._active_measure().status())
+        self._show_measure(self._active_measure().status())
 
     def _on_aim(self, sighting):
-        self.dock.set_measure_status(self._ensure_triangulator().add(sighting))
+        self._show_measure(self._ensure_triangulator().add(sighting))
 
     def _on_photo_clicked(self, click):
         tool = self._active_measure()
         if not isinstance(tool, GroundMeasure) or not tool.needs_profile():
-            self.dock.set_measure_status(tool.add_click(click))  # sommet d'un objet : pas de terrain
+            self._show_measure(tool.add_click(click))  # sommet d'un objet : pas de terrain
             return
-        self.dock.set_measure_status("Altitude du terrain le long de la visée…")
+        self._show_measure("Altitude du terrain le long de la visée…")
         mode = tool.mode
 
         def done(profile, label, warning):
             if self.ground is not tool or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
             click.update(profile=profile, terrain=label)
-            self.dock.set_measure_status(tool.add_click(click, warning))
+            self._show_measure(tool.add_click(click, warning))
 
         self.terrain.profile(click["lon"], click["lat"], click["yaw"], done)
 
-    def _on_terrain_layer(self, layer):
-        self.terrain.set_layer(layer)
+    def _on_terrain_changed(self):
+        self.terrain.use_ign = self.dock.use_ign()
         if self.ground is not None:
             self.ground.clear()  # les profils des clics viennent de l'ancienne source
             if self.dock.measure_mode() != "tri":
-                self.dock.set_measure_status(self.ground.status())
+                self._show_measure(self.ground.status())
 
     def _on_camera_height(self, value):
         ground = self._ensure_ground()
         ground.set_camera_height(value)
         if self.dock.measure_mode() != "tri":
-            self.dock.set_measure_status(ground.status())
+            self._show_measure(ground.status())
 
     def _on_measure_save(self):
         tri = self._ensure_triangulator()
         ok, msg = tri.save()
         self.iface.messageBar().pushMessage(
             "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
-        self.dock.set_measure_status(tri.status())
+        self._show_measure(tri.status())
 
     def _on_measure_clear(self):
         tool = self._active_measure()
         tool.clear()
-        self.dock.set_measure_status(tool.status())
+        self._show_measure(tool.status())

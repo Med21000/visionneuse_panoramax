@@ -102,9 +102,11 @@ def parse_viewer_url(url):
     return result
 
 
-def _request(url, prefer_cache=False):
+def _request(url, prefer_cache=False, timeout_ms=None):
     req = QNetworkRequest(QUrl(url))
     req.setRawHeader(b"User-Agent", b"QGIS-Visionneuse-Panoramax/1.0")
+    if timeout_ms:
+        req.setTransferTimeout(int(timeout_ms))  # sans réponse dans ce délai : requête abandonnée
     if prefer_cache:
         # Utilise le cache disque réseau de QGIS dès qu'une copie existe
         req.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute,
@@ -112,14 +114,19 @@ def _request(url, prefer_cache=False):
     return req
 
 
-def fetch(url, callback, prefer_cache=False):
+def fetch(url, callback, prefer_cache=False, timeout_ms=None):
     """GET asynchrone. callback(bytes | None, message_erreur | None)."""
-    reply = QgsNetworkAccessManager.instance().get(_request(url, prefer_cache))
+    reply = QgsNetworkAccessManager.instance().get(_request(url, prefer_cache, timeout_ms))
     _pending.add(reply)
 
     def done():
         _pending.discard(reply)
-        if reply.error() != QNetworkReply.NetworkError.NoError:
+        err = reply.error()
+        timeout_errors = (QNetworkReply.NetworkError.OperationCanceledError,
+                          getattr(QNetworkReply.NetworkError, "TimeoutError", None))
+        if timeout_ms and err in timeout_errors:
+            callback(None, "pas de réponse en {:.0f} s".format(timeout_ms / 1000.0))
+        elif err != QNetworkReply.NetworkError.NoError:
             callback(None, reply.errorString())
         else:
             callback(bytes(reply.readAll()), None)
@@ -129,7 +136,7 @@ def fetch(url, callback, prefer_cache=False):
     return reply
 
 
-def fetch_json(url, callback, prefer_cache=False):
+def fetch_json(url, callback, prefer_cache=False, timeout_ms=None):
     """GET asynchrone d'un JSON. callback(dict | None, message_erreur | None)."""
 
     def done(data, error):
@@ -141,7 +148,7 @@ def fetch_json(url, callback, prefer_cache=False):
         except (ValueError, UnicodeDecodeError) as exc:
             callback(None, "Réponse JSON invalide : {}".format(exc))
 
-    return fetch(url, done, prefer_cache)
+    return fetch(url, done, prefer_cache, timeout_ms)
 
 
 def fetch_blocking(url):

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Icône Visionneuse Panoramax : blason du logo du Département de la Côte-d'Or -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 338.3 338.3" width="338.3" height="338.3">
+  <rect x="6" y="6" width="326.3" height="326.3" rx="48" ry="48" style="fill:#ffffff;stroke:#c8c8c8;stroke-width:6"/>
+  <g transform="translate(169.15,169.15) scale(0.86) translate(-169.15,-169.15)">
+  <g transform="matrix(1,0,0,-1,-273.88,384.57)">
+    <path transform="translate(357.6812,376.5684)" d="m 0,0 170.602,0 0,-322.261 -85.353,25.412 -85.25,-25.418 L 0,0 z"
+          style="fill:#ffffff;stroke:#5a5a5a;stroke-width:4;stroke-linejoin:round"/>
+    <path transform="translate(369.8521,70.6299)" d="M 0,0 73.074,21.789 146.259,0 l 0,103.773 C 67.805,99.895 18.324,80.727 0.001,72.266 L 0,0 z" style="fill:#e31c39"/>
+    <path transform="translate(369.854,222.1758)" d="m 0,0 c 21.998,1.907 76.079,2.892 146.257,-21.614 l 0,70.21 C 71.582,41.6 19.104,12.287 0,0" style="fill:#eead0f"/>
+    <path transform="translate(369.853,281.0508)" d="M 0,0 C 17.819,-3.279 38.118,-8.311 60.129,-15.995 33.244,-25.357 12.852,-36.13 0,-43.879 L 0,0 z" style="fill:#eead0f"/>
+    <path transform="translate(369.8521,209.4307)" d="m 0,0 0.001,-52.596 c 22.576,9.795 71.439,26.664 146.258,30.242 l 0,0.063 C 101.582,-6.217 63.591,-1.047 38.795,0.381 21.336,1.381 7.989,0.715 0,0" style="fill:#eead0f"/>
+    <path transform="translate(369.853,364.3975)" d="m 0,0 0,-70.388 c 23.435,-4.18 50.39,-11.215 79.794,-22.749 19.573,5.56 41.835,10.056 66.464,12.248 L 146.258,0 0,0 z" style="fill:#0085c6"/>
+  </g>
+  </g>
+</svg>

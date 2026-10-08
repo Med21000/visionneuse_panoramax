@@ -11,7 +11,7 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
 - Mesures (bouton « 📐 Mesure ») :
   - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
-  - distance au sol et hauteur d'un objet, en deux clics dans la photo.
+  - distance au sol, largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
 ## Mesures
@@ -28,9 +28,10 @@ Cliquer sur « 📐 Mesure » puis choisir le mode.
 
 La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du mètre) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°.
 
-### Distance au sol et hauteur
+### Distance au sol, largeur et hauteur
 
 - **Distance au sol** : cliquer dans la photo sur le sol au premier point, puis au second (largeur de chaussée, de trottoir…). Les deux points peuvent être pris sur deux photos différentes.
+- **Largeur** : cliquer au pied d'un bord (bordure, marquage, limite de chaussée), puis au pied du bord opposé. Les deux clics n'ont pas besoin d'être exactement en face : la largeur est prise perpendiculairement à l'axe de la route, donné par la direction de la séquence (photos précédente et suivante) ou, à défaut, par l'orientation de la photo. La distance en biais est aussi indiquée.
 - **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
 
 Le résultat s'affiche dans le panneau et sur la carte. Chaque clic est prolongé jusqu'au sol (lancer de rayon), depuis une caméra placée à la hauteur indiquée (1,90 m par défaut, réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo).

@@ -232,12 +232,14 @@ class MeasureItem(QgsMapCanvasItem):
         super().__init__(canvas)
         self._canvas = canvas
         self.points, self.label = [], ""
+        self.extra = None  # point cliqué non relié (largeur : second bord)
         self._screen = []
+        self._extra = None
         self._rect = QRectF()
         self.setZValue(990)
 
-    def set_data(self, points, label):
-        self.points, self.label = points, label
+    def set_data(self, points, label, extra=None):
+        self.points, self.label, self.extra = points, label, extra
         self.updatePosition()
 
     def _label_rect(self):
@@ -253,12 +255,14 @@ class MeasureItem(QgsMapCanvasItem):
         ct = QgsCoordinateTransform(WGS84, self._canvas.mapSettings().destinationCrs(), QgsProject.instance())
         try:
             self._screen = [self.toCanvasCoordinates(ct.transform(QgsPointXY(*p))) for p in self.points]
+            self._extra = self.toCanvasCoordinates(ct.transform(QgsPointXY(*self.extra))) if self.extra else None
         except Exception:
-            self._screen = []
+            self._screen, self._extra = [], None
         self.prepareGeometryChange()
         self.setPos(0, 0)
         if self._screen:
-            xs, ys = [p.x() for p in self._screen], [p.y() for p in self._screen]
+            pts = self._screen + ([self._extra] if self._extra is not None else [])
+            xs, ys = [p.x() for p in pts], [p.y() for p in pts]
             rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(-10, -10, 10, 10)
             self._rect = rect.united(self._label_rect())
         else:
@@ -281,6 +285,13 @@ class MeasureItem(QgsMapCanvasItem):
         painter.setBrush(QBrush(COLOR))
         for p in self._screen:
             painter.drawEllipse(p, 5, 5)
+        if self._extra is not None:
+            # Second bord cliqué, relié en pointillés au pied de la perpendiculaire
+            painter.setPen(QPen(COLOR, 1.5, Qt.PenStyle.DotLine))
+            painter.drawLine(self._screen[-1], self._extra)
+            painter.setPen(QPen(COLOR, 2))
+            painter.setBrush(QColor(255, 255, 255))
+            painter.drawEllipse(self._extra, 4, 4)
         rect = self._label_rect()
         if not rect.isNull():
             painter.setPen(Qt.PenStyle.NoPen)
@@ -297,7 +308,8 @@ class MeasureItem(QgsMapCanvasItem):
 
 
 class GroundMeasure:
-    """Deux clics dans la photo : distance au sol ("ground") ou hauteur ("height").
+    """Deux clics dans la photo : distance au sol ("ground"), largeur perpendiculaire
+    à la route ("width") ou hauteur ("height").
 
     Chaque clic qui doit toucher le sol porte le profil du terrain le long de sa
     visée (clés "profile" et "terrain", voir terrain.py) ; sans profil, sol plat.
@@ -347,8 +359,15 @@ class GroundMeasure:
         self.result, self.error = None, None
         try:
             if len(self.clicks) == 2:
-                fn = ground.measure_distance if self.mode == "ground" else ground.measure_height
-                self.result = fn(self.camera_height, *self.clicks)
+                if self.mode == "width":
+                    axis = self.clicks[0].get("axis")
+                    if axis is None:
+                        raise ground.GroundError("Axe de la route inconnu pour cette photo : utilisez "
+                                                 "« Distance au sol ».")
+                    self.result = ground.measure_width(self.camera_height, *self.clicks, axis)
+                else:
+                    fn = ground.measure_distance if self.mode == "ground" else ground.measure_height
+                    self.result = fn(self.camera_height, *self.clicks)
             elif len(self.clicks) == 1:
                 ground._ground_point(self.camera_height, self.clicks[0])  # contrôle du premier clic
         except ground.GroundError as exc:
@@ -362,13 +381,14 @@ class GroundMeasure:
             if not self.clicks:
                 return
             self.item = MeasureItem(self.canvas)
-        points, label = [], ""
+        points, label, extra = [], "", None
         if self.result:
             points = self.result["points"]
             label = "{} m".format(_num(self.result["value"], 2))
+            extra = self.result.get("clicked")
         elif len(self.clicks) == 1 and not self.error:
             points = [ground._ground_point(self.camera_height, self.clicks[0])[1]]
-        self.item.set_data(points, label)
+        self.item.set_data(points, label, extra)
 
     def _terrain_label(self):
         labels = []
@@ -387,6 +407,12 @@ class GroundMeasure:
                 return prefix + "Cliquez dans la photo sur le sol, au premier point."
             if n == 1 and not self.error:
                 return "Cliquez sur le sol au second point (même photo ou autre photo)."
+        elif self.mode == "width":
+            if n == 0:
+                return prefix + "Cliquez au pied du premier bord (bordure, marquage, limite de chaussée…)."
+            if n == 1 and not self.error:
+                return ("Cliquez au pied du bord opposé, pas forcément juste en face : la largeur est "
+                        "prise perpendiculairement à la route.")
         else:
             if n == 0:
                 return prefix + "Cliquez dans la photo au pied de l'objet (au sol)."
@@ -400,6 +426,10 @@ class GroundMeasure:
                 _num(r["value"], 2), _num(r["uncertainty"], 2), " / ".join(_num(d) for d in r["ranges"]))
             if r.get("dz") is not None:
                 text += " · dénivelé {}{} m".format("+" if r["dz"] >= 0 else "", _num(r["dz"], 2))
+        elif self.mode == "width":
+            text = "Largeur : {} m (±{} m) perpendiculairement à la route · en biais {} m · axe {}° ({})".format(
+                _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["oblique"], 2), _num(r["axis"], 0),
+                self.clicks[0].get("axis_source") or "?")
         else:
             text = "Hauteur : {} m (±{} m) · objet à {} m".format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["ranges"][0]))

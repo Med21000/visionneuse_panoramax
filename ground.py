@@ -109,6 +109,34 @@ def measure_distance(camera_height, a, b):
             "dz": (z2 - z1) if absolute else None, "uncertainty": _spread(dist, [a, b])}
 
 
+def measure_width(camera_height, a, b, axis):
+    """Largeur perpendiculaire à un axe (cap de la route) entre deux clics au sol.
+
+    Les deux bords n'ont pas besoin d'être cliqués exactement en face l'un de
+    l'autre : seule la composante perpendiculaire à l'axe est retenue. Le second
+    point dessiné ("points"[1]) est le pied de la perpendiculaire, en face du premier.
+    """
+    ax, ay = math.sin(math.radians(axis)), math.cos(math.radians(axis))
+
+    def split(clicks):
+        (_, p, _), (_, q, _) = (_ground_point(camera_height, c) for c in clicks)
+        x, y = _local(q[0], q[1], p[0], p[1])
+        along = x * ax + y * ay
+        return p, x - along * ax, y - along * ay, along
+
+    def width(clicks):
+        _, px, py, _ = split(clicks)
+        return math.hypot(px, py)
+
+    (d1, p1, _), (d2, p2, _) = _ground_point(camera_height, a), _ground_point(camera_height, b)
+    p, px, py, along = split([a, b])
+    w = math.hypot(px, py)
+    foot = offset(p[0], p[1], math.degrees(math.atan2(px, py)), w)
+    return {"points": [p1, foot], "clicked": p2, "ranges": [d1, d2], "value": w,
+            "oblique": math.hypot(w, along), "axis": axis % 360, "dz": None,
+            "uncertainty": _spread(width, [a, b])}
+
+
 def measure_height(camera_height, base, top):
     """Hauteur d'un objet : clic au pied (au sol) puis au sommet, sur la même photo."""
     if base.get("pic") != top.get("pic"):

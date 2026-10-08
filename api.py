@@ -326,3 +326,30 @@ def nearest_cached(lon, lat, max_m):
     dx = (flon - lon) * 111320.0 * math.cos(math.radians(lat))
     dy = (flat - lat) * 111320.0
     return feat if math.hypot(dx, dy) <= max_m else None
+
+
+def sequence_axis(item):
+    """Direction de déplacement le long de la séquence (cap en degrés), ou None.
+
+    Calculée entre les photos voisines (précédente et suivante, déjà en cache)
+    pour suivre l'axe de la voie, plutôt que l'orientation de la caméra.
+    """
+    def position(feat):
+        try:
+            return [float(v) for v in feat["geometry"]["coordinates"][:2]]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    here = position(item)
+    prev_item = cached_item(id_from_href(item_link(item, "prev")))
+    next_item = cached_item(id_from_href(item_link(item, "next")))
+    a = position(prev_item) if prev_item else None
+    b = position(next_item) if next_item else None
+    a, b = (a or here), (b or here)
+    if a is None or b is None or a == b:
+        return None
+    dx = (b[0] - a[0]) * math.cos(math.radians((a[1] + b[1]) / 2))
+    dy = b[1] - a[1]
+    if math.hypot(dx, dy) * 111320.0 < 0.5:  # photos quasi confondues (arrêt) : direction peu fiable
+        return None
+    return math.degrees(math.atan2(dx, dy)) % 360

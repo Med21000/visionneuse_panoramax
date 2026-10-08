@@ -216,9 +216,60 @@ CLICKS_JS = r"""
 """
 CLICKS_OFF_JS = "window.__qgisClickOn = false; window.__qgisClicks = [];"
 
+# Pendant une mesure, un clic ne doit pas changer de photo : on écarte l'événement
+# « click » du moteur 360° (la visionneuse y va à la photo voisine dans la direction
+# cliquée) sans toucher au glisser, et on masque les flèches de navigation au sol
+# ainsi que le curseur « aller ici » qui suit la souris sur le sol.
+NAV_BLOCK_JS = r"""
+(function(on){
+  window.__qgisBlockNav = on;
+  var v = window.__pnxViewer;
+  if (v && v.psv && !v.psv.__qgisNavPatch) {
+    var orig = v.psv.dispatchEvent;
+    v.psv.dispatchEvent = function(e){
+      if (window.__qgisBlockNav && e && e.type === 'click') return true;
+      return orig.call(this, e);
+    };
+    v.psv.__qgisNavPatch = true;
+  }
+  // Curseur au sol : image ajoutée au conteneur du moteur 360°, en position absolue,
+  // au-dessus (z-index 10) et sans souris ; sa taille varie avec l'inclinaison.
+  // La visionneuse change son « display » à chaque mouvement : on joue sur « visibility ».
+  var box = v && v.psv && v.psv.container;
+  var kids = box ? box.children : [];
+  for (var k = 0; k < kids.length; k++) {
+    var img = kids[k];
+    if (!img.__qgisCursor) {
+      if (img.tagName !== 'IMG' || img.style.pointerEvents !== 'none' || img.style.position !== 'absolute'
+          || String(img.style.zIndex) !== '10') continue;
+      img.__qgisCursor = true;
+    }
+    if (on) img.style.setProperty('visibility', 'hidden', 'important');
+    else img.style.removeProperty('visibility');
+  }
+  // Flèches : reprises à chaque changement d'état, puis chaque seconde (photo suivante)
+  var now = Date.now();
+  if (window.__qgisNavState === on && now - (window.__qgisNavTime || 0) < 1000) return;
+  window.__qgisNavState = on;
+  window.__qgisNavTime = now;
+  var roots = [document];
+  while (roots.length) {
+    var r = roots.pop();
+    var arrows = r.querySelectorAll ? r.querySelectorAll('.psv-virtual-tour-arrows') : [];
+    for (var i = 0; i < arrows.length; i++) {
+      if (on) arrows[i].style.setProperty('visibility', 'hidden', 'important');
+      else arrows[i].style.removeProperty('visibility');
+    }
+    var els = r.querySelectorAll ? r.querySelectorAll('*') : [];
+    for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) roots.push(els[j].shadowRoot); }
+  }
+})(__ON__)
+"""
+
 MEASURE_MODES = (
     ("Triangulation", "tri"),
     ("Distance au sol", "ground"),
+    ("Largeur (route…)", "width"),
     ("Hauteur d'un objet", "height"),
 )
 
@@ -250,7 +301,7 @@ class PanoramaxDock(QDockWidget):
     measureSaveRequested = pyqtSignal()
     measureClearRequested = pyqtSignal()
     measureModeChanged = pyqtSignal(str)
-    photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev
+    photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
     terrainLayerChanged = pyqtSignal(object)  # couche MNT choisie, ou None (service IGN)
 
@@ -535,6 +586,7 @@ class PanoramaxDock(QDockWidget):
             page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if crosshair else "false"))
             if not active or mode == "tri":
                 page.runJavaScript(CLICKS_OFF_JS)
+            page.runJavaScript(NAV_BLOCK_JS.replace("__ON__", "true" if active else "false"))
         elif hasattr(self, "img"):
             self.img.crosshair = crosshair
             self.img.update()
@@ -549,8 +601,12 @@ class PanoramaxDock(QDockWidget):
             lon, lat = item["geometry"]["coordinates"][:2]
         except (KeyError, TypeError, ValueError):
             return
+        axis, axis_source = api.sequence_axis(item), "séquence"
+        if axis is None:
+            axis, axis_source = api.item_heading(item), "orientation de la photo"
         self.photoClicked.emit({"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat),
-                                "yaw": float(yaw) % 360, "elev": float(elev)})
+                                "yaw": float(yaw) % 360, "elev": float(elev),
+                                "axis": axis, "axis_source": axis_source})
 
     def _on_native_click(self, yaw, elev):
         if self.btn_measure.isChecked() and self.measure_mode() != "tri":
@@ -784,6 +840,7 @@ class PanoramaxDock(QDockWidget):
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
             if self.btn_measure.isChecked():  # la page peut avoir été rechargée
+                page.runJavaScript(NAV_BLOCK_JS.replace("__ON__", "true"))
                 if self.measure_mode() == "tri":
                     page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
                 else:

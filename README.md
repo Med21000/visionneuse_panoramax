@@ -9,18 +9,31 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Filaire des séquences en tuiles vectorielles.
 - Extraction des séquences et des photos en couches vecteur.
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
-- Triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus.
+- Mesures (bouton « 📐 Mesure ») :
+  - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
+  - distance au sol et hauteur d'un objet, en deux clics dans la photo.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
-## Triangulation
+## Mesures
 
-1. Cliquer sur « 📐 Triangulation » : un réticule rouge apparaît au centre de la visionneuse.
+Cliquer sur « 📐 Mesure » puis choisir le mode.
+
+### Triangulation
+
+1. Mode « Triangulation » : un réticule rouge apparaît au centre de la visionneuse.
 2. Tourner la vue pour placer le réticule sur l'objet, puis « 🎯 Viser ».
 3. Passer à une autre photo, idéalement décalée sur le côté de l'objet, et viser à nouveau le même objet.
 4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement et une incertitude estimée (pour ±1° de visée). Une troisième visée améliore et contrôle le résultat.
 5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
 
 La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du mètre) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°.
+
+### Distance au sol et hauteur
+
+- **Distance au sol** : cliquer dans la photo sur le sol au premier point, puis au second (largeur de chaussée, de trottoir…). Les deux points peuvent être pris sur deux photos différentes.
+- **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
+
+Le résultat s'affiche dans le panneau et sur la carte. Le calcul suppose un sol plat et horizontal et une caméra à la hauteur indiquée (réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
 
 ## Installation
 

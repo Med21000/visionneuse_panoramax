@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Triangulation dans QGIS : visées dessinées sur la carte et couche des points.
+"""Mesures dans QGIS : triangulation, distance au sol et hauteur.
 
-Usage : viser un objet au centre de la visionneuse, changer de photo, le viser
-à nouveau ; le point d'intersection s'affiche sur la carte et peut être
-enregistré dans la couche « Panoramax – points triangulés ».
+- Triangulation : viser un objet au centre de la visionneuse, changer de photo,
+  le viser à nouveau ; le point d'intersection s'affiche sur la carte et peut
+  être enregistré dans la couche « Panoramax – points triangulés ».
+- Distance au sol / hauteur : deux clics dans la photo, calculés par
+  l'hypothèse du sol plat (voir ground.py) ; les points s'affichent sur la carte.
 """
 
 from datetime import datetime
@@ -20,9 +22,9 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
-from qgis.PyQt.QtGui import QBrush, QColor, QPainter, QPen
+from qgis.PyQt.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPen
 
-from . import triangulation
+from . import ground, triangulation
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
@@ -217,3 +219,167 @@ class Triangulator:
             {"name": "circle", "color": COLOR.name(), "outline_color": "white", "outline_width": "0.4", "size": "2.8"}))
         project.addMapLayer(layer)
         return layer
+
+
+# --------------------------------------------------------------------------
+# Distance au sol et hauteur
+# --------------------------------------------------------------------------
+class MeasureItem(QgsMapCanvasItem):
+    """Points mesurés au sol, segment éventuel et étiquette du résultat."""
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._canvas = canvas
+        self.points, self.label = [], ""
+        self._screen = []
+        self._rect = QRectF()
+        self.setZValue(990)
+
+    def set_data(self, points, label):
+        self.points, self.label = points, label
+        self.updatePosition()
+
+    def _label_rect(self):
+        if not self.label or not self._screen:
+            return QRectF()
+        xs = [p.x() for p in self._screen]
+        ys = [p.y() for p in self._screen]
+        size = QFontMetricsF(self._canvas.font()).size(0, self.label)
+        cx, top = (min(xs) + max(xs)) / 2.0, min(ys) - 14
+        return QRectF(cx - size.width() / 2 - 5, top - size.height() - 4, size.width() + 10, size.height() + 4)
+
+    def updatePosition(self):  # noqa: N802
+        ct = QgsCoordinateTransform(WGS84, self._canvas.mapSettings().destinationCrs(), QgsProject.instance())
+        try:
+            self._screen = [self.toCanvasCoordinates(ct.transform(QgsPointXY(*p))) for p in self.points]
+        except Exception:
+            self._screen = []
+        self.prepareGeometryChange()
+        self.setPos(0, 0)
+        if self._screen:
+            xs, ys = [p.x() for p in self._screen], [p.y() for p in self._screen]
+            rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(-10, -10, 10, 10)
+            self._rect = rect.united(self._label_rect())
+        else:
+            self._rect = QRectF()
+        self.update()
+
+    def boundingRect(self):  # noqa: N802
+        return self._rect
+
+    def paint(self, painter, option=None, widget=None):
+        if not self._screen:
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if len(self._screen) == 2:
+            painter.setPen(QPen(QColor(255, 255, 255, 220), 5))
+            painter.drawLine(*self._screen)
+            painter.setPen(QPen(COLOR, 2.5))
+            painter.drawLine(*self._screen)
+        painter.setPen(QPen(QColor(255, 255, 255), 2))
+        painter.setBrush(QBrush(COLOR))
+        for p in self._screen:
+            painter.drawEllipse(p, 5, 5)
+        rect = self._label_rect()
+        if not rect.isNull():
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 230))
+            painter.drawRoundedRect(rect, 4, 4)
+            painter.setPen(QPen(COLOR.darker(130)))
+            painter.setFont(self._canvas.font())
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.label)
+
+    def remove(self):
+        scene = self._canvas.scene()
+        if scene is not None:
+            scene.removeItem(self)
+
+
+class GroundMeasure:
+    """Deux clics dans la photo : distance au sol ("ground") ou hauteur ("height")."""
+
+    def __init__(self, canvas):
+        self.canvas = canvas
+        self.mode = "ground"
+        self.camera_height = 2.2
+        self.clicks = []  # dicts : pic, lon, lat, yaw, elev
+        self.result = None
+        self.error = None
+        self.item = None
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.clear()
+
+    def set_camera_height(self, value):
+        self.camera_height = float(value)
+        self._compute()
+
+    def add_click(self, click):
+        if len(self.clicks) >= 2:
+            self.clicks = []  # troisième clic : nouvelle mesure
+        self.clicks.append(click)
+        self._compute()
+        return self.status()
+
+    def clear(self):
+        self.clicks, self.result, self.error = [], None, None
+        self._draw()
+
+    def remove(self):
+        if self.item is not None:
+            self.item.remove()
+            self.item = None
+
+    def _compute(self):
+        self.result, self.error = None, None
+        try:
+            if len(self.clicks) == 2:
+                fn = ground.measure_distance if self.mode == "ground" else ground.measure_height
+                self.result = fn(self.camera_height, *self.clicks)
+            elif len(self.clicks) == 1:
+                ground.ground_distance(self.camera_height, self.clicks[0]["elev"])  # contrôle du premier clic
+        except ground.GroundError as exc:
+            self.error = str(exc)
+            if len(self.clicks) == 1:
+                self.clicks = []  # premier clic refusé : on le refait
+        self._draw()
+
+    def _draw(self):
+        if self.item is None:
+            if not self.clicks:
+                return
+            self.item = MeasureItem(self.canvas)
+        points, label = [], ""
+        if self.result:
+            points = self.result["points"]
+            label = "{} m".format(_num(self.result["value"], 2))
+        elif len(self.clicks) == 1 and not self.error:
+            c = self.clicks[0]
+            points = [triangulation.offset(c["lon"], c["lat"], c["yaw"],
+                                           ground.ground_distance(self.camera_height, c["elev"]))]
+        self.item.set_data(points, label)
+
+    def status(self):
+        n = len(self.clicks)
+        prefix = (self.error + " ") if self.error else ""
+        if self.mode == "ground":
+            if n == 0:
+                return prefix + "Cliquez dans la photo sur le sol, au premier point."
+            if n == 1 and not self.error:
+                return "Cliquez sur le sol au second point (même photo ou autre photo)."
+        else:
+            if n == 0:
+                return prefix + "Cliquez dans la photo au pied de l'objet (au sol)."
+            if n == 1 and not self.error:
+                return "Cliquez au sommet de l'objet, sur la même photo."
+        if self.error:
+            return self.error + " Cliquez à nouveau pour recommencer."
+        r = self.result
+        if self.mode == "ground":
+            text = "Distance : {} m (±{} m) · points à {} m de la photo".format(
+                _num(r["value"], 2), _num(r["uncertainty"], 2), " / ".join(_num(d) for d in r["ranges"]))
+        else:
+            text = "Hauteur : {} m (±{} m) · objet à {} m".format(
+                _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["ranges"][0]))
+        return text + ". Hypothèse : sol plat, caméra à {} m.".format(_num(self.camera_height))

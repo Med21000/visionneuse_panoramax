@@ -4,8 +4,11 @@
 - Photo 360° (équirectangulaire) : on affiche une fenêtre de la sphère,
   orientable à la souris (glisser) et zoomable (molette).
 - Photo classique : affichée entière, orientée selon son cap.
-Émet viewChanged(cap_absolu, ouverture) pour animer le curseur sur la carte.
+Émet viewChanged(cap_absolu, ouverture) pour animer le curseur sur la carte,
+et clicked(cap, élévation) pour un clic sans glisser (mesures).
 """
+
+import math
 
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QFont, QPainter, QPen
@@ -21,6 +24,7 @@ def _event_pos(event):
 
 class PanoWidget(QWidget):
     viewChanged = pyqtSignal(float, float)
+    clicked = pyqtSignal(float, float)  # cap absolu, élévation (degrés)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,6 +40,7 @@ class PanoWidget(QWidget):
         self.crosshair = False  # réticule de visée (triangulation), aussi sur les photos classiques
         self.message = "Cliquez sur « Choisir sur la carte » puis sur la carte."
         self._drag = None
+        self._press = None
 
     # ------------------------------------------------------------------
     def set_message(self, text):
@@ -61,6 +66,27 @@ class PanoWidget(QWidget):
             return (self.heading if self.heading is not None else self.azimuth), self.fov
         return self.azimuth, self.flat_fov
 
+    def direction_at(self, pos):
+        """(cap, élévation) du point affiché en pos, ou None hors de l'image."""
+        if self.pixmap is None or self.pixmap.isNull() or self.width() == 0:
+            return None
+        vw, vh = float(self.width()), float(self.height())
+        if self.is360:
+            # Même découpage que _paint_360 : fenêtre équirectangulaire centrée sur l'horizon
+            H = float(self.pixmap.height())
+            vfov = min(170.0, self.fov * vh / max(vw, 1.0))
+            vfov = min(H, vfov / 180.0 * H) / H * 180.0
+            yaw = self.heading + (pos.x() - vw / 2.0) / vw * self.fov
+            return yaw % 360, -(pos.y() - vh / 2.0) / vh * vfov
+        pw, ph = float(self.pixmap.width()), float(self.pixmap.height())
+        scale = min(vw / pw, vh / ph)
+        ix, iy = (pos.x() - vw / 2.0) / scale, (pos.y() - vh / 2.0) / scale
+        if abs(ix) > pw / 2.0 or abs(iy) > ph / 2.0:
+            return None
+        f = (pw / 2.0) / math.tan(math.radians(self.flat_fov) / 2.0)  # caméra supposée horizontale
+        return ((self.azimuth + math.degrees(math.atan2(ix, f))) % 360,
+                math.degrees(math.atan2(-iy, math.hypot(ix, f))))
+
     def _emit(self):
         if self.pixmap is not None:
             h, f = self.current_view()
@@ -70,6 +96,8 @@ class PanoWidget(QWidget):
     # Interaction
     # ------------------------------------------------------------------
     def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press = _event_pos(event)
         if self.is360 and event.button() == Qt.MouseButton.LeftButton:
             self._drag = _event_pos(event)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -86,6 +114,12 @@ class PanoWidget(QWidget):
         self._emit()
 
     def mouseReleaseEvent(self, event):  # noqa: N802
+        pos = _event_pos(event)
+        if self._press is not None and abs(pos.x() - self._press.x()) + abs(pos.y() - self._press.y()) < 5:
+            direction = self.direction_at(pos)
+            if direction is not None:
+                self.clicked.emit(*direction)
+        self._press = None
         self._drag = None
         self.setCursor(Qt.CursorShape.OpenHandCursor)
 

@@ -19,7 +19,7 @@ from qgis.PyQt.QtWidgets import QApplication, QProgressDialog, QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
-from .measure import Triangulator
+from .measure import GroundMeasure, Triangulator
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -36,6 +36,7 @@ class PanoramaxPlugin:
         self.tool = None
         self.cursor = None
         self.triangulator = None
+        self.ground = None
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -71,9 +72,10 @@ class PanoramaxPlugin:
             self.canvas.unsetMapTool(self.tool)
         self.tool = None
         self._clear_marker()
-        if self.triangulator is not None:
-            self.triangulator.remove()
-            self.triangulator = None
+        for tool in (self.triangulator, self.ground):
+            if tool is not None:
+                tool.remove()
+        self.triangulator = self.ground = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -105,6 +107,9 @@ class PanoramaxPlugin:
             self.dock.aimRequested.connect(self._on_aim)
             self.dock.measureSaveRequested.connect(self._on_measure_save)
             self.dock.measureClearRequested.connect(self._on_measure_clear)
+            self.dock.measureModeChanged.connect(self._on_measure_mode)
+            self.dock.photoClicked.connect(self._on_photo_clicked)
+            self.dock.cameraHeightChanged.connect(self._on_camera_height)
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -272,21 +277,53 @@ class PanoramaxPlugin:
             self.cursor = None
 
     # ------------------------------------------------------------------
-    # Triangulation
+    # Mesures : triangulation, distance au sol, hauteur
     # ------------------------------------------------------------------
     def _ensure_triangulator(self):
         if self.triangulator is None:
             self.triangulator = Triangulator(self.canvas)
         return self.triangulator
 
+    def _ensure_ground(self):
+        if self.ground is None:
+            self.ground = GroundMeasure(self.canvas)
+            self.ground.camera_height = self.dock.camera_height()
+        return self.ground
+
+    def _active_measure(self):
+        mode = self.dock.measure_mode()
+        if mode == "tri":
+            return self._ensure_triangulator()
+        ground = self._ensure_ground()
+        if ground.mode != mode:
+            ground.set_mode(mode)
+        return ground
+
+    def _clear_measures(self):
+        for tool in (self.triangulator, self.ground):
+            if tool is not None:
+                tool.clear()
+
     def _on_measure_toggled(self, checked):
-        tri = self._ensure_triangulator()
         if not checked:
-            tri.clear()
-        self.dock.set_measure_status(tri.status())
+            self._clear_measures()
+        self.dock.set_measure_status(self._active_measure().status())
+
+    def _on_measure_mode(self, mode):
+        self._clear_measures()
+        self.dock.set_measure_status(self._active_measure().status())
 
     def _on_aim(self, sighting):
         self.dock.set_measure_status(self._ensure_triangulator().add(sighting))
+
+    def _on_photo_clicked(self, click):
+        self.dock.set_measure_status(self._active_measure().add_click(click))
+
+    def _on_camera_height(self, value):
+        ground = self._ensure_ground()
+        ground.set_camera_height(value)
+        if self.dock.measure_mode() != "tri":
+            self.dock.set_measure_status(ground.status())
 
     def _on_measure_save(self):
         tri = self._ensure_triangulator()
@@ -296,6 +333,6 @@ class PanoramaxPlugin:
         self.dock.set_measure_status(tri.status())
 
     def _on_measure_clear(self):
-        tri = self._ensure_triangulator()
-        tri.clear()
-        self.dock.set_measure_status(tri.status())
+        tool = self._active_measure()
+        tool.clear()
+        self.dock.set_measure_status(tool.status())

@@ -17,6 +17,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
+    QDoubleSpinBox,
     QFileDialog,
     QInputDialog,
     QMenu,
@@ -28,6 +29,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+import json
 import math
 import os
 import re
@@ -167,6 +169,47 @@ CROSSHAIR_JS = r"""
 })(__SHOW__)
 """
 
+# Clics dans la visionneuse (mesures au sol) : un clic sans glisser est mis en file
+# avec l'orientation de la vue à cet instant et sa position par rapport au centre
+# de la visionneuse. La file est relue (et vidée) par la lecture régulière.
+CLICKS_JS = r"""
+(function(){
+  if (!window.__qgisClickHook) {
+    window.__qgisClickHook = true;
+    window.__qgisClicks = [];
+    var down = null;
+    window.addEventListener('pointerdown', function(e){
+      down = {x: e.clientX, y: e.clientY, t: Date.now()};
+    }, true);
+    window.addEventListener('pointerup', function(e){
+      if (!window.__qgisClickOn || !down) return;
+      var moved = Math.abs(e.clientX - down.x) + Math.abs(e.clientY - down.y);
+      if (moved > 5 || Date.now() - down.t > 700) return;
+      var v = window.__pnxViewer;
+      if (!v || !v.psv || !v.psv.getXYZ) return;
+      var r = v.getBoundingClientRect();
+      var p = v.psv.getXYZ();
+      window.__qgisClicks.push({
+        pic: v.psv.getPictureId ? (v.psv.getPictureId() || '') : '',
+        x: p.x, y: p.y, z: p.z || 0, vfov: (v.psv.state && v.psv.state.vFov) || null,
+        dx: e.clientX - (r.left + r.width / 2), dy: e.clientY - (r.top + r.height / 2),
+        w: r.width, h: r.height});
+    }, true);
+  }
+  window.__qgisClickOn = true;
+  var out = JSON.stringify(window.__qgisClicks || []);
+  window.__qgisClicks = [];
+  return out;
+})()
+"""
+CLICKS_OFF_JS = "window.__qgisClickOn = false; window.__qgisClicks = [];"
+
+MEASURE_MODES = (
+    ("Triangulation", "tri"),
+    ("Distance au sol", "ground"),
+    ("Hauteur d'un objet", "height"),
+)
+
 NO_WEBENGINE_TEXT = (
     "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
     "la visionneuse interactive s'ouvre dans le navigateur (bouton « Navigateur »), "
@@ -194,6 +237,9 @@ class PanoramaxDock(QDockWidget):
     aimRequested = pyqtSignal(object)
     measureSaveRequested = pyqtSignal()
     measureClearRequested = pyqtSignal()
+    measureModeChanged = pyqtSignal(str)
+    photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev
+    cameraHeightChanged = pyqtSignal(float)
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -242,9 +288,9 @@ class PanoramaxDock(QDockWidget):
         self.btn_capture.setMenu(menu)
         bar.addWidget(self.btn_capture)
         self.btn_measure = QToolButton()
-        self.btn_measure.setText("📐 Triangulation")
+        self.btn_measure.setText("📐 Mesure")
         self.btn_measure.setCheckable(True)
-        self.btn_measure.setToolTip("Positionner un objet sur la carte en le visant depuis plusieurs photos")
+        self.btn_measure.setToolTip("Triangulation, distance au sol ou hauteur d'un objet")
         self.btn_measure.toggled.connect(self._on_measure_toggled)
         bar.addWidget(self.btn_measure)
         btn_browser = QPushButton("Navigateur")
@@ -270,24 +316,45 @@ class PanoramaxDock(QDockWidget):
         self.load_instances()
 
         self.measure_box = QWidget(root)
-        mlay = QHBoxLayout(self.measure_box)
-        mlay.setContentsMargins(0, 0, 0, 0)
-        btn_aim = QPushButton("🎯 Viser")
-        btn_aim.setToolTip("Enregistrer la direction du réticule (centre de la vue) depuis la photo affichée")
-        btn_aim.clicked.connect(self._aim)
-        mlay.addWidget(btn_aim)
-        btn_save = QPushButton("Enregistrer le point")
-        btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
-        btn_save.clicked.connect(self.measureSaveRequested)
-        mlay.addWidget(btn_save)
+        mbox = QVBoxLayout(self.measure_box)
+        mbox.setContentsMargins(0, 0, 0, 0)
+        mlay = QHBoxLayout()
+        self.cmb_measure = QComboBox()
+        for label, mode in MEASURE_MODES:
+            self.cmb_measure.addItem(label, mode)
+        self.cmb_measure.currentIndexChanged.connect(self._on_measure_mode)
+        mlay.addWidget(self.cmb_measure)
+        self.btn_aim = QPushButton("🎯 Viser")
+        self.btn_aim.setToolTip("Enregistrer la direction du réticule (centre de la vue) depuis la photo affichée")
+        self.btn_aim.clicked.connect(self._aim)
+        mlay.addWidget(self.btn_aim)
+        self.btn_save = QPushButton("Enregistrer le point")
+        self.btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
+        self.btn_save.clicked.connect(self.measureSaveRequested)
+        mlay.addWidget(self.btn_save)
+        self.lbl_camera = QLabel("Caméra à")
+        mlay.addWidget(self.lbl_camera)
+        self.spin_camera = QDoubleSpinBox()
+        self.spin_camera.setRange(0.3, 6.0)
+        self.spin_camera.setSingleStep(0.1)
+        self.spin_camera.setDecimals(2)
+        self.spin_camera.setSuffix(" m")
+        self.spin_camera.setToolTip("Hauteur de la caméra au-dessus du sol : environ 2,2 m sur le toit "
+                                    "d'une voiture, 1,7 à 2 m à pied ou à vélo")
+        self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 2.2)))
+        self.spin_camera.valueChanged.connect(self._on_camera_height)
+        mlay.addWidget(self.spin_camera)
+        mlay.addStretch(1)
         btn_clear = QPushButton("Effacer")
-        btn_clear.setToolTip("Effacer les visées en cours")
+        btn_clear.setToolTip("Effacer la mesure en cours")
         btn_clear.clicked.connect(self.measureClearRequested)
         mlay.addWidget(btn_clear)
+        mbox.addLayout(mlay)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
-        mlay.addWidget(self.measure_status, 1)
+        mbox.addWidget(self.measure_status)
         self.measure_box.setVisible(False)
+        self._update_measure_widgets()
         layout.addWidget(self.measure_box)
 
         opts = QHBoxLayout()
@@ -369,7 +436,8 @@ class PanoramaxDock(QDockWidget):
         self.img = PanoWidget(box)
         self.img.setToolTip("Photo 360° : glisser pour tourner, molette pour zoomer")
         self.img.viewChanged.connect(self.viewChanged)
-        self.img.crosshair = self.btn_measure.isChecked()
+        self.img.crosshair = self.btn_measure.isChecked() and self.measure_mode() == "tri"
+        self.img.clicked.connect(self._on_native_click)
         lay.addWidget(self.img, 1)
         self.meta = QLabel("")
         self.meta.setWordWrap(True)
@@ -402,16 +470,80 @@ class PanoramaxDock(QDockWidget):
             api.get_item(pid, self._on_item)
 
     # ------------------------------------------------------------------
-    # Triangulation
+    # Mesures
     # ------------------------------------------------------------------
+    def measure_mode(self):
+        return self.cmb_measure.currentData() or "tri"
+
+    def camera_height(self):
+        return self.spin_camera.value()
+
     def _on_measure_toggled(self, checked):
         self.measure_box.setVisible(checked)
-        if self.web is not None:
-            self.web.page().runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if checked else "false"))
-        elif hasattr(self, "img"):
-            self.img.crosshair = checked
-            self.img.update()
+        self._update_measure_widgets()
         self.measureToggled.emit(checked)
+
+    def _on_measure_mode(self, index):
+        self._update_measure_widgets()
+        self.measureModeChanged.emit(self.measure_mode())
+
+    def _on_camera_height(self, value):
+        QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
+        self.cameraHeightChanged.emit(float(value))
+
+    def _update_measure_widgets(self):
+        """Boutons du mode choisi ; réticule (triangulation) ou clics (mesures au sol)."""
+        mode = self.measure_mode()
+        active = self.btn_measure.isChecked()
+        for w in (self.btn_aim, self.btn_save):
+            w.setVisible(mode == "tri")
+        for w in (self.lbl_camera, self.spin_camera):
+            w.setVisible(mode != "tri")
+        crosshair = active and mode == "tri"
+        if self.web is not None:
+            page = self.web.page()
+            page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if crosshair else "false"))
+            if not active or mode == "tri":
+                page.runJavaScript(CLICKS_OFF_JS)
+        elif hasattr(self, "img"):
+            self.img.crosshair = crosshair
+            self.img.update()
+
+    def _clicked_direction(self, yaw, elev, pic=None):
+        """Émet photoClicked si la photo cliquée est bien la photo courante."""
+        item = self._current_item
+        if not item or item.get("id") != self._current_pic or (pic and pic != self._current_pic):
+            self.message.emit("Photo en cours de chargement : cliquez à nouveau.", 1, "")
+            return
+        try:
+            lon, lat = item["geometry"]["coordinates"][:2]
+        except (KeyError, TypeError, ValueError):
+            return
+        self.photoClicked.emit({"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat),
+                                "yaw": float(yaw) % 360, "elev": float(elev)})
+
+    def _on_native_click(self, yaw, elev):
+        if self.btn_measure.isChecked() and self.measure_mode() != "tri":
+            self._clicked_direction(yaw, elev)
+
+    def _on_viewer_clicks(self, value):
+        from .ground import view_direction
+
+        try:
+            clicks = json.loads(value) if isinstance(value, str) and value else []
+        except ValueError:
+            return
+        for c in clicks:
+            try:
+                vfov = float(c.get("vfov") or 0)
+                if vfov <= 0:  # champ vertical déduit du zoom et des proportions de la vue
+                    hfov = math.radians(self._zoom_to_fov(float(c.get("z") or 0)))
+                    vfov = math.degrees(2 * math.atan(math.tan(hfov / 2) * c["h"] / max(c["w"], 1)))
+                yaw, elev = view_direction(float(c["x"]), float(c["y"]), vfov,
+                                           float(c["dx"]), float(c["dy"]), float(c["h"]))
+            except (KeyError, TypeError, ValueError, ZeroDivisionError):
+                continue
+            self._clicked_direction(yaw, elev, c.get("pic") or None)
 
     def set_measure_status(self, text):
         self.measure_status.setText(text)
@@ -622,7 +754,10 @@ class PanoramaxDock(QDockWidget):
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
             if self.btn_measure.isChecked():  # la page peut avoir été rechargée
-                page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
+                if self.measure_mode() == "tri":
+                    page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
+                else:
+                    page.runJavaScript(CLICKS_JS, self._on_viewer_clicks)
             page.runJavaScript("window.location.href", self._on_js_href)
 
     def _on_live_view(self, value):

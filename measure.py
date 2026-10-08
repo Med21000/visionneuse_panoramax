@@ -33,6 +33,7 @@ LAYER_KEY = "visionneuse_panoramax/kind"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
     "&field=dist_max_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
+DEFAULT_CAMERA_HEIGHT = 1.9  # hauteur de caméra par défaut (m)
 LONE_RAY = 60.0  # longueur (m) d'une visée tant qu'elle n'en croise aucune autre
 
 
@@ -296,15 +297,20 @@ class MeasureItem(QgsMapCanvasItem):
 
 
 class GroundMeasure:
-    """Deux clics dans la photo : distance au sol ("ground") ou hauteur ("height")."""
+    """Deux clics dans la photo : distance au sol ("ground") ou hauteur ("height").
+
+    Chaque clic qui doit toucher le sol porte le profil du terrain le long de sa
+    visée (clés "profile" et "terrain", voir terrain.py) ; sans profil, sol plat.
+    """
 
     def __init__(self, canvas):
         self.canvas = canvas
         self.mode = "ground"
-        self.camera_height = 2.2
-        self.clicks = []  # dicts : pic, lon, lat, yaw, elev
+        self.camera_height = DEFAULT_CAMERA_HEIGHT
+        self.clicks = []  # dicts : pic, lon, lat, yaw, elev, profile, terrain
         self.result = None
         self.error = None
+        self.notice = None  # avertissement sur la source d'altitude
         self.item = None
 
     def set_mode(self, mode):
@@ -315,15 +321,21 @@ class GroundMeasure:
         self.camera_height = float(value)
         self._compute()
 
-    def add_click(self, click):
+    def needs_profile(self):
+        """Le prochain clic doit-il toucher le sol ? (pas le sommet d'un objet)"""
+        return not (self.mode == "height" and len(self.clicks) == 1)
+
+    def add_click(self, click, notice=None):
         if len(self.clicks) >= 2:
             self.clicks = []  # troisième clic : nouvelle mesure
+        if self.needs_profile():
+            self.notice = notice
         self.clicks.append(click)
         self._compute()
         return self.status()
 
     def clear(self):
-        self.clicks, self.result, self.error = [], None, None
+        self.clicks, self.result, self.error, self.notice = [], None, None, None
         self._draw()
 
     def remove(self):
@@ -338,7 +350,7 @@ class GroundMeasure:
                 fn = ground.measure_distance if self.mode == "ground" else ground.measure_height
                 self.result = fn(self.camera_height, *self.clicks)
             elif len(self.clicks) == 1:
-                ground.ground_distance(self.camera_height, self.clicks[0]["elev"])  # contrôle du premier clic
+                ground._ground_point(self.camera_height, self.clicks[0])  # contrôle du premier clic
         except ground.GroundError as exc:
             self.error = str(exc)
             if len(self.clicks) == 1:
@@ -355,10 +367,17 @@ class GroundMeasure:
             points = self.result["points"]
             label = "{} m".format(_num(self.result["value"], 2))
         elif len(self.clicks) == 1 and not self.error:
-            c = self.clicks[0]
-            points = [triangulation.offset(c["lon"], c["lat"], c["yaw"],
-                                           ground.ground_distance(self.camera_height, c["elev"]))]
+            points = [ground._ground_point(self.camera_height, self.clicks[0])[1]]
         self.item.set_data(points, label)
+
+    def _terrain_label(self):
+        labels = []
+        for c in self.clicks:
+            if c.get("profile") is not None or not labels:
+                label = c.get("terrain", ground.FLAT)
+                if label not in labels:
+                    labels.append(label)
+        return " + ".join(labels) or ground.FLAT
 
     def status(self):
         n = len(self.clicks)
@@ -379,7 +398,12 @@ class GroundMeasure:
         if self.mode == "ground":
             text = "Distance : {} m (±{} m) · points à {} m de la photo".format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), " / ".join(_num(d) for d in r["ranges"]))
+            if r.get("dz") is not None:
+                text += " · dénivelé {}{} m".format("+" if r["dz"] >= 0 else "", _num(r["dz"], 2))
         else:
             text = "Hauteur : {} m (±{} m) · objet à {} m".format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["ranges"][0]))
-        return text + ". Hypothèse : sol plat, caméra à {} m.".format(_num(self.camera_height))
+        text += ". Terrain : {}, caméra à {} m.".format(self._terrain_label(), _num(self.camera_height, 2))
+        if self.notice:
+            text += " ({}.)".format(self.notice)
+        return text

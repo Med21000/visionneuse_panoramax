@@ -33,7 +33,15 @@ La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du 
 - **Distance au sol** : cliquer dans la photo sur le sol au premier point, puis au second (largeur de chaussée, de trottoir…). Les deux points peuvent être pris sur deux photos différentes.
 - **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
 
-Le résultat s'affiche dans le panneau et sur la carte. Le calcul suppose un sol plat et horizontal et une caméra à la hauteur indiquée (réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+Le résultat s'affiche dans le panneau et sur la carte. Chaque clic est prolongé jusqu'au sol (lancer de rayon), depuis une caméra placée à la hauteur indiquée (1,90 m par défaut, réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo).
+
+Altitude du terrain (liste « Terrain »), dans l'ordre :
+
+1. une couche raster MNT du projet, si elle est choisie (RGE ALTI, LiDAR HD…) : rapide et hors ligne ;
+2. sinon le service d'altimétrie de l'IGN (RGE ALTI, France entière, connexion requise) ;
+3. hors couverture, un sol plat et horizontal.
+
+Les rues en pente sont ainsi prises en compte, et la distance entre deux points indique aussi le dénivelé. L'inclinaison propre de la caméra (véhicule penché) n'est pas corrigée, et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
 
 ## Installation
 

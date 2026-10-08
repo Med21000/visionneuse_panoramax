@@ -10,7 +10,8 @@ Deux modes :
 
 from collections import OrderedDict
 
-from qgis.core import QgsSettings
+from qgis.core import Qgis, QgsSettings
+from qgis.gui import QgsMapLayerComboBox
 from qgis.PyQt.QtCore import QStandardPaths, QTimer, QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QDesktopServices, QImage, QPixmap
 from qgis.PyQt.QtWidgets import (
@@ -135,6 +136,17 @@ LIVE_VIEW_JS = r"""
         v.style.setProperty('height', '100vh', 'important');
         v.style.setProperty('max-height', 'none', 'important');
         v.style.setProperty('margin', '0', 'important');
+        // Widgets de la visionneuse inutiles dans QGIS (la carte QGIS fait office de
+        // mini-carte ; zoom à la molette) : ils sont dans des shadow DOM, qu'on parcourt.
+        var hide = 'pnx-mini, pnx-widget-zoom, pnx-widget-fullscreen';
+        var roots = [document];
+        while (roots.length) {
+          var r = roots.pop();
+          var hits = r.querySelectorAll ? r.querySelectorAll(hide) : [];
+          for (var h = 0; h < hits.length; h++) hits[h].style.setProperty('display', 'none', 'important');
+          var els = r.querySelectorAll ? r.querySelectorAll('*') : [];
+          for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) roots.push(els[j].shadowRoot); }
+        }
         if (!v.__qgisResized) {
           v.__qgisResized = true;
           setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 50);
@@ -240,6 +252,7 @@ class PanoramaxDock(QDockWidget):
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev
     cameraHeightChanged = pyqtSignal(float)
+    terrainLayerChanged = pyqtSignal(object)  # couche MNT choisie, ou None (service IGN)
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -339,9 +352,9 @@ class PanoramaxDock(QDockWidget):
         self.spin_camera.setSingleStep(0.1)
         self.spin_camera.setDecimals(2)
         self.spin_camera.setSuffix(" m")
-        self.spin_camera.setToolTip("Hauteur de la caméra au-dessus du sol : environ 2,2 m sur le toit "
-                                    "d'une voiture, 1,7 à 2 m à pied ou à vélo")
-        self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 2.2)))
+        self.spin_camera.setToolTip("Hauteur de la caméra au-dessus du sol (1,90 m par défaut) : environ "
+                                    "2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo")
+        self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 1.9)))
         self.spin_camera.valueChanged.connect(self._on_camera_height)
         mlay.addWidget(self.spin_camera)
         mlay.addStretch(1)
@@ -350,6 +363,20 @@ class PanoramaxDock(QDockWidget):
         btn_clear.clicked.connect(self.measureClearRequested)
         mlay.addWidget(btn_clear)
         mbox.addLayout(mlay)
+        self.terrain_row = QWidget(self.measure_box)
+        tlay = QHBoxLayout(self.terrain_row)
+        tlay.setContentsMargins(0, 0, 0, 0)
+        tlay.addWidget(QLabel("Terrain :"))
+        self.cmb_terrain = QgsMapLayerComboBox()
+        self.cmb_terrain.setFilters(Qgis.LayerFilter.RasterLayer)
+        self.cmb_terrain.setAllowEmptyLayer(True, "Service d'altimétrie IGN (sinon sol plat)")
+        self.cmb_terrain.setLayer(None)
+        self.cmb_terrain.setToolTip("Altitudes du terrain utilisées pour placer les clics au sol : une couche MNT "
+                                    "du projet (RGE ALTI, LiDAR HD…) ou, à défaut, le service de l'IGN. "
+                                    "Hors couverture, le sol est supposé plat.")
+        self.cmb_terrain.layerChanged.connect(lambda layer: self.terrainLayerChanged.emit(layer))
+        tlay.addWidget(self.cmb_terrain, 1)
+        mbox.addWidget(self.terrain_row)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
         mbox.addWidget(self.measure_status)
@@ -478,6 +505,9 @@ class PanoramaxDock(QDockWidget):
     def camera_height(self):
         return self.spin_camera.value()
 
+    def terrain_layer(self):
+        return self.cmb_terrain.currentLayer()
+
     def _on_measure_toggled(self, checked):
         self.measure_box.setVisible(checked)
         self._update_measure_widgets()
@@ -497,7 +527,7 @@ class PanoramaxDock(QDockWidget):
         active = self.btn_measure.isChecked()
         for w in (self.btn_aim, self.btn_save):
             w.setVisible(mode == "tri")
-        for w in (self.lbl_camera, self.spin_camera):
+        for w in (self.lbl_camera, self.spin_camera, self.terrain_row):
             w.setVisible(mode != "tri")
         crosshair = active and mode == "tri"
         if self.web is not None:

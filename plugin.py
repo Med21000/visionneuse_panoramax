@@ -20,6 +20,7 @@ from qgis.PyQt.QtWidgets import QApplication, QProgressDialog, QPushButton
 from . import api, layers
 from .cursor import ViewCursor
 from .measure import GroundMeasure, Triangulator
+from .terrain import TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -37,6 +38,7 @@ class PanoramaxPlugin:
         self.cursor = None
         self.triangulator = None
         self.ground = None
+        self.terrain = TerrainProvider()
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -110,6 +112,7 @@ class PanoramaxPlugin:
             self.dock.measureModeChanged.connect(self._on_measure_mode)
             self.dock.photoClicked.connect(self._on_photo_clicked)
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
+            self.dock.terrainLayerChanged.connect(self._on_terrain_layer)
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -317,7 +320,27 @@ class PanoramaxPlugin:
         self.dock.set_measure_status(self._ensure_triangulator().add(sighting))
 
     def _on_photo_clicked(self, click):
-        self.dock.set_measure_status(self._active_measure().add_click(click))
+        tool = self._active_measure()
+        if not isinstance(tool, GroundMeasure) or not tool.needs_profile():
+            self.dock.set_measure_status(tool.add_click(click))  # sommet d'un objet : pas de terrain
+            return
+        self.dock.set_measure_status("Altitude du terrain le long de la visée…")
+        mode = tool.mode
+
+        def done(profile, label, warning):
+            if self.ground is not tool or tool.mode != mode:
+                return  # mesure effacée ou mode changé entre-temps
+            click.update(profile=profile, terrain=label)
+            self.dock.set_measure_status(tool.add_click(click, warning))
+
+        self.terrain.profile(click["lon"], click["lat"], click["yaw"], done)
+
+    def _on_terrain_layer(self, layer):
+        self.terrain.set_layer(layer)
+        if self.ground is not None:
+            self.ground.clear()  # les profils des clics viennent de l'ancienne source
+            if self.dock.measure_mode() != "tri":
+                self.dock.set_measure_status(self.ground.status())
 
     def _on_camera_height(self, value):
         ground = self._ensure_ground()

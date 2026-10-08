@@ -20,6 +20,10 @@ Copier le dossier `visionneuse_panoramax` dans le répertoire des plugins de vot
 
 Remplacer `QGIS3` par `QGIS4` pour QGIS 4. Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
+## Licence
+
+GNU General Public License, version 2 ou ultérieure (voir [LICENSE](LICENSE)).
+
 ## Auteur
 
 Cédric COCHART

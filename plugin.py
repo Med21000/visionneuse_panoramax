@@ -19,6 +19,7 @@ from qgis.PyQt.QtWidgets import QApplication, QProgressDialog, QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
+from .measure import Triangulator
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -34,6 +35,7 @@ class PanoramaxPlugin:
         self.dock = None
         self.tool = None
         self.cursor = None
+        self.triangulator = None
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -69,6 +71,9 @@ class PanoramaxPlugin:
             self.canvas.unsetMapTool(self.tool)
         self.tool = None
         self._clear_marker()
+        if self.triangulator is not None:
+            self.triangulator.remove()
+            self.triangulator = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -96,6 +101,10 @@ class PanoramaxPlugin:
             self.dock.instanceChanged.connect(self._on_instance_changed)
             self.dock.viewChanged.connect(self._on_view_changed)
             self.dock.message.connect(self._show_message)
+            self.dock.measureToggled.connect(self._on_measure_toggled)
+            self.dock.aimRequested.connect(self._on_aim)
+            self.dock.measureSaveRequested.connect(self._on_measure_save)
+            self.dock.measureClearRequested.connect(self._on_measure_clear)
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -261,3 +270,32 @@ class PanoramaxPlugin:
         if self.cursor is not None:
             self.cursor.remove()
             self.cursor = None
+
+    # ------------------------------------------------------------------
+    # Triangulation
+    # ------------------------------------------------------------------
+    def _ensure_triangulator(self):
+        if self.triangulator is None:
+            self.triangulator = Triangulator(self.canvas)
+        return self.triangulator
+
+    def _on_measure_toggled(self, checked):
+        tri = self._ensure_triangulator()
+        if not checked:
+            tri.clear()
+        self.dock.set_measure_status(tri.status())
+
+    def _on_aim(self, sighting):
+        self.dock.set_measure_status(self._ensure_triangulator().add(sighting))
+
+    def _on_measure_save(self):
+        tri = self._ensure_triangulator()
+        ok, msg = tri.save()
+        self.iface.messageBar().pushMessage(
+            "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
+        self.dock.set_measure_status(tri.status())
+
+    def _on_measure_clear(self):
+        tri = self._ensure_triangulator()
+        tri.clear()
+        self.dock.set_measure_status(tri.status())

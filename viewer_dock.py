@@ -115,7 +115,7 @@ LIVE_VIEW_JS = r"""
           var kids = parent.children || [];
           for (var k = 0; k < kids.length; k++) {
             var c = kids[k];
-            if (c !== node && !keep[c.tagName]) c.style.setProperty('display', 'none', 'important');
+            if (c !== node && !keep[c.tagName] && c.id !== 'qgis-crosshair') c.style.setProperty('display', 'none', 'important');
           }
           var holder = (parent instanceof ShadowRoot) ? parent.host : parent;
           if (holder && holder.style && holder !== document.documentElement) {
@@ -148,6 +148,25 @@ LIVE_VIEW_JS = r"""
 })()
 """
 
+# Réticule de visée (triangulation), centré sur la vue : c'est la direction lue
+# par getXYZ(). Ajouté au document, au-dessus de la visionneuse et sans capter la souris.
+CROSSHAIR_JS = r"""
+(function(show){
+  var e = document.getElementById('qgis-crosshair');
+  if (!show) { if (e) e.remove(); return; }
+  if (e || !document.body) return;
+  e = document.createElement('div');
+  e.id = 'qgis-crosshair';
+  e.innerHTML = '<svg width="44" height="44" viewBox="0 0 44 44" fill="none" stroke-linecap="round">'
+    + '<path d="M22 3v14M22 27v14M3 22h14M27 22h14" stroke="#fff" stroke-width="4.5" opacity=".75"/>'
+    + '<path d="M22 3v14M22 27v14M3 22h14M27 22h14" stroke="#e53935" stroke-width="2"/>'
+    + '<circle cx="22" cy="22" r="2" fill="#e53935" stroke="#fff"/></svg>';
+  e.style.cssText = 'position:fixed;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;'
+    + 'pointer-events:none;z-index:2147483647';
+  document.body.appendChild(e);
+})(__SHOW__)
+"""
+
 NO_WEBENGINE_TEXT = (
     "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
     "la visionneuse interactive s'ouvre dans le navigateur (bouton « Navigateur »), "
@@ -170,6 +189,11 @@ class PanoramaxDock(QDockWidget):
     instanceChanged = pyqtSignal()
     # Orientation de la vue : (cap absolu en degrés, ouverture horizontale en degrés)
     viewChanged = pyqtSignal(float, float)
+    # Triangulation : mode activé/désactivé, visée (dict), enregistrement, effacement
+    measureToggled = pyqtSignal(bool)
+    aimRequested = pyqtSignal(object)
+    measureSaveRequested = pyqtSignal()
+    measureClearRequested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -217,6 +241,12 @@ class PanoramaxDock(QDockWidget):
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(capture_dir())))
         self.btn_capture.setMenu(menu)
         bar.addWidget(self.btn_capture)
+        self.btn_measure = QToolButton()
+        self.btn_measure.setText("📐 Triangulation")
+        self.btn_measure.setCheckable(True)
+        self.btn_measure.setToolTip("Positionner un objet sur la carte en le visant depuis plusieurs photos")
+        self.btn_measure.toggled.connect(self._on_measure_toggled)
+        bar.addWidget(self.btn_measure)
         btn_browser = QPushButton("Navigateur")
         btn_browser.setToolTip("Ouvrir la vue actuelle dans le navigateur")
         btn_browser.clicked.connect(self.open_in_browser)
@@ -238,6 +268,27 @@ class PanoramaxDock(QDockWidget):
         self._fill_instances([])
         self.cmb_instance.activated.connect(self._on_instance_activated)
         self.load_instances()
+
+        self.measure_box = QWidget(root)
+        mlay = QHBoxLayout(self.measure_box)
+        mlay.setContentsMargins(0, 0, 0, 0)
+        btn_aim = QPushButton("🎯 Viser")
+        btn_aim.setToolTip("Enregistrer la direction du réticule (centre de la vue) depuis la photo affichée")
+        btn_aim.clicked.connect(self._aim)
+        mlay.addWidget(btn_aim)
+        btn_save = QPushButton("Enregistrer le point")
+        btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
+        btn_save.clicked.connect(self.measureSaveRequested)
+        mlay.addWidget(btn_save)
+        btn_clear = QPushButton("Effacer")
+        btn_clear.setToolTip("Effacer les visées en cours")
+        btn_clear.clicked.connect(self.measureClearRequested)
+        mlay.addWidget(btn_clear)
+        self.measure_status = QLabel("")
+        self.measure_status.setWordWrap(True)
+        mlay.addWidget(self.measure_status, 1)
+        self.measure_box.setVisible(False)
+        layout.addWidget(self.measure_box)
 
         opts = QHBoxLayout()
         self.chk_follow = QCheckBox("Centrer la carte QGIS sur la photo")
@@ -318,6 +369,7 @@ class PanoramaxDock(QDockWidget):
         self.img = PanoWidget(box)
         self.img.setToolTip("Photo 360° : glisser pour tourner, molette pour zoomer")
         self.img.viewChanged.connect(self.viewChanged)
+        self.img.crosshair = self.btn_measure.isChecked()
         lay.addWidget(self.img, 1)
         self.meta = QLabel("")
         self.meta.setWordWrap(True)
@@ -348,6 +400,49 @@ class PanoramaxDock(QDockWidget):
         pid = api.id_from_href(api.item_link(self._current_item, rel))
         if pid:
             api.get_item(pid, self._on_item)
+
+    # ------------------------------------------------------------------
+    # Triangulation
+    # ------------------------------------------------------------------
+    def _on_measure_toggled(self, checked):
+        self.measure_box.setVisible(checked)
+        if self.web is not None:
+            self.web.page().runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if checked else "false"))
+        elif hasattr(self, "img"):
+            self.img.crosshair = checked
+            self.img.update()
+        self.measureToggled.emit(checked)
+
+    def set_measure_status(self, text):
+        self.measure_status.setText(text)
+
+    def current_sighting(self):
+        """Visée depuis la photo affichée (centre de la vue), ou None."""
+        item = self._current_item
+        if not item or item.get("id") != self._current_pic:
+            return None  # fiche de la photo pas encore reçue
+        try:
+            lon, lat = item["geometry"]["coordinates"][:2]
+        except (KeyError, TypeError, ValueError):
+            return None
+        if self.web is None:
+            if self.img.pixmap is None:
+                return None  # image pas encore affichée : cap inconnu
+            heading = self.img.current_view()[0]
+        elif self._view is not None:
+            heading = self._view["heading"]
+        else:
+            heading = api.item_heading(item)
+        if heading is None:
+            return None
+        return {"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat), "heading": float(heading) % 360}
+
+    def _aim(self):
+        sighting = self.current_sighting()
+        if sighting is None:
+            self.message.emit("Aucune photo affichée (ou orientation inconnue) : impossible de viser.", 1, "")
+            return
+        self.aimRequested.emit(sighting)
 
     # ------------------------------------------------------------------
     # Capture Full HD
@@ -526,6 +621,8 @@ class PanoramaxDock(QDockWidget):
         if self.isVisible() and self.web is not None:
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
+            if self.btn_measure.isChecked():  # la page peut avoir été rechargée
+                page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
             page.runJavaScript("window.location.href", self._on_js_href)
 
     def _on_live_view(self, value):

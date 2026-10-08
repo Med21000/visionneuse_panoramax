@@ -33,6 +33,7 @@ class PanoWidget(QWidget):
         self.flat_fov = 70.0
         self.heading = None  # cap absolu affiché (360°)
         self.fov = 90.0
+        self.crosshair = False  # réticule de visée (triangulation), aussi sur les photos classiques
         self.message = "Cliquez sur « Choisir sur la carte » puis sur la carte."
         self._drag = None
 
@@ -164,9 +165,9 @@ class PanoWidget(QWidget):
         p.drawRoundedRect(rect, 6, 6)
         p.setPen(QPen(QColor(255, 255, 255)))
         p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
-        if self.is360:
+        if self.is360 or self.crosshair:
             # Repère central (axe de visée)
             c = QPointF(self.width() / 2.0, self.height() / 2.0)
-            p.setPen(QPen(QColor(255, 111, 0, 200), 1.5))
+            p.setPen(QPen(QColor(229, 57, 53) if self.crosshair else QColor(255, 111, 0, 200), 1.5))
             p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8))
             p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()))

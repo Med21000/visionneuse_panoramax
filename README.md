@@ -9,7 +9,18 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Filaire des séquences en tuiles vectorielles.
 - Extraction des séquences et des photos en couches vecteur.
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
+- Triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
+
+## Triangulation
+
+1. Cliquer sur « 📐 Triangulation » : un réticule rouge apparaît au centre de la visionneuse.
+2. Tourner la vue pour placer le réticule sur l'objet, puis « 🎯 Viser ».
+3. Passer à une autre photo, idéalement décalée sur le côté de l'objet, et viser à nouveau le même objet.
+4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement et une incertitude estimée (pour ±1° de visée). Une troisième visée améliore et contrôle le résultat.
+5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
+
+La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du mètre) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°.
 
 ## Installation
 

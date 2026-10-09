@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Mini-visionneuse native (mode sans QtWebEngine).
 
 - Photo 360° (équirectangulaire) : on affiche une fenêtre de la sphère,

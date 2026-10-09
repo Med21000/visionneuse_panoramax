@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Position d'un objet par intersection de visées (triangulation).
 
 Chaque visée part de la position d'une photo dans une direction (cap absolu,

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Capture « virtuelle » Full HD de la vue affichée.
 
 Plutôt qu'une capture d'écran (limitée à la taille du panneau), on recalcule la

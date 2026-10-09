@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Mesures dans QGIS : triangulation, largeur et hauteur.
 
 - Triangulation : viser un objet au centre de la visionneuse, changer de photo,

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Profils d'altitude du terrain le long d'une visée (pour ground.intersect).
 
 Sources, essayées dans l'ordre jusqu'à la première qui répond :

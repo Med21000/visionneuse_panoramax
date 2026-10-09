@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Mesures sur une photo par lancer de rayon sur le terrain.
 
 La caméra est à une hauteur connue au-dessus du sol. Un clic donne une

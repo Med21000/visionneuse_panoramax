@@ -315,34 +315,59 @@ MARKS_JS = r"""
   var M = v && v.psv && v.psv._myMarkers;
   if (!M || !M.addMarker) return;
   var pic = v.psv.getPictureId ? (v.psv.getPictureId() || '') : '';
-  var pts = (state.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; });
-  // Anciens identifiants (ext, h) gardés pour effacer les repères d'une version précédente
-  var ids = ['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line', 'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1',
-             'qgis-label'];
+  // Mesures de la photo affichée : celles prises sur d'autres photos restent en attente
+  var measures = (state.measures || []).map(function(m){
+    return {label: m.label, beside: m.beside,
+            pts: (m.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; })};
+  }).filter(function(m){ return m.pts.length; });
   // Étiquette à côté du trait (hauteur) : du côté du centre de la vue, recalculé quand
   // la vue tourne de l'autre côté du trait
-  var side = '';
-  if (state.beside && pts.length === 2 && v.psv.getPosition) {
-    var d = (pts[0].yaw + pts[1].yaw) / 2 - v.psv.getPosition().yaw;
-    if (Math.abs(pts[0].yaw - pts[1].yaw) > Math.PI) d += Math.PI;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    side = d > 0 ? 'left' : 'right';
-  }
-  var key = JSON.stringify(state) + '|' + pic + '|' + side;
-  var present = !pts.length || !!(M.markers && M.markers['qgis-p0']);
+  var view = v.psv.getPosition ? v.psv.getPosition().yaw : 0;
+  measures.forEach(function(m){
+    m.side = '';
+    if (m.beside && m.pts.length === 2) {
+      var d = (m.pts[0].yaw + m.pts[1].yaw) / 2 - view;
+      if (Math.abs(m.pts[0].yaw - m.pts[1].yaw) > Math.PI) d += Math.PI;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      m.side = d > 0 ? 'left' : 'right';
+    }
+  });
+  var key = JSON.stringify(measures) + '|' + pic;
+  var present = !measures.length || !!(M.markers && M.markers['qgis-m0-p0']);
   if (key === window.__qgisMarkKey && present) return;
   window.__qgisMarkKey = key;
-  ids.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
+  // Repères précédents, y compris ceux d'une version antérieure du plugin
+  var old = (window.__qgisMarkIds || []).concat(['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line',
+             'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1', 'qgis-label']);
+  old.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
+  var ids = [];
+  function add(marker){ ids.push(marker.id); M.addMarker(marker); }
   // Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
-  // Trait par-dessus les croix (même couche SVG : ordre d'ajout).
+  // Les traits passent devant toutes les croix : ajoutés après elles (même couche SVG,
+  // ordre d'ajout), avec un zIndex plus haut, et replacés en fin de leur conteneur.
   var cross = 'M0 9H18M9 0V18';
-  var line = pts.length === 2 ? [[pts[0].yaw, pts[0].pitch], [pts[1].yaw, pts[1].pitch]] : null;
-  pts.forEach(function(p, i){
-    M.addMarker({id: 'qgis-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross,
-                 anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+  measures.forEach(function(m, k){
+    m.pts.forEach(function(p, i){
+      add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
+           anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+    });
   });
-  if (line) M.addMarker({id: 'qgis-line', polyline: line, svgStyle: {stroke: '#ff8a80', strokeWidth: '1.5px', fill: 'none'}});
-  if (state.label && pts.length) {
+  var lines = [];
+  measures.forEach(function(m, k){
+    if (m.pts.length !== 2) return;
+    var id = 'qgis-m' + k + '-line';
+    add({id: id, polyline: [[m.pts[0].yaw, m.pts[0].pitch], [m.pts[1].yaw, m.pts[1].pitch]], zIndex: 2,
+         svgStyle: {stroke: '#ff5f52', strokeWidth: '2.5px', fill: 'none'}});
+    lines.push(id);
+  });
+  lines.forEach(function(id){
+    var mk = M.markers && M.markers[id];
+    var el = mk && (mk.domElement || mk.element || mk.$el);
+    if (el && el.parentNode) el.parentNode.appendChild(el);
+  });
+  measures.forEach(function(m, k){
+    var pts = m.pts, prefix = 'qgis-m' + k + '-';
+    if (!m.label) return;
     var at = pts[0];
     if (pts.length === 2) {  // milieu du trait (moyenne des directions)
       var x = 0, y = 0, z = 0;
@@ -351,7 +376,7 @@ MARKS_JS = r"""
       });
       at = {yaw: Math.atan2(x, z), pitch: Math.atan2(y, Math.sqrt(x * x + z * z))};
     }
-    var text = String(state.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
+    var text = String(m.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
     // Flèche de tête allongée au double dans son sens. ↔ (largeur) : la flèche cachée en double
     // réserve exactement la place, la visible est étirée depuis le bord gauche. ↕ (hauteur) :
     // une ligne de 2em lui fait la place, l'étiquette grandit d'autant.
@@ -360,13 +385,15 @@ MARKS_JS = r"""
       + 'transform:scaleX(2);transform-origin:0 50%">↔</span></span>');
     text = text.replace(/^↕/, '<span style="display:inline-block;line-height:2em;vertical-align:middle;'
       + 'transform:scaleY(2)">↕</span>');
+    var side = m.side;
     var anchor = side === 'left' ? 'center right' : side === 'right' ? 'center left' : 'bottom center';
     var margin = side === 'left' ? 'margin-right:14px;' : side === 'right' ? 'margin-left:14px;' : 'margin-bottom:10px;';
-    M.addMarker({id: 'qgis-label', position: {yaw: at.yaw, pitch: at.pitch}, anchor: anchor, zIndex: 101,
-                 html: '<div style="' + margin + 'padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.92);'
-                   + 'color:#b71c1c;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
-                   + text + '</div>'});
-  }
+    add({id: prefix + 'label', position: {yaw: at.yaw, pitch: at.pitch}, anchor: anchor, zIndex: 101,
+         html: '<div style="' + margin + 'padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.92);'
+           + 'color:#b71c1c;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
+           + text + '</div>'});
+  });
+  window.__qgisMarkIds = ids;
 })(__STATE__)
 """
 
@@ -458,6 +485,7 @@ class PanoramaxDock(QDockWidget):
     aimRequested = pyqtSignal(object)
     measureSaveRequested = pyqtSignal()
     measureClearRequested = pyqtSignal()
+    measureClearAllRequested = pyqtSignal()  # efface toutes les mesures conservées à l'écran
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
@@ -476,7 +504,7 @@ class PanoramaxDock(QDockWidget):
         self._last_xyz = None
         self._live_ok = False  # True dès que la lecture directe de la visionneuse fonctionne
         self._view = None  # dernière vue connue : cap, inclinaison, zoom, champ vertical
-        self._marks = {"points": [], "label": "", "beside": False}  # repères de mesure affichés dans la visionneuse
+        self._marks = []  # mesures affichées dans la visionneuse (voir set_measure_marks)
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
 
         root = QWidget(self)
@@ -588,9 +616,13 @@ class PanoramaxDock(QDockWidget):
         mlay.addWidget(self.spin_reference)
         mlay.addStretch(1)
         btn_clear = QPushButton("Effacer")
-        btn_clear.setToolTip("Effacer la mesure en cours")
+        btn_clear.setToolTip("Effacer la mesure en cours (ou le calage du mode choisi)")
         btn_clear.clicked.connect(self.measureClearRequested)
         mlay.addWidget(btn_clear)
+        btn_clear_all = QPushButton("Tout effacer")
+        btn_clear_all.setToolTip("Effacer toutes les mesures affichées dans la visionneuse et sur la carte")
+        btn_clear_all.clicked.connect(self.measureClearAllRequested)
+        mlay.addWidget(btn_clear_all)
         mbox.addLayout(mlay)
         self.terrain_row = QWidget(self.measure_box)
         tlay = QHBoxLayout(self.terrain_row)
@@ -800,8 +832,6 @@ class PanoramaxDock(QDockWidget):
             w.setVisible(mode == "camera")
         self.update_calibration_label()
         crosshair = active and mode == "tri"
-        if not active or mode == "tri":
-            self.set_measure_marks(None)
         if self.web is not None:
             page = self.web.page()
             page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if crosshair else "false"))
@@ -812,15 +842,21 @@ class PanoramaxDock(QDockWidget):
             self.img.crosshair = crosshair
             self.img.set_measuring(active and mode != "tri")
 
+    def _marks_js(self):
+        return MARKS_JS.replace("__STATE__", json.dumps({"measures": self._marks}))
+
     def set_measure_marks(self, marks):
-        """Repères de mesure dans la visionneuse : {"points": [dicts pic, yaw, pitch
-        (position dans la photo, radians), abs_yaw, elev (degrés)], "label": texte}."""
-        self._marks = marks or {"points": [], "label": "", "beside": False}
+        """Mesures affichées dans la visionneuse, chacune sur la photo où elle a été prise :
+        liste de {"points": [dicts pic, yaw, pitch (position dans la photo, radians),
+        abs_yaw, elev (degrés)], "label": texte, "beside": étiquette à côté du trait}."""
+        self._marks = list(marks or [])
         if self.web is not None:
-            self.web.page().runJavaScript(MARKS_JS.replace("__STATE__", json.dumps(self._marks)))
+            self.web.page().runJavaScript(self._marks_js())
         elif hasattr(self, "img"):
-            pts = [(p["abs_yaw"], p["elev"]) for p in self._marks["points"] if p.get("pic") == self._current_pic]
-            self.img.set_marks(pts, self._marks.get("label", ""), self._marks.get("beside", False))
+            self.img.set_marks([{"pts": [(p["abs_yaw"], p["elev"]) for p in m.get("points", [])
+                                         if p.get("pic") == self._current_pic],
+                                 "label": m.get("label", ""), "beside": m.get("beside", False)}
+                                for m in self._marks])
 
     def current_ids(self):
         """(photo, séquence) affichées, ou (None, None)."""
@@ -1212,7 +1248,8 @@ class PanoramaxDock(QDockWidget):
                     page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
                 else:
                     page.runJavaScript(CLICKS_JS, self._on_viewer_clicks)
-                    page.runJavaScript(MARKS_JS.replace("__STATE__", json.dumps(self._marks)))
+            if self._marks:  # mesures conservées à l'écran, aussi hors mode mesure
+                page.runJavaScript(self._marks_js())
             page.runJavaScript("window.location.href", self._on_js_href)
 
     def _on_live_view(self, value):

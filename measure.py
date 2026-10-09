@@ -337,10 +337,12 @@ class GroundMeasure:
         self.error = None
         self.notice = None  # avertissement sur la source d'altitude
         self.item = None
+        self.done = []  # mesures terminées gardées à l'écran : dicts marks (visionneuse), item (carte)
 
     def set_mode(self, mode):
+        self.finish()
         self.mode = mode
-        self.clear()
+        self._draw()
 
     def set_camera_height(self, value):
         self.camera_height = float(value)
@@ -358,18 +360,42 @@ class GroundMeasure:
 
     def add_click(self, click, notice=None):
         if len(self.clicks) >= 2:
-            self.clicks = []  # troisième clic : nouvelle mesure
+            self.finish()  # troisième clic : nouvelle mesure, la précédente reste affichée
         if self.needs_profile():
             self.notice = notice
         self.clicks.append(click)
         self._compute()
         return self.status()
 
-    def clear(self):
+    def finish(self):
+        """Termine la mesure en cours : réussie, elle reste affichée (visionneuse et carte)
+        jusqu'à clear_all ; sinon elle est abandonnée."""
+        if self.result and self.item is not None:
+            self.done.append({"marks": self.viewer_marks(), "item": self.item})
+            self.item = None
         self.clicks, self.result, self.error, self.notice = [], None, None, None
         self._draw()
 
+    def clear(self):
+        """Efface la mesure en cours (les mesures terminées restent affichées)."""
+        self.clicks, self.result, self.error, self.notice = [], None, None, None
+        self._draw()
+
+    def clear_all(self):
+        """Efface aussi toutes les mesures terminées."""
+        self.clear()
+        for d in self.done:
+            d["item"].remove()
+        self.done = []
+
+    def done_marks(self):
+        """Repères des mesures terminées, pour la visionneuse."""
+        return [d["marks"] for d in self.done]
+
     def remove(self):
+        for d in self.done:
+            d["item"].remove()
+        self.done = []
         if self.item is not None:
             self.item.remove()
             self.item = None

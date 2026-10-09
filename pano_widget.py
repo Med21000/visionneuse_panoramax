@@ -17,7 +17,8 @@ from qgis.PyQt.QtGui import QColor, QFont, QPainter, QPen
 from qgis.PyQt.QtWidgets import QSizePolicy, QWidget
 
 MIN_FOV, MAX_FOV = 25.0, 120.0
-LIGHT_RED = QColor(255, 138, 128)  # trait de mesure et réticule de visée (#ff8a80)
+LIGHT_RED = QColor(255, 138, 128)  # réticule de visée (#ff8a80)
+MEASURE_RED = QColor(255, 95, 82)  # trait de mesure (#ff5f52)
 
 
 def _event_pos(event):
@@ -45,9 +46,9 @@ class PanoWidget(QWidget):
         self._drag = None
         self._press = None
         self._measuring = False  # mesure par clics : curseur en croix fine
-        self.marks = []  # repères de mesure : [(cap absolu, élévation)]
-        self.mark_label = ""
-        self.mark_beside = False  # étiquette à côté du trait (hauteur), vers le centre
+        # Mesures affichées : [{"pts": [(cap absolu, élévation)], "label": texte,
+        # "beside": étiquette à côté du trait (hauteur), vers le centre}]
+        self.marks = []
 
     # ------------------------------------------------------------------
     def set_message(self, text):
@@ -120,8 +121,8 @@ class PanoWidget(QWidget):
         self.setCursor(self._base_cursor())
         self.update()
 
-    def set_marks(self, marks, label="", beside=False):
-        self.marks, self.mark_label, self.mark_beside = list(marks), label or "", bool(beside)
+    def set_marks(self, measures):
+        self.marks = [m for m in measures if m.get("pts")]
         self.update()
 
     def _base_cursor(self):
@@ -227,26 +228,33 @@ class PanoWidget(QWidget):
             tx += tw
 
     def _paint_marks(self, p):
-        pts = [self.screen_pos(y, e) for y, e in self.marks]
+        # Toutes les croix, puis tous les traits (devant les croix), puis les étiquettes
+        for layer in ("cross", "line", "label"):
+            for m in self.marks:
+                self._paint_measure(p, m["pts"], m.get("label") or "", bool(m.get("beside")), layer)
+
+    def _paint_measure(self, p, marks, label, beside, layer):
+        pts = [self.screen_pos(y, e) for y, e in marks]
         pts = [q for q in pts if q is not None]
         if not pts:
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
-        # Trait par-dessus les croix.
-        arm = 9.0
-        white = QPen(QColor(255, 255, 255), 1.5)
-        white.setCapStyle(Qt.PenCapStyle.FlatCap)
-        p.setPen(white)
-        for q in pts:
-            p.drawLine(QPointF(q.x() - arm, q.y()), QPointF(q.x() + arm, q.y()))
-            p.drawLine(QPointF(q.x(), q.y() - arm), QPointF(q.x(), q.y() + arm))
-        if len(pts) == 2:
-            pen = QPen(LIGHT_RED, 1.5)
+        # Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre
+        # (couche "cross", "line" ou "label", voir _paint_marks).
+        if layer == "cross":
+            arm = 9.0
+            white = QPen(QColor(255, 255, 255), 1.5)
+            white.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(white)
+            for q in pts:
+                p.drawLine(QPointF(q.x() - arm, q.y()), QPointF(q.x() + arm, q.y()))
+                p.drawLine(QPointF(q.x(), q.y() - arm), QPointF(q.x(), q.y() + arm))
+        if layer == "line" and len(pts) == 2:
+            pen = QPen(MEASURE_RED, 2.5)
             pen.setCapStyle(Qt.PenCapStyle.FlatCap)
             p.setPen(pen)
             p.drawLine(pts[0], pts[1])
-        if self.mark_label:
+        if layer == "label" and label:
             at = QPointF((pts[0].x() + pts[-1].x()) / 2.0, (pts[0].y() + pts[-1].y()) / 2.0)
             font = QFont(self.font())
             font.setBold(True)
@@ -254,15 +262,15 @@ class PanoWidget(QWidget):
             fm = p.fontMetrics()
             # Flèche de tête allongée au double dans son sens : ↔ (largeur) en largeur,
             # ↕ (hauteur) en hauteur, l'étiquette grandit d'autant
-            arrow = self.mark_label[0] if self.mark_label[0] in "↔↕" else ""
-            rest = self.mark_label[len(arrow):]
+            arrow = label[0] if label[0] in "↔↕" else ""
+            rest = label[len(arrow):]
             sx, sy = (2.0, 1.0) if arrow == "↔" else (1.0, 2.0) if arrow else (1.0, 1.0)
             aw = sx * fm.horizontalAdvance(arrow) if arrow else 0
             glyph = fm.tightBoundingRect(arrow) if arrow else QRectF()
             tw = aw + fm.horizontalAdvance(rest)
             w = tw + 14
             h = max(fm.height(), sy * glyph.height()) + 4
-            if self.mark_beside and len(pts) == 2:
+            if beside and len(pts) == 2:
                 # À côté du trait, du côté du centre de la vue, pour ne pas masquer l'objet
                 x = at.x() - 14 - w if at.x() > self.width() / 2.0 else at.x() + 14
                 rect = QRectF(x, at.y() - h / 2.0, w, h)

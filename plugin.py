@@ -166,6 +166,7 @@ class PanoramaxPlugin:
             self.dock.aimRequested.connect(self._on_aim)
             self.dock.measureSaveRequested.connect(self._on_measure_save)
             self.dock.measureClearRequested.connect(self._on_measure_clear)
+            self.dock.measureClearAllRequested.connect(self._on_measure_clear_all)
             self.dock.measureModeChanged.connect(self._on_measure_mode)
             self.dock.photoClicked.connect(self._on_photo_clicked)
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
@@ -372,14 +373,21 @@ class PanoramaxPlugin:
         mode = self.dock.measure_mode()
         tool = {"width": self.ground, "height": self.ground, "tilt": self.calibrator,
                 "heading": self.calibrator, "camera": self.calibrator}.get(mode) if self.dock.btn_measure.isChecked() else None
-        self.dock.set_measure_marks(tool.viewer_marks() if tool is not None else None)
+        # Mesures terminées, gardées à l'écran jusqu'à « Tout effacer », puis mesure en cours
+        marks = self.ground.done_marks() if self.ground is not None else []
+        current = tool.viewer_marks() if tool is not None else None
+        if current and current["points"]:
+            marks = marks + [current]
+        self.dock.set_measure_marks(marks)
 
     def _clear_measures(self):
-        """Efface les mesures en cours ; le calage déjà fait est conservé."""
+        """Termine les mesures en cours (réussies, largeurs et hauteurs restent affichées) ;
+        le calage déjà fait est conservé."""
         self._end_landmark_tool()
-        for tool in (self.triangulator, self.ground):
-            if tool is not None:
-                tool.clear()
+        if self.triangulator is not None:
+            self.triangulator.clear()
+        if self.ground is not None:
+            self.ground.finish()  # réussie, la mesure en cours reste affichée
         if self.calibrator is not None:
             self.calibrator.reset()
 
@@ -473,6 +481,17 @@ class PanoramaxPlugin:
         self.iface.messageBar().pushMessage(
             "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
         self._show_measure(tri.status())
+
+    def _on_measure_clear_all(self):
+        """« Tout effacer » : mesures terminées et en cours, visées de triangulation."""
+        self._end_landmark_tool()
+        if self.triangulator is not None:
+            self.triangulator.clear()
+        if self.ground is not None:
+            self.ground.clear_all()
+        if self.calibrator is not None:
+            self.calibrator.reset()
+        self._show_measure(self._active_measure().status())
 
     def _on_measure_clear(self):
         self._end_landmark_tool()

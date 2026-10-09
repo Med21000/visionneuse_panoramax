@@ -190,6 +190,35 @@ def item_heading(item):
     return None
 
 
+def precise_heading(item):
+    """Cap de la photo au centième de degré, tiré de l'EXIF (GPSImgDirection), ou None.
+
+    L'API arrondit view:azimuth au degré : jusqu'à 0,5° d'erreur de visée, soit
+    17 cm à 20 m. La valeur EXIF n'est retenue que si elle concorde avec
+    view:azimuth (même mesure, non arrondie), pas si l'API a corrigé le cap.
+    """
+    rounded = item_heading(item)
+    exif = ((item.get("properties", {}) or {}).get("exif") or {}).get("Exif.GPSInfo.GPSImgDirection")
+    if rounded is None or not exif:
+        return None
+    try:
+        num, _, den = str(exif).partition("/")
+        value = float(num) / float(den or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    return value % 360 if abs((value - rounded + 540) % 360 - 180) < 1.0 else None
+
+
+def item_accuracy(item):
+    """Précision horizontale de la position GPS de la photo (m), ou None si inconnue."""
+    value = (item.get("properties", {}) or {}).get("quality:horizontal_accuracy")
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def item_image_url(item):
     assets = item.get("assets", {}) or {}
     for key in ("sd", "thumb", "hd"):

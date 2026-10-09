@@ -805,7 +805,8 @@ class PanoramaxDock(QDockWidget):
             clicks = json.loads(value) if isinstance(value, str) and value else []
         except ValueError:
             return
-        azimuth = api.item_heading(self._current_item or {}) or 0.0
+        item = self._current_item or {}
+        azimuth = api.precise_heading(item) or api.item_heading(item) or 0.0
         for c in clicks:
             try:
                 vfov = float(c.get("vfov") or 0)
@@ -820,7 +821,8 @@ class PanoramaxDock(QDockWidget):
             if c.get("pyaw") is not None and c.get("ppitch") is not None:
                 pos = [float(c["pyaw"]), float(c["ppitch"])]
                 # Direction exacte calculée par la visionneuse (lancer de rayon sur la sphère),
-                # dans le même repère que son cap : cap = angle dans la photo + view:azimuth
+                # dans le repère de la photo : cap = angle dans la photo + cap de la photo (EXIF
+                # précis si disponible, sinon view:azimuth)
                 calc_yaw, calc_elev = yaw, elev
                 yaw = (math.degrees(pos[0]) + azimuth) % 360
                 elev = math.degrees(pos[1])
@@ -844,17 +846,22 @@ class PanoramaxDock(QDockWidget):
             lon, lat = item["geometry"]["coordinates"][:2]
         except (KeyError, TypeError, ValueError):
             return None
+        precise = api.precise_heading(item)
         if self.web is None:
             if self.img.pixmap is None:
                 return None  # image pas encore affichée : cap inconnu
-            heading = self.img.current_view()[0]
+            heading = self.img.current_view()[0]  # image déjà orientée sur le cap précis
         elif self._view is not None:
             heading = self._view["heading"]
+            rounded = api.item_heading(item)
+            if precise is not None and rounded is not None:
+                heading += precise - rounded  # la visionneuse web s'oriente sur view:azimuth (arrondi)
         else:
-            heading = api.item_heading(item)
+            heading = precise if precise is not None else api.item_heading(item)
         if heading is None:
             return None
-        return {"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat), "heading": float(heading) % 360}
+        return {"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat), "heading": float(heading) % 360,
+                "accuracy": api.item_accuracy(item), "precise": precise is not None}
 
     def _aim(self):
         sighting = self.current_sighting()
@@ -1176,6 +1183,7 @@ class PanoramaxDock(QDockWidget):
                 self.viewChanged.emit(heading % 360, item_fov if item_fov and item_fov < 360 else 90.0)
         else:
             self.current_url = api.explore_url(pic_id=pic_id, lat=lat, lon=lon)
+            heading = api.precise_heading(item) or heading  # clics et visées au cap précis
             props = item.get("properties", {}) or {}
             self.meta.setText("Photo {}<br>Date : {}<br>Cap : {}".format(
                 pic_id, props.get("datetime", "?"),

@@ -34,7 +34,7 @@ LAYER_NAME = "Panoramax – points triangulés"
 LAYER_KEY = "visionneuse_panoramax/kind"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
-    "&field=dist_max_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
+    "&field=dist_max_m:double&field=gps_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
 DEFAULT_CAMERA_HEIGHT = 1.9  # hauteur de caméra par défaut (m)
 LONE_RAY = 60.0  # longueur (m) d'une visée tant qu'elle n'en croise aucune autre
 
@@ -118,7 +118,7 @@ class Triangulator:
 
     def __init__(self, canvas):
         self.canvas = canvas
-        self.sightings = []  # dicts : pic, lon, lat, heading
+        self.sightings = []  # dicts : pic, lon, lat, heading, accuracy, precise
         self.result = None
         self.error = None
         self.item = None
@@ -175,8 +175,15 @@ class Triangulator:
             n, " / ".join(_num(d) for d in r["distances"]), _num(r["angle"], 0), _num(r["uncertainty"]))
         if n > 2:
             text += " · écart des visées {} m".format(_num(r["rms"]))
+        text += " · GPS ±{} m".format(_num(r["gps"]))
+        if r["gps_assumed"]:
+            text += " (précision inconnue pour certaines photos : {} m supposés)".format(
+                _num(triangulation.GPS_ACCURACY, 0))
         if r["angle"] < 15:
             text += ". Croisement faible : une visée plus latérale améliorerait le point."
+        if r["gps"] > triangulation.GPS_WARNING:
+            text += (". Position GPS des photos imprécise (±{} m) : visez depuis des photos mieux "
+                     "positionnées, ou d'autres séquences.".format(_num(r["gps"])))
         return text
 
     def save(self):
@@ -193,6 +200,7 @@ class Triangulator:
             "incert_m": round(r["uncertainty"], 2),
             "ecart_m": round(r["rms"], 2),
             "dist_max_m": round(max(r["distances"]), 1),
+            "gps_m": round(r["gps"], 1),
             "photos": ",".join(s["pic"] for s in self.sightings),
             "date_mesure": datetime.now().isoformat(timespec="seconds"),
         }

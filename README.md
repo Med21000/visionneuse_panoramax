@@ -24,6 +24,8 @@ Remplacer `QGIS3` par `QGIS4` pour QGIS 4. Activer ensuite le plugin dans *Exten
 
 GNU General Public License, version 2 ou ultérieure (voir [LICENSE](LICENSE)).
 
+Cette licence ne couvre que le code du plugin. Les photos affichées restent sous la licence choisie par leur instance Panoramax (Licence Ouverte Etalab 2.0, CC-BY-SA…), qui impose de citer l'auteur et la source : les captures de vue portent cette attribution.
+
 ## Auteur
 
 Cédric COCHART

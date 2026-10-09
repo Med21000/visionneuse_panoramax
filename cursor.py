@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Curseur de vue Panoramax dessiné sur la carte QGIS.
 
 Point = position de la photo ; cône = direction et ouverture de la vue

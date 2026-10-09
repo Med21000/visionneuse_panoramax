@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Accès à l'API Panoramax (méta-catalogue national) et utilitaires réseau."""
 
 import gzip

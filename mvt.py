@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
 """Décodeur minimal de tuiles vectorielles Mapbox (MVT), en Python pur.
 
 Le décodeur de QGIS (QgsVectorTileMVTDecoder) n'est pas exposé à Python :

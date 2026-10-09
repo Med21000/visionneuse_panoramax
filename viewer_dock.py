@@ -38,6 +38,7 @@ import os
 import re
 
 from . import api
+from . import calibration
 from .calibration import Calibration
 from .pano_widget import PanoWidget
 
@@ -427,7 +428,7 @@ MEASURE_MODES = (
     ("Largeur (route…)", "width"),
     ("Hauteur d'un objet", "height"),
     ("Calage : inclinaison (objets verticaux)", "tilt"),
-    ("Calage : cap (repère sur la carte)", "heading"),
+    ("Calage : cap et position (repères sur la carte)", "heading"),
     ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
 
@@ -842,13 +843,38 @@ class PanoramaxDock(QDockWidget):
             parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
                 camera["height"], camera["sigma"], camera["count"],
                 "s" if camera["count"] > 1 else "").replace(".", ","))
-        heading = self.calibration.heading(sequence) if sequence else None
-        if heading:
-            parts.append("cap de la séquence {:+.2f}° (±{:.2f}°, {} repère{})".format(
-                heading["offset"], heading["sigma"], heading["count"],
-                "s" if heading["count"] > 1 else "").replace(".", ","))
+        lon, lat = self._current_position()
+        pose = self.calibration.pose(sequence, lon, lat) if sequence else None
+        if pose:
+            text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])
+            if pose["positioned"]:
+                sx, sy = pose["shift"]
+                text += ", position décalée de {:.2f} m vers {:.0f}° (±{:.2f} m)".format(
+                    math.hypot(sx, sy), math.degrees(math.atan2(sx, sy)) % 360, pose["shift_sigma"])
+            text += " · {} repère{}".format(pose["count"], "s" if pose["count"] > 1 else "")
+            if pose["count"] > 3:
+                text += ", écart {:.2f}°".format(pose["residual"])
+            parts.append(text.replace(".", ","))
+        elif sequence and self.calibration.landmarks.get(sequence):
+            parts.append("recalage de la séquence hors de portée (photo à plus de {:.0f} m des repères)".format(
+                calibration.REACH))
         self.lbl_calibration.setText("Calage : " + " · ".join(parts) if parts else "")
         self.lbl_calibration.setVisible(bool(parts))
+
+    def _current_position(self):
+        """(lon, lat) GPS de la photo affichée, ou (None, None)."""
+        try:
+            lon, lat = self._current_item["geometry"]["coordinates"][:2]
+            return float(lon), float(lat)
+        except (KeyError, TypeError, ValueError, IndexError):
+            return None, None
+
+    def _recalibrated(self, sequence, lon, lat, item):
+        """Position de la photo (recalée si possible) et sa précision en m."""
+        fixed = self.calibration.position(sequence, lon, lat)
+        if fixed:
+            return fixed
+        return lon, lat, api.item_accuracy(item)
 
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
         """Émet photoClicked si la photo cliquée est bien la photo courante.
@@ -867,10 +893,13 @@ class PanoramaxDock(QDockWidget):
         if axis is None:
             axis, axis_source = api.item_heading(item), "orientation de la photo"
         pic_id, sequence = item.get("id", ""), item.get("collection")
-        cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev))
-        self.photoClicked.emit({"pic": pic_id, "lon": float(lon), "lat": float(lat),
+        lon, lat = float(lon), float(lat)
+        cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
+        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
+        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat,
+                                "gps": [lon, lat], "gps_accuracy": api.item_accuracy(item),
                                 "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
-                                "sequence": sequence, "accuracy": api.item_accuracy(item),
+                                "sequence": sequence, "accuracy": accuracy,
                                 "precise": api.precise_heading(item) is not None,
                                 "axis": axis, "axis_source": axis_source, "pos": pos})
 
@@ -942,10 +971,12 @@ class PanoramaxDock(QDockWidget):
         if heading is None:
             return None
         pic_id, sequence = item.get("id", ""), item.get("collection")
-        heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch)
-        return {"pic": pic_id, "lon": float(lon), "lat": float(lat), "heading": heading,
-                "accuracy": api.item_accuracy(item), "precise": precise is not None,
-                "heading_error": self.calibration.heading_error(sequence)}
+        lon, lat = float(lon), float(lat)
+        heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch, lon, lat)
+        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
+        return {"pic": pic_id, "lon": clon, "lat": clat, "heading": heading,
+                "accuracy": accuracy, "precise": precise is not None,
+                "heading_error": self.calibration.heading_error(sequence, lon, lat)}
 
     def _aim(self):
         sighting = self.current_sighting()

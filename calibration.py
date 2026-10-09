@@ -12,10 +12,12 @@
   (trait de marquage, place de stationnement) ou en hauteur (objet de hauteur
   connue). Les longueurs mesurées étant à peu près proportionnelles à la
   hauteur de la caméra, on cherche celle qui redonne la longueur connue.
-- Cap (par séquence) : on clique dans la photo un repère visible sur la carte,
-  puis ce repère sur la carte. Le décalage mesuré est combiné au cap d'origine
-  selon leurs précisions (moyenne pondérée) : un repère proche, où l'erreur de
-  position GPS de la photo pèse lourd, ne dégrade jamais le cap.
+- Cap et position (par séquence, autour des photos utilisées) : on clique dans
+  la photo un repère visible sur la carte, puis ce repère sur la carte. Les
+  repères donnent, par relèvement, le décalage de cap et de position GPS des
+  photos, chacun gardant son a priori (cap et position d'origine à leur
+  précision) : un repère seul corrige surtout le cap, sans jamais le dégrader ;
+  trois repères ou plus bien répartis autour de la photo recalent la position.
 
 Directions : (cap absolu en degrés, 0 = nord, sens horaire ; élévation en
 degrés). Les corrections s'appliquent dans cet ordre : inclinaison, puis cap.
@@ -25,7 +27,7 @@ Calage conservé pour la session QGIS. Module sans dépendance à QGIS.
 import math
 
 from . import ground
-from .triangulation import _local
+from .triangulation import _local, offset
 
 MAX_TILT = 10.0  # au-delà, les clics sont sûrement faux (objet penché, pied/sommet inversés)
 MIN_SPAN = 3.0  # écart d'élévation minimal entre pied et sommet (degrés)
@@ -37,9 +39,15 @@ MAP_ERROR = 0.5  # précision de position du repère sur la carte (m)
 DEFAULT_ACCURACY = 3.0  # précision GPS supposée quand la photo ne l'indique pas (m)
 SURVEY_PRIOR = 0.5  # précision du cap d'origine, matériel de relevé (degrés)
 PRIOR = 3.0  # précision du cap d'origine, autres appareils (boussole, trajectoire GPS)
+REACH = 300.0  # portée du recalage (m) autour des photos qui l'ont servi : le GPS dérive au-delà
+OUTLIER = 4.0  # un repère qui s'écarte de plus de OUTLIER écarts-types des autres est refusé
 
 
 CAMERA_MIN, CAMERA_MAX = 0.3, 6.0  # plage de hauteurs de caméra admises (m)
+
+
+def _fr(value, digits=1):
+    return "{:.{}f}".format(value, digits).replace(".", ",")
 
 
 class CalibrationError(ValueError):
@@ -245,15 +253,30 @@ class Calibration:
                "prior": SURVEY_PRIOR if survey else PRIOR}
         offset, sigma, dist = self._landmark_offset(obs)
         if dist < MIN_LANDMARK:
-            raise CalibrationError("Repère à {:.1f} m de la photo : choisissez un repère plus éloigné.".format(dist))
-        if abs(offset) > MAX_OFFSET:
+            raise CalibrationError("Repère à {} m de la photo : choisissez un repère plus éloigné.".format(_fr(dist)))
+        # L'écart toléré tient compte du décalage de position GPS possible (repère proche)
+        if abs(offset) > MAX_OFFSET + math.degrees(math.atan2(2 * obs["accuracy"], dist)):
             raise CalibrationError("Écart de cap de {:.0f}° : ce n'est sûrement pas le même repère sur la "
                                    "carte et dans la photo.".format(offset))
+        others = self.landmarks.get(sequence, [])
+        if len(others) >= 3:
+            # Contrôle : direction du repère prédite par les autres repères seuls
+            pose = self._solve_pose(others)
+            yaw, _ = self.untilted(obs["pic"], obs["yaw"], obs["elev"])
+            x, y = _local(obs["mlon"], obs["mlat"], obs["lon"], obs["lat"])
+            x, y = x - pose["shift"][0], y - pose["shift"][1]
+            r = abs((math.degrees(math.atan2(x, y)) - yaw - pose["offset"] + 540) % 360 - 180)
+            spread = math.hypot(AIM_ERROR, math.degrees(math.atan2(MAP_ERROR, dist)), pose["sigma"],
+                                math.degrees(math.atan2(pose["shift_sigma"], dist)))
+            if r > max(1.0, OUTLIER * spread):
+                raise CalibrationError("Ce repère s'écarte de {}° de ce que prévoient les précédents : repère "
+                                       "mal pointé sur la carte ou dans la photo ?".format(_fr(r)))
         self.landmarks.setdefault(sequence, []).append(obs)
         return {"offset": offset, "sigma": sigma, "distance": dist}
 
     def _landmark_offset(self, obs):
-        """(décalage de cap, précision, distance) d'un repère, avec l'inclinaison actuelle."""
+        """(décalage de cap, précision, distance) d'un repère seul, avec l'inclinaison actuelle
+        et sans recalage de position."""
         yaw, _ = self.untilted(obs["pic"], obs["yaw"], obs["elev"])
         x, y = _local(obs["mlon"], obs["mlat"], obs["lon"], obs["lat"])
         dist = math.hypot(x, y)
@@ -262,34 +285,113 @@ class Calibration:
         position = math.degrees(math.atan2(math.hypot(obs["accuracy"], MAP_ERROR), max(dist, 1e-6)))
         return offset, math.hypot(position, AIM_ERROR), dist
 
-    def heading(self, sequence):
-        """Correction de cap de la séquence : dict offset, sigma (degrés), count, raw (moyenne
-        des repères seuls), ou None. Combinée au cap d'origine (décalage nul, précision prior)."""
-        obs = self.landmarks.get(sequence)
+    def _solve_pose(self, obs):
+        """Relèvement : décalage de cap et de position communs aux photos des repères.
+
+        Moindres carrés (Gauss-Newton) sur (cap, est, nord), chaque inconnue gardant
+        son a priori : décalage de cap nul à ±prior, position GPS juste à ±accuracy.
+        Un repère corrige surtout le cap ; trois repères ou plus bien répartis autour
+        des photos recalent aussi la position.
+        """
+        lon0 = sum(o["lon"] for o in obs) / len(obs)
+        lat0 = sum(o["lat"] for o in obs) / len(obs)
+        rows = []
+        for o in obs:
+            yaw, _ = self.untilted(o["pic"], o["yaw"], o["elev"])
+            px, py = _local(o["lon"], o["lat"], lon0, lat0)
+            mx, my = _local(o["mlon"], o["mlat"], lon0, lat0)
+            dist = max(math.hypot(mx - px, my - py), 1e-6)
+            sigma = math.radians(math.hypot(AIM_ERROR, math.degrees(math.atan2(MAP_ERROR, dist))))
+            rows.append((px, py, mx, my, math.radians(yaw), 1.0 / sigma ** 2))
+        prior = (1.0 / math.radians(obs[0]["prior"]) ** 2,
+                 1.0 / obs[0]["accuracy"] ** 2, 1.0 / obs[0]["accuracy"] ** 2)
+        p = [0.0, 0.0, 0.0]  # décalage de cap (radians), décalage de position est, nord (m)
+
+        def residuals(p):
+            out = []
+            for px, py, mx, my, yaw, w in rows:
+                dx, dy = mx - px - p[1], my - py - p[2]
+                r = (math.atan2(dx, dy) - yaw - p[0] + 3 * math.pi) % (2 * math.pi) - math.pi
+                d2 = dx * dx + dy * dy
+                out.append((r, (-1.0, -dy / d2, dx / d2), w))
+            return out
+
+        for _ in range(10):
+            n = [[prior[i] if i == j else 0.0 for j in range(3)] for i in range(3)]
+            g = [-prior[i] * p[i] for i in range(3)]
+            for r, jac, w in residuals(p):
+                for i in range(3):
+                    g[i] -= w * jac[i] * r
+                    for j in range(3):
+                        n[i][j] += w * jac[i] * jac[j]
+            cov = _inverse3(n)
+            step = [sum(cov[i][j] * g[j] for j in range(3)) for i in range(3)]
+            p = [p[i] + step[i] for i in range(3)]
+            if max(abs(step[0]) * 1e3, abs(step[1]), abs(step[2])) < 1e-6:
+                break
+        res = residuals(p)
+        # Grand axe de l'ellipse d'incertitude de la position
+        a, b, c = cov[1][1], cov[1][2], cov[2][2]
+        major = math.sqrt(max((a + c) / 2 + math.sqrt(((a - c) / 2) ** 2 + b * b), 0.0))
+        return {
+            "offset": math.degrees(p[0]), "sigma": math.degrees(math.sqrt(cov[0][0])),
+            "shift": (p[1], p[2]), "shift_sigma": major,
+            # Position recalée : trois repères au moins, et nettement mieux connue qu'au GPS
+            "positioned": len(obs) >= 3 and major < 0.7 * obs[0]["accuracy"],
+            "residual": math.degrees(math.sqrt(sum(r * r for r, _, _ in res) / len(res))),
+            "residuals": [math.degrees(r) for r, _, _ in res],
+            "count": len(obs), "prior": obs[0]["prior"], "accuracy": obs[0]["accuracy"],
+            "photos": [(o["lon"], o["lat"]) for o in obs],
+        }
+
+    def pose(self, sequence, lon=None, lat=None):
+        """Recalage de la séquence (voir _solve_pose), ou None. Avec (lon, lat), None aussi
+        si la photo est à plus de REACH m des photos qui ont servi au recalage : la dérive
+        du GPS au fil de la séquence le rendrait faux."""
+        obs = self.landmarks.get(sequence) if sequence else None
         if not obs:
             return None
-        w0 = 1.0 / obs[0]["prior"] ** 2
-        sw = swo = 0.0
-        for o in obs:
-            offset, sigma, _ = self._landmark_offset(o)
-            sw += 1.0 / sigma ** 2
-            swo += offset / sigma ** 2
-        return {"offset": swo / (w0 + sw), "sigma": 1.0 / math.sqrt(w0 + sw), "count": len(obs),
-                "raw": swo / sw, "raw_sigma": 1.0 / math.sqrt(sw), "prior": obs[0]["prior"]}
+        result = self._solve_pose(obs)
+        if lon is not None and lat is not None:
+            if min(math.hypot(*_local(lon, lat, plon, plat)) for plon, plat in result["photos"]) > REACH:
+                return None
+        return result
 
     def clear_heading(self, sequence):
         self.landmarks.pop(sequence, None)
 
     # Application -----------------------------------------------------------
-    def correct(self, pic, sequence, yaw, elev):
+    def correct(self, pic, sequence, yaw, elev, lon=None, lat=None):
         """Direction corrigée (inclinaison de la photo, puis cap de la séquence)."""
         yaw, elev = self.untilted(pic, yaw, elev)
-        h = self.heading(sequence) if sequence else None
-        if h:
-            yaw = (yaw + h["offset"]) % 360
+        pose = self.pose(sequence, lon, lat)
+        if pose:
+            yaw = (yaw + pose["offset"]) % 360
         return yaw, elev
 
-    def heading_error(self, sequence):
+    def position(self, sequence, lon, lat):
+        """Position recalée de la photo : (lon, lat, précision en m), ou None si la
+        position n'a pas été recalée (moins de trois repères bien répartis)."""
+        pose = self.pose(sequence, lon, lat)
+        if not pose or not pose["positioned"]:
+            return None
+        sx, sy = pose["shift"]
+        lon, lat = offset(lon, lat, math.degrees(math.atan2(sx, sy)), math.hypot(sx, sy))
+        return lon, lat, pose["shift_sigma"]
+
+    def heading_error(self, sequence, lon=None, lat=None):
         """Erreur de visée (degrés) d'une séquence recalée, ou None si elle ne l'est pas."""
-        h = self.heading(sequence) if sequence else None
-        return math.hypot(h["sigma"], AIM_ERROR) if h else None
+        pose = self.pose(sequence, lon, lat)
+        return math.hypot(pose["sigma"], AIM_ERROR) if pose else None
+
+
+def _inverse3(m):
+    """Inverse d'une matrice 3×3 (symétrique définie positive ici)."""
+    a, b, c = m[0]
+    d, e, f = m[1]
+    g, h, i = m[2]
+    co = [[e * i - f * h, -(d * i - f * g), d * h - e * g],
+          [-(b * i - c * h), a * i - c * g, -(a * h - b * g)],
+          [b * f - c * e, -(a * f - c * d), a * e - b * d]]
+    det = a * co[0][0] + b * co[0][1] + c * co[0][2]
+    return [[co[j][i] / det for j in range(3)] for i in range(3)]

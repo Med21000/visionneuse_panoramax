@@ -557,19 +557,29 @@ class CalibrationTool:
         if not self.waiting_map():
             return self.status()
         c, self.clicks = self.clicks[0], []
-        accuracy = c.get("accuracy")
+        # Position et précision GPS d'origine : le recalage ne doit pas partir d'une position déjà recalée
+        lon, lat = c.get("gps") or (c["lon"], c["lat"])
+        accuracy = c.get("gps_accuracy", c.get("accuracy"))
         survey = bool(c.get("precise")) and accuracy is not None and accuracy <= triangulation.SURVEY_ACCURACY
         try:
-            r = self.calibration.add_landmark(c["sequence"], c["pic"], c["lon"], c["lat"], c["raw"][0],
+            r = self.calibration.add_landmark(c["sequence"], c["pic"], lon, lat, c["raw"][0],
                                               c["raw"][1], mlon, mlat, accuracy, survey)
         except calibration.CalibrationError as exc:
             self.error = str(exc)
         else:
-            self.last = "Repère à {} m : écart de cap {}° (±{}°).".format(
-                _num(r["distance"], 0), _num(r["offset"], 2), _num(r["sigma"], 2))
-            if r["sigma"] > (calibration.SURVEY_PRIOR if survey else calibration.PRIOR):
-                self.last += (" Repère trop proche pour beaucoup corriger le cap : l'erreur de position GPS "
-                              "de la photo y pèse lourd. Un repère plus lointain sera plus efficace.")
+            pose = self.calibration.pose(c["sequence"])
+            n = pose["count"]
+            self.last = "Repère {} à {} m (écart de cap brut {}°).".format(
+                n, _num(r["distance"], 0), _num(r["offset"], 2))
+            if pose["positioned"]:
+                self.last += " Position recalée à ±{} m, cap à ±{}°.".format(
+                    _num(pose["shift_sigma"], 2), _num(pose["sigma"], 2))
+            elif n >= 3:
+                self.last += (" Repères mal répartis pour recaler la position : ajoutez-en dans d'autres "
+                              "directions (devant, derrière, sur les côtés).")
+            else:
+                self.last += (" Cap corrigé à ±{}°. À partir de 3 repères bien répartis autour de la photo, "
+                              "la position est recalée aussi.".format(_num(pose["sigma"], 2)))
         self._draw()
         return self.status()
 
@@ -640,6 +650,7 @@ class CalibrationTool:
         if n == 1:
             return text + ("Cliquez maintenant ce même repère sur la carte QGIS (glisser pour déplacer la carte, "
                            "molette pour zoomer, Échap pour annuler).")
-        return text + ("Cliquez dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), "
-                       "le plus loin possible : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°. "
-                       "La correction vaut pour toute la séquence.")
+        return text + ("Cliquez dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment). "
+                       "Un repère seul corrige le cap (choisissez-le lointain) ; trois repères ou plus, bien "
+                       "répartis autour de la photo, recalent aussi sa position. Le recalage vaut pour les photos "
+                       "de la séquence à moins de {} m.".format(_num(calibration.REACH, 0)))

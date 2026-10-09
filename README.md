@@ -11,7 +11,7 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Mesures (bouton « 📐 Mesure ») :
   - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
   - largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo ;
-  - calage des photos : correction de l'inclinaison de la caméra, recalage du cap sur un repère de la carte et hauteur de caméra déduite d'une longueur connue.
+  - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
 ## Mesures
@@ -52,7 +52,7 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction s'applique ensuite à toutes les mesures (triangulation, largeur, hauteur) et reste valable pendant la session QGIS. Le calage en cours est rappelé sous les boutons de mesure, et « Effacer » le supprime.
 
 - **Calage : inclinaison (objets verticaux)**, pour la photo affichée : cliquer le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). Un objet corrige la pente vue dans sa direction ; un second objet, à environ 90° du premier, corrige toute l'inclinaison. C'est la principale source d'erreur des largeurs et des hauteurs.
-- **Calage : cap (repère sur la carte)**, pour toute la séquence : cliquer dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), puis ce même repère sur la carte. Choisir un repère lointain : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°. Le décalage mesuré est combiné au cap d'origine selon leurs précisions, si bien qu'un repère trop proche corrige peu ; plusieurs repères s'additionnent.
+- **Calage : cap et position (repères sur la carte)** : cliquer dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), puis ce même repère sur la carte (glisser pour déplacer la carte, molette pour zoomer, Échap pour annuler). Les repères donnent, par relèvement, le décalage de cap et de position GPS de la séquence, chacun combiné à sa valeur d'origine selon les précisions : un repère seul corrige surtout le cap (le choisir lointain : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°) ; trois repères ou plus, bien répartis autour de la photo (devant, derrière, sur les côtés), recalent aussi sa position. Un repère incohérent avec les précédents est refusé. Le GPS dérivant au fil d'une séquence, le recalage ne vaut que pour les photos situées à moins de 300 m de celles qui l'ont servi ; la position recalée et sa précision remplacent alors celles du GPS dans les mesures.
 - **Calage : hauteur de caméra (longueur connue)**, pour toute la séquence : choisir « au sol » ou « en hauteur » et indiquer la longueur réelle, puis cliquer ses deux extrémités au sol (place de stationnement, bande de passage piéton, trait de marquage, longueur mesurée sur l'orthophoto avec l'outil de mesure de QGIS) ou le pied puis le sommet d'un objet de hauteur connue. Les largeurs et les hauteurs étant à peu près proportionnelles à la hauteur de la caméra, le plugin en déduit celle-ci ; elle remplace la valeur saisie pour les mesures de la séquence. Choisir une référence proche (moins de 10–15 m) et, au sol, plutôt en travers de la vue. Plusieurs références se combinent.
 
 ## Installation

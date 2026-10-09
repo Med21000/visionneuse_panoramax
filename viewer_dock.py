@@ -40,7 +40,7 @@ import re
 from . import api
 from . import calibration
 from .calibration import Calibration
-from .measure import FREE_SURFACES
+from .measure_tool import FREE_SURFACES
 from .pano_widget import PanoWidget
 
 
@@ -351,6 +351,10 @@ MARKS_JS = r"""
     m.pts.forEach(function(p, i){
       add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
            anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+      // Point sélectionné pour être visé à nouveau : cercle jaune autour de la croix
+      if (p.sel) add({id: 'qgis-m' + k + '-s' + i, position: {yaw: p.yaw, pitch: p.pitch}, zIndex: 3,
+                      path: 'M1 12a11 11 0 1 0 22 0a11 11 0 1 0 -22 0', anchor: 'center center',
+                      svgStyle: {stroke: '#ffd54f', strokeWidth: '2.5px', fill: 'none'}});
     });
   });
   var lines = [];
@@ -661,7 +665,8 @@ class PanoramaxDock(QDockWidget):
         self.cmb_surface.currentIndexChanged.connect(self._on_surface)
         flay.addWidget(self.cmb_surface)
         self.btn_facade = QPushButton("Définir la façade")
-        self.btn_facade.setToolTip("Cliquer ensuite au pied du mur, à ses deux extrémités")
+        self.btn_facade.setToolTip("Cliquer ensuite dans la photo au pied du mur, à ses deux extrémités ; ses "
+                                   "extrémités se recalent ensuite en les glissant sur la carte")
         self.btn_facade.clicked.connect(self.facadeRequested)
         flay.addWidget(self.btn_facade)
         self.lbl_plane = QLabel("à")
@@ -905,10 +910,13 @@ class PanoramaxDock(QDockWidget):
         if self.web is not None:
             self.web.page().runJavaScript(self._marks_js())
         elif hasattr(self, "img"):
-            self.img.set_marks([{"pts": [(p["abs_yaw"], p["elev"]) for p in m.get("points", [])
-                                         if p.get("pic") == self._current_pic],
-                                 "label": m.get("label", ""), "beside": m.get("beside", False)}
-                                for m in self._marks])
+            measures = []
+            for m in self._marks:
+                pts = [p for p in m.get("points", []) if p.get("pic") == self._current_pic]
+                measures.append({"pts": [(p["abs_yaw"], p["elev"]) for p in pts],
+                                 "sel": [i for i, p in enumerate(pts) if p.get("sel")],
+                                 "label": m.get("label", ""), "beside": m.get("beside", False)})
+            self.img.set_marks(measures)
 
     def current_ids(self):
         """(photo, séquence) affichées, ou (None, None)."""

@@ -231,11 +231,12 @@ class PanoWidget(QWidget):
         # Toutes les croix, puis tous les traits (devant les croix), puis les étiquettes
         for layer in ("cross", "line", "label"):
             for m in self.marks:
-                self._paint_measure(p, m["pts"], m.get("label") or "", bool(m.get("beside")), layer)
+                self._paint_measure(p, m["pts"], m.get("label") or "", bool(m.get("beside")), layer, m.get("sel") or ())
 
-    def _paint_measure(self, p, marks, label, beside, layer):
-        pts = [self.screen_pos(y, e) for y, e in marks]
-        pts = [q for q in pts if q is not None]
+    def _paint_measure(self, p, marks, label, beside, layer, selected=()):
+        screen = [self.screen_pos(y, e) for y, e in marks]
+        chosen = [q for i, q in enumerate(screen) if q is not None and i in selected]
+        pts = [q for q in screen if q is not None]
         if not pts:
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -249,6 +250,11 @@ class PanoWidget(QWidget):
             for q in pts:
                 p.drawLine(QPointF(q.x() - arm, q.y()), QPointF(q.x() + arm, q.y()))
                 p.drawLine(QPointF(q.x(), q.y() - arm), QPointF(q.x(), q.y() + arm))
+            # Point sélectionné pour être visé à nouveau : cercle jaune autour de la croix
+            p.setPen(QPen(QColor(255, 213, 79), 2.5))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            for q in chosen:
+                p.drawEllipse(q, 11.0, 11.0)
         if layer == "line" and len(pts) == 2:
             pen = QPen(MEASURE_RED, 2.5)
             pen.setCapStyle(Qt.PenCapStyle.FlatCap)

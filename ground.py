@@ -7,8 +7,9 @@ La caméra est à une hauteur connue au-dessus du sol. Un clic donne une
 direction (cap, élévation) ; on suit ce rayon jusqu'à ce qu'il passe sous le
 terrain, décrit par un profil d'altitudes le long de la visée (MNT ou service
 d'altimétrie). Sans profil, le sol est supposé plat et horizontal. On en déduit
-la position des points au sol, la largeur d'une voie (perpendiculairement à son
-axe) et la hauteur d'un objet (pied puis sommet).
+la position des points au sol (utilisée par geometry.py pour toutes les mesures)
+et la hauteur d'un objet, pied puis sommet (utilisée par le calage de la hauteur
+de caméra, avec le même modèle que les mesures).
 
 La précision chute vite avec la distance (une erreur d'inclinaison de 0,5°
 déplace un point situé à 15 m de plus d'un mètre) : réservé aux objets proches.
@@ -91,52 +92,6 @@ def _spread(fn, clicks):
             except GroundError:
                 return float("inf")
     return worst
-
-
-def measure_distance(camera_height, a, b):
-    """Distance directe entre deux clics au sol (largeur parallèle à la route, juste dans n'importe quelle
-    direction) : longueur en 3D, qui suit la pente entre les deux points."""
-    def split(clicks):
-        (_, p, z1), (_, q, z2) = (_ground_point(camera_height, c) for c in clicks)
-        x, y = _local(q[0], q[1], p[0], p[1])
-        return math.hypot(x, y), z2 - z1
-
-    def distance(clicks):
-        horizontal, rise = split(clicks)
-        return math.hypot(horizontal, rise)
-
-    (d1, p1, _), (d2, p2, _) = _ground_point(camera_height, a), _ground_point(camera_height, b)
-    horizontal, rise = split([a, b])
-    return {"points": [p1, p2], "ranges": [d1, d2], "value": math.hypot(horizontal, rise),
-            "horizontal": horizontal, "rise": rise, "uncertainty": _spread(distance, [a, b])}
-
-
-def measure_width(camera_height, a, b, axis):
-    """Largeur perpendiculaire à un axe (cap de la route) entre deux clics au sol.
-
-    Les deux bords n'ont pas besoin d'être cliqués exactement en face l'un de
-    l'autre : seule la composante perpendiculaire à l'axe est retenue. Le second
-    point dessiné ("points"[1]) est le pied de la perpendiculaire, en face du premier.
-    """
-    ax, ay = math.sin(math.radians(axis)), math.cos(math.radians(axis))
-
-    def split(clicks):
-        (_, p, _), (_, q, _) = (_ground_point(camera_height, c) for c in clicks)
-        x, y = _local(q[0], q[1], p[0], p[1])
-        along = x * ax + y * ay
-        return p, x - along * ax, y - along * ay, along
-
-    def width(clicks):
-        _, px, py, _ = split(clicks)
-        return math.hypot(px, py)
-
-    (d1, p1, _), (d2, p2, _) = _ground_point(camera_height, a), _ground_point(camera_height, b)
-    p, px, py, along = split([a, b])
-    w = math.hypot(px, py)
-    foot = offset(p[0], p[1], math.degrees(math.atan2(px, py)), w)
-    return {"points": [p1, foot], "clicked": p2, "ranges": [d1, d2], "value": w,
-            "oblique": math.hypot(w, along), "axis": axis % 360,
-            "uncertainty": _spread(width, [a, b])}
 
 
 MAX_TOP_OFFSET = 45.0  # écart de cap maximal entre le pied et le sommet d'un objet (degrés)

@@ -4,6 +4,7 @@
 """Classe principale du plugin Visionneuse Panoramax."""
 
 import json
+import math
 import os
 
 from qgis.core import (
@@ -15,15 +16,16 @@ from qgis.core import (
     QgsSettings,
     QgsUnitTypes,
 )
-from qgis.gui import QgsMapToolEmitPoint, QgsMapToolPan
+from qgis.gui import QgsMapToolEmitPoint, QgsMapToolPan, QgsVertexMarker
 from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QAction, QDesktopServices, QIcon
+from qgis.PyQt.QtGui import QAction, QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
 from .calibration import Calibration
-from .measure import CalibrationTool, FreeMeasure, GroundMeasure, Triangulator
+from .measure import CalibrationTool, Triangulator
+from .measure_tool import MeasureTool
 from .terrain import TerrainProvider
 from .viewer_dock import GROUND_MODES, PanoramaxDock
 
@@ -65,6 +67,61 @@ class LandmarkTool(QgsMapToolPan):
         super().keyPressEvent(event)
 
 
+class MeasureMapTool(QgsMapToolPan):
+    """Outil de la carte pendant les mesures : glisser un point rouge d'une mesure (ou une
+    extrémité de façade) le recale à l'endroit lâché ; glisser ailleurs déplace la carte ;
+    un simple clic ailleurs ouvre la photo la plus proche."""
+
+    clicked = pyqtSignal(object)  # QgsPointXY, dans le SCR de la carte
+    CLICK_TOLERANCE = 4  # pixels : au-delà, c'est un glisser
+
+    def __init__(self, canvas, find, move):
+        super().__init__(canvas)
+        self.find = find  # (QgsPointXY) -> poignée ou None
+        self.move = move  # (poignée, QgsPointXY) -> None
+        self._handle = None
+        self._press = None
+        self._marker = None
+
+    def canvasPressEvent(self, event):  # noqa: N802
+        self._press = event.pos() if event.button() == Qt.MouseButton.LeftButton else None
+        if self._press is not None:
+            self._handle = self.find(event.mapPoint())
+            if self._handle is not None:
+                self._marker = QgsVertexMarker(self.canvas())
+                self._marker.setIconType(QgsVertexMarker.IconType.ICON_CIRCLE)
+                self._marker.setColor(QColor(229, 57, 53))
+                self._marker.setIconSize(14)
+                self._marker.setPenWidth(3)
+                self._marker.setCenter(event.mapPoint())
+                return
+        super().canvasPressEvent(event)
+
+    def canvasMoveEvent(self, event):  # noqa: N802
+        if self._handle is not None:
+            self._marker.setCenter(event.mapPoint())
+            return
+        if self._press is None:  # survol : main sur une poignée
+            hover = self.find(event.mapPoint()) is not None
+            self.canvas().setCursor(Qt.CursorShape.PointingHandCursor if hover else Qt.CursorShape.OpenHandCursor)
+        super().canvasMoveEvent(event)
+
+    def canvasReleaseEvent(self, event):  # noqa: N802
+        press, self._press = self._press, None
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            self.canvas().scene().removeItem(self._marker)
+            self._marker = None
+            if press is not None and (event.pos() - press).manhattanLength() > self.CLICK_TOLERANCE:
+                self.move(handle, event.mapPoint())
+            return
+        if (press is not None and event.button() == Qt.MouseButton.LeftButton
+                and (event.pos() - press).manhattanLength() <= self.CLICK_TOLERANCE):
+            self.clicked.emit(event.mapPoint())
+            return  # pas de recentrage de l'outil main sur un simple clic
+        super().canvasReleaseEvent(event)
+
+
 class PanoramaxPlugin:
     def __init__(self, iface):
         self.iface = iface
@@ -75,9 +132,10 @@ class PanoramaxPlugin:
         self.tool = None
         self.cursor = None
         self.triangulator = None
-        self.ground = None
+        self.measures = None  # largeurs, hauteur et mesure libre 3D (MeasureTool)
         self.calibrator = None
-        self.free = None  # mesure libre 3D
+        self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
+        self._before_edit = None  # outil de la carte avant les mesures
         self.calibration = Calibration()  # enregistré dans le projet QGIS
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
@@ -107,6 +165,8 @@ class PanoramaxPlugin:
         self.landmark_tool = LandmarkTool(self.canvas)
         self.landmark_tool.pointed.connect(self._on_landmark_clicked)
         self.landmark_tool.cancelled.connect(self._on_landmark_cancelled)
+        self.edit_tool = MeasureMapTool(self.canvas, self._find_handle, self._move_handle)
+        self.edit_tool.clicked.connect(lambda point: self._on_canvas_clicked(point, Qt.MouseButton.LeftButton))
 
         # Calage enregistré dans le projet : relu à l'ouverture, vidé pour un nouveau projet
         project = QgsProject.instance()
@@ -132,10 +192,12 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         self.landmark_tool = None
         self._clear_marker()
-        for tool in (self.triangulator, self.ground, self.calibrator, self.free):
+        for tool in (self.triangulator, self.measures, self.calibrator):
             if tool is not None:
                 tool.remove()
-        self.triangulator = self.ground = self.calibrator = self.free = None
+        self.triangulator = self.measures = self.calibrator = None
+        self._end_edit_tool()
+        self.edit_tool = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -343,12 +405,14 @@ class PanoramaxPlugin:
             self.triangulator = Triangulator(self.canvas)
         return self.triangulator
 
-    def _ensure_ground(self):
-        if self.ground is None:
-            self.ground = GroundMeasure(self.canvas)
-            self.ground.camera_height = self.dock.camera_height()
-            self.ground.calibration = self.dock.calibration
-        return self.ground
+    def _ensure_measures(self):
+        if self.measures is None:
+            self.measures = MeasureTool(self.canvas)
+            self.measures.camera_height = self.dock.camera_height()
+            self.measures.calibration = self.dock.calibration
+            self.measures.plane_height = self.dock.spin_plane.value()
+            self.measures.surface = self.dock.surface()
+        return self.measures
 
     def _ensure_calibrator(self):
         if self.calibrator is None:
@@ -356,30 +420,18 @@ class PanoramaxPlugin:
                                               self.dock.reference)
         return self.calibrator
 
-    def _ensure_free(self):
-        if self.free is None:
-            self.free = FreeMeasure(self.canvas)
-            self.free.camera_height = self.dock.camera_height()
-            self.free.calibration = self.dock.calibration
-            self.free.plane_height = self.dock.spin_plane.value()
-            self.free.set_surface(self.dock.surface())
-        return self.free
-
     def _active_measure(self):
         mode = self.dock.measure_mode()
         if mode == "tri":
             return self._ensure_triangulator()
-        if mode == "free":
-            return self._ensure_free()
         if mode in ("tilt", "heading", "camera"):
             tool = self._ensure_calibrator()
             if tool.mode != mode:
                 tool.set_mode(mode)
             return tool
-        ground = self._ensure_ground()
-        if ground.mode != mode:
-            ground.set_mode(mode)
-        return ground
+        measures = self._ensure_measures()
+        measures.set_mode(mode)
+        return measures
 
     def _show_measure(self, text):
         """Texte de la mesure dans le panneau et repères dans la visionneuse."""
@@ -388,10 +440,9 @@ class PanoramaxPlugin:
         mode = self.dock.measure_mode()
         tool = None
         if self.dock.btn_measure.isChecked():
-            tool = {"width": self.ground, "road": self.ground, "height": self.ground, "tilt": self.calibrator,
-                    "heading": self.calibrator, "camera": self.calibrator, "free": self.free}.get(mode)
+            tool = self.measures if mode in GROUND_MODES else self.calibrator if mode != "tri" else None
         # Mesures terminées, gardées à l'écran jusqu'à « Tout effacer », puis mesure en cours
-        marks = [m for t in (self.ground, self.free) if t is not None for m in t.done_marks()]
+        marks = self.measures.done_marks() if self.measures is not None else []
         current = tool.viewer_marks() if tool is not None else None
         if current and current["points"]:
             marks = marks + [current]
@@ -403,9 +454,8 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         if self.triangulator is not None:
             self.triangulator.clear()
-        for tool in (self.ground, self.free):
-            if tool is not None:
-                tool.finish()  # réussie, la mesure en cours reste affichée
+        if self.measures is not None:
+            self.measures.finish()  # réussie, la mesure en cours reste affichée
         if self.calibrator is not None:
             self.calibrator.reset()
 
@@ -416,12 +466,56 @@ class PanoramaxPlugin:
             self.canvas.setMapTool(self.landmark_tool)
 
     def _end_landmark_tool(self):
-        if self.landmark_tool is not None and self.canvas.mapTool() is self.landmark_tool:
+        """Fin d'un pointage sur la carte (repère de calage, recalage, façade) : retour à
+        l'outil précédent."""
+        tool = self.canvas.mapTool()
+        if tool is not None and tool is self.landmark_tool:
             if self._previous_tool is not None:
                 self.canvas.setMapTool(self._previous_tool)
             else:
-                self.canvas.unsetMapTool(self.landmark_tool)
+                self.canvas.unsetMapTool(tool)
         self._previous_tool = None
+
+    def _to_wgs(self, point):
+        p = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), WGS84,
+                                   QgsProject.instance()).transform(point)
+        return p.x(), p.y()
+
+    # Outil de la carte pendant les largeurs, hauteurs et mesures libres : glisser un point
+    # rouge ou une extrémité de façade le recale, glisser ailleurs déplace la carte
+    def _update_edit_tool(self):
+        active = (self.dock is not None and self.dock.btn_measure.isChecked()
+                  and self.dock.measure_mode() in GROUND_MODES)
+        if active and self.edit_tool is not None and self.canvas.mapTool() is not self.edit_tool:
+            if self.canvas.mapTool() is not self.landmark_tool:
+                self._before_edit = self.canvas.mapTool()
+            self.canvas.setMapTool(self.edit_tool)
+        elif not active:
+            self._end_edit_tool()
+
+    def _end_edit_tool(self):
+        if self.edit_tool is not None and self.canvas.mapTool() is self.edit_tool:
+            if self._before_edit is not None:
+                self.canvas.setMapTool(self._before_edit)
+            else:
+                self.canvas.unsetMapTool(self.edit_tool)
+        self._before_edit = None
+
+    def _find_handle(self, point):
+        """Poignée (point de mesure, extrémité de façade) à moins de 10 pixels du point de la carte."""
+        if self.measures is None:
+            return None
+        ct = QgsCoordinateTransform(WGS84, self.canvas.mapSettings().destinationCrs(), QgsProject.instance())
+        best, best_d = None, 10.0 * self.canvas.mapUnitsPerPixel()
+        for key, lon, lat in self.measures.handles():
+            q = ct.transform(QgsPointXY(lon, lat))
+            d = math.hypot(q.x() - point.x(), q.y() - point.y())
+            if d < best_d:
+                best, best_d = key, d
+        return best
+
+    def _move_handle(self, key, point):
+        self._show_measure(self.measures.move_handle(key, *self._to_wgs(point)))
 
     def _on_landmark_cancelled(self):
         self._end_landmark_tool()
@@ -439,6 +533,7 @@ class PanoramaxPlugin:
         self._show_measure(self.calibrator.add_map_point(p.x(), p.y()))
 
     def _on_measure_toggled(self, checked):
+        self._update_edit_tool()
         if not checked:
             self._clear_measures()
             if self.calibrator is not None:
@@ -447,6 +542,7 @@ class PanoramaxPlugin:
 
     def _on_measure_mode(self, mode):
         self._clear_measures()
+        self._update_edit_tool()
         self._show_measure(self._active_measure().status())
 
     def _on_aim(self, sighting):
@@ -454,7 +550,10 @@ class PanoramaxPlugin:
 
     def _on_photo_clicked(self, click):
         tool = self._active_measure()
-        if not isinstance(tool, (GroundMeasure, CalibrationTool)) or not tool.needs_profile():
+        if isinstance(tool, MeasureTool) and tool.select_near(click):
+            self._show_measure(tool.status())  # repère d'un point cliqué : sélection pour le viser à nouveau
+            return
+        if not isinstance(tool, (MeasureTool, CalibrationTool)) or not tool.needs_profile():
             self._show_measure(tool.add_click(click))  # sommet d'un objet ou calage : pas de terrain
             if isinstance(tool, CalibrationTool):
                 if tool.waiting_map():
@@ -484,9 +583,8 @@ class PanoramaxPlugin:
 
     def _on_terrain_changed(self):
         self.terrain.use_ign = self.dock.use_ign()
-        for tool in (self.ground, self.free):
-            if tool is not None:
-                tool.clear()  # les profils des clics viennent de l'ancienne source
+        if self.measures is not None:
+            self.measures.clear()  # les profils des clics viennent de l'ancienne source
         if self.calibrator is not None:
             self.calibrator.reset()
         if self.dock.btn_measure.isChecked():
@@ -498,25 +596,24 @@ class PanoramaxPlugin:
             self._show_measure(self.calibrator.status())
 
     def _on_camera_height(self, value):
-        self._ensure_ground().set_camera_height(value)
-        if self.free is not None:
-            self.free.set_camera_height(value)
+        self._ensure_measures().set_camera_height(value)
         if self.dock.measure_mode() in GROUND_MODES:
             self._show_measure(self._active_measure().status())
 
     def _on_surface_changed(self, surface):
-        self._ensure_free().set_surface(surface)
+        self._ensure_measures().set_surface(surface)
         if self.dock.measure_mode() == "free":
-            self._show_measure(self.free.status())
+            self._show_measure(self.measures.status())
 
     def _on_facade_requested(self):
-        self._ensure_free().start_facade()
-        self._show_measure(self.free.status())
+        self._end_landmark_tool()
+        self._ensure_measures().start_facade()
+        self._show_measure(self.measures.status())
 
     def _on_plane_height(self, value):
-        self._ensure_free().set_plane_height(value)
+        self._ensure_measures().set_plane_height(value)
         if self.dock.measure_mode() == "free":
-            self._show_measure(self.free.status())
+            self._show_measure(self.measures.status())
 
     def _on_measure_save(self):
         tri = self._ensure_triangulator()
@@ -530,9 +627,8 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         if self.triangulator is not None:
             self.triangulator.clear()
-        for tool in (self.ground, self.free):
-            if tool is not None:
-                tool.clear_all()
+        if self.measures is not None:
+            self.measures.clear_all()
         if self.calibrator is not None:
             self.calibrator.reset()
         self._show_measure(self._active_measure().status())
@@ -540,5 +636,8 @@ class PanoramaxPlugin:
     def _on_measure_clear(self):
         self._end_landmark_tool()
         tool = self._active_measure()
+        if isinstance(tool, MeasureTool) and tool.cancel_selection():
+            self._show_measure(tool.status())  # « Effacer » avec un point sélectionné : annule la sélection
+            return
         tool.clear()
         self._show_measure(tool.status())

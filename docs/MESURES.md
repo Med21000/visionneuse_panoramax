@@ -5,7 +5,7 @@ Ce document décrit en détail comment la Visionneuse Panoramax mesure à partir
 Sommaire :
 
 1. [Principes communs](#1-principes-communs)
-2. [Méthodes de mesure](#2-méthodes-de-mesure), dont la [mesure libre 3D](#25-mesure-libre-3d)
+2. [Méthodes de mesure](#2-méthodes-de-mesure), dont la [mesure libre 3D](#25-mesure-libre-3d) et le [recalage d'un point sur la carte](#26-recaler-un-point-sur-la-carte)
 3. [Fonctions de calage](#3-fonctions-de-calage)
 4. [Sources d'erreur et ordres de grandeur](#4-sources-derreur-et-ordres-de-grandeur)
 5. [Pistes d'amélioration des calculs](#5-pistes-damélioration-des-calculs)
@@ -189,7 +189,9 @@ Puis le rayon est intersecté avec la **surface** choisie :
 
 **Mesure.** Sur le plan vertical face à la caméra, la grandeur mesurée est la **hauteur** (composante verticale), comme le préréglage « Hauteur d'un objet » : un sommet cliqué un peu de côté ne l'allonge pas. Sur les autres surfaces, c'est la distance 3D entre les deux points. Dans tous les cas, elle est décomposée en distance horizontale, dénivelé (du premier au second point), et, si l'axe de la route est connu, composantes le long de la route et en travers. Une même mesure donne donc à la fois ce que donnent la largeur parallèle, la largeur perpendiculaire et la hauteur.
 
-**Cohérence.** Les préréglages et la mesure libre partagent le même calcul de point : sur sol plat, la mesure libre au sol redonne exactement la largeur parallèle à la route, et la mesure dans le plan vertical face à la caméra redonne exactement la hauteur d'un objet (vérifié sur scène simulée). La façade et le plan horizontal sont définis dans le repère géographique : on peut les mesurer depuis plusieurs photos.
+**Cohérence.** Les préréglages sont calculés par ce même moteur : la largeur perpendiculaire à la chaussée est la composante en travers de la route de deux points au sol, la largeur parallèle à la route leur distance 3D, et la hauteur d'un objet la composante verticale entre un point au sol et un point du plan vertical face à la caméra. Un point est donc le même quel que soit le mode. La façade et le plan horizontal sont définis dans le repère géographique : on peut les mesurer depuis plusieurs photos.
+
+**Façade recalée sur la carte.** La façade est définie par deux clics au pied du mur dans la photo : chaque point est prolongé jusqu'au sol, si bien que sa distance dépend du terrain, de la hauteur de caméra et de l'inclinaison, et qu'un pied masqué (trottoir, véhicule) ou cliqué un peu haut la repousse derrière le mur. Ses deux extrémités s'affichent sur la carte : en les **glissant sur le bord du bâtiment** (orthophoto, cadastre, BD TOPO), la façade ne dépend plus d'aucune de ces hypothèses, et toutes les mesures prises dessus sont recalculées. Sur scène simulée, avec une hauteur de caméra fausse de 40 cm et des pieds cliqués 15 cm trop haut, une fenêtre de 2,00 m est mesurée 1,73 m sur la façade définie dans la photo, et exactement 2,00 m une fois ses extrémités recalées. Recalée, son incertitude compte une erreur de placement de ±0,5 m à chaque extrémité.
 
 **Contrôles.** Visée parallèle au plan, point derrière le plan ou à plus de 100 m : refusés. Triangulation 3D : les deux clics d'un point doivent venir de deux photos différentes, se croiser d'au moins 3° et devant les photos. Une **incidence rasante** (moins de 15° entre la visée et le plan) est signalée : l'erreur croît alors comme `1/sin(incidence)`. Des altitudes de sources différentes entre les clics (service IGN et sol plat, par exemple) sont signalées, la composante verticale pouvant en être faussée.
 
@@ -201,6 +203,24 @@ Puis le rayon est intersecté avec la **surface** choisie :
 - **Plan horizontal** : il est vu sous une incidence d'autant plus rasante qu'il est proche de la hauteur de la caméra. Avec une caméra à 2 m et un plan à 1 m, il n'est qu'à 1 m sous la caméra, contre 2 m pour le sol : les visées y sont deux fois plus rasantes et l'erreur deux fois plus forte (±0,15 m contre ±0,04 m au sol pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
 - Un plan incliné inconnu (pan de toit) ne se déduit pas d'une photo : il faudrait trois points connus en 3D, par triangulation depuis plusieurs photos.
 - En triangulation 3D, la composante verticale dépend de l'altitude du sol sous chaque photo (profil de terrain) ; la hauteur de caméra, la même pour les deux photos d'une séquence, s'élimine dans les distances.
+
+### 2.6 Recaler un point sur la carte
+
+**But.** Corriger après coup un point mal placé, que l'on repère sur la carte : par exemple un pied cliqué un peu au-dessus du sol, ou masqué par un trottoir, dont le rayon a traversé le mur et rejoint le sol derrière la façade.
+
+**Utilisation.** Pendant les largeurs, hauteurs et mesures libres, un outil propre est actif sur la carte : **glisser un point rouge** d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ; glisser ailleurs déplace la carte, la molette zoome, un simple clic ouvre la photo la plus proche. L'outil précédent revient quand on arrête de mesurer ou qu'on passe en triangulation ou en calage. Tous les points des mesures affichées sont recalables, mesures terminées comprises ; pour une hauteur, seul le pied l'est, le sommet en découlant. Les extrémités de la façade se recalent de la même façon.
+
+**Calcul.** La position horizontale du point vient de la carte. Son altitude est celle du **rayon de visée** à cette distance de la caméra : `z = z_caméra + distance · tan(élévation)`. Le point reste donc sur la direction cliquée dans la photo, à la distance lue sur la carte. La mesure est recalculée (pour une hauteur, le plan vertical passe par le pied recalé). Dans la visionneuse, le repère du point est reprojeté là où la caméra voit le point recalé : il ne bouge pas si le point a été glissé le long de sa visée (plus près ou plus loin), il se déplace s'il a été glissé de côté ; l'étiquette prend la nouvelle valeur.
+
+**Conséquence.** Pour une hauteur, `H = distance · (tan e_sommet − tan e_pied)` : elle ne dépend plus ni du terrain, ni de la hauteur de caméra, seulement de la distance lue sur la carte et des deux angles. Sur scène simulée, avec une hauteur de caméra fausse de 40 cm et un pied cliqué 20 cm trop haut, le pied est replacé de 5,3 m à 6,0 m de la photo, et la hauteur entre le point cliqué et le sommet est retrouvée exactement (2,80 m).
+
+**Viser à nouveau dans la visionneuse.** Une orthophoto vue de haut ne montre ni un angle de fenêtre, ni un seuil de porte, ni un pied de mur caché : le glisser sur la carte fixe surtout la **profondeur** du point, c'est-à-dire son plan. Le recalage définit le **plan calé de la mesure** : vertical, passant par les deux premiers points glissés sur la carte (le mur tracé sur la carte), ou, si un seul l'a été, passant par lui avec une normale horizontale orientée vers la photo qui l'avait visé. Ce plan reste mémorisé jusqu'au prochain glisser. Pour placer un point avec précision, on clique dans la visionneuse sur son repère, entre deux mesures (à moins de 1° de lui) : un cercle jaune l'entoure. Le clic suivant, même tout près du repère (une correction fine l'est toujours), remplace son clic d'origine, et le point est pris à l'**intersection du nouveau rayon et du plan calé**, qu'il ait été lui-même glissé ou non : la carte donne la profondeur, la photo la position dans le plan (latérale et en hauteur). Dans une mesure qui n'a pas été calée, le point est simplement visé à nouveau sur sa surface ; en triangulation 3D, depuis l'une des photos qui l'ont visé. « Effacer » annule la sélection (sans effacer la mesure) ; un clic près d'un repère au milieu d'une mesure poursuit la mesure.
+
+Pour une largeur le long d'un mur, il faut glisser **les deux** points sur le mur : avec un seul, le plan calé est face à la caméra et non le long du mur. Sur scène simulée (fenêtre de 2,00 m au pied d'un mur à 6 m, hauteur de caméra fausse de 40 cm) : 1,60 m avec les clics bruts ; après avoir glissé les deux points sur le mur à 30 cm près, puis visé chaque coin dans la photo, **2,00 m**, les points étant à 1 à 8 cm de leur vraie position. On peut alterner librement glisser sur la carte et viser dans la photo.
+
+Sur scène simulée (porte de 2,10 m dans un mur à 6 m, pied caché par une voiture, hauteur de caméra fausse de 40 cm) : 1,69 m avec les clics bruts, 1,97 m une fois le pied glissé sur la carte à 30 cm près, puis **2,11 m** après avoir visé le seuil de la porte, le pied étant placé à 3 cm de sa vraie position.
+
+**Incertitude.** Un point recalé est supposé placé sur la carte à ±0,5 m : à 6 m, cela fait environ 8 % sur une hauteur. Le message indique le nombre de points recalés.
 
 ## 3. Fonctions de calage
 
@@ -316,7 +336,7 @@ La mesure libre 3D (section 2.5) le permet déjà par triangulation depuis deux 
 - **Plus de deux visées par point** en triangulation 3D, pondérées comme la triangulation planimétrique, avec l'écart des visées comme contrôle.
 - **Plan quelconque** défini par trois points triangulés, pour mesurer sur un pan de toit, un talus ou une rampe.
 - **Points réutilisables** : garder les points mesurés pour les relier entre eux (polyligne, surface, angle) et les enregistrer dans une couche, avec leur altitude.
-- **Préréglages sur le moteur 3D** : réécrire largeurs et hauteur comme des préréglages de la mesure libre (surface et grandeur affichée), pour un seul code de calcul.
+- **Accrochage sur la carte** : accrocher les points et les extrémités de façade glissés sur la carte aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
 
 ### Modèles et données plus riches
 
@@ -389,4 +409,5 @@ La mesure libre 3D (section 2.5) le permet déjà par triangulation depuis deux 
 | `GRAZING` | 15° | incidence en dessous de laquelle une visée sur un plan est signalée | `geometry.py` |
 | `MIN_CROSSING` | 3° | croisement minimal des visées en triangulation 3D | `geometry.py` |
 | `MAX_TOP_OFFSET` | 45° | écart de cap maximal entre le pied et le sommet d'une hauteur | `ground.py` |
-| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur saisie du plan horizontal | `measure.py` |
+| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur saisie du plan horizontal | `measure_tool.py` |
+| `SELECT_ANGLE` | 1° | écart maximal entre un clic et le repère d'un point pour le sélectionner | `measure_tool.py` |

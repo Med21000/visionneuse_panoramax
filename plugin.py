@@ -150,6 +150,7 @@ class PanoramaxPlugin:
             self.dock.photoClicked.connect(self._on_photo_clicked)
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
             self.dock.terrainChanged.connect(self._on_terrain_changed)
+            self.dock.referenceChanged.connect(self._on_reference_changed)
             self.terrain.use_ign = self.dock.use_ign()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
@@ -297,18 +298,20 @@ class PanoramaxPlugin:
         if self.ground is None:
             self.ground = GroundMeasure(self.canvas)
             self.ground.camera_height = self.dock.camera_height()
+            self.ground.calibration = self.dock.calibration
         return self.ground
 
     def _ensure_calibrator(self):
         if self.calibrator is None:
-            self.calibrator = CalibrationTool(self.canvas, self.dock.calibration, self.dock.current_ids)
+            self.calibrator = CalibrationTool(self.canvas, self.dock.calibration, self.dock.current_ids,
+                                              self.dock.reference)
         return self.calibrator
 
     def _active_measure(self):
         mode = self.dock.measure_mode()
         if mode == "tri":
             return self._ensure_triangulator()
-        if mode in ("tilt", "heading"):
+        if mode in ("tilt", "heading", "camera"):
             tool = self._ensure_calibrator()
             if tool.mode != mode:
                 tool.set_mode(mode)
@@ -324,7 +327,7 @@ class PanoramaxPlugin:
         self.dock.update_calibration_label()
         mode = self.dock.measure_mode()
         tool = {"width": self.ground, "height": self.ground, "tilt": self.calibrator,
-                "heading": self.calibrator}.get(mode) if self.dock.btn_measure.isChecked() else None
+                "heading": self.calibrator, "camera": self.calibrator}.get(mode) if self.dock.btn_measure.isChecked() else None
         self.dock.set_measure_marks(tool.viewer_marks() if tool is not None else None)
 
     def _clear_measures(self):
@@ -381,7 +384,7 @@ class PanoramaxPlugin:
 
     def _on_photo_clicked(self, click):
         tool = self._active_measure()
-        if not isinstance(tool, GroundMeasure) or not tool.needs_profile():
+        if not isinstance(tool, (GroundMeasure, CalibrationTool)) or not tool.needs_profile():
             self._show_measure(tool.add_click(click))  # sommet d'un objet ou calage : pas de terrain
             if isinstance(tool, CalibrationTool):
                 if tool.waiting_map():
@@ -393,7 +396,7 @@ class PanoramaxPlugin:
         mode = tool.mode
 
         def done(profile, label, warning):
-            if self.ground is not tool or tool.mode != mode:
+            if self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
             click.update(profile=profile, terrain=label)
             self._show_measure(tool.add_click(click, warning))
@@ -404,8 +407,15 @@ class PanoramaxPlugin:
         self.terrain.use_ign = self.dock.use_ign()
         if self.ground is not None:
             self.ground.clear()  # les profils des clics viennent de l'ancienne source
+        if self.calibrator is not None:
+            self.calibrator.reset()
             if self.dock.measure_mode() in ("width", "height"):
                 self._show_measure(self.ground.status())
+
+    def _on_reference_changed(self):
+        if self.calibrator is not None and self.dock.measure_mode() == "camera":
+            self.calibrator.reset()  # clics en attente faits pour l'ancienne référence
+            self._show_measure(self.calibrator.status())
 
     def _on_camera_height(self, value):
         ground = self._ensure_ground()

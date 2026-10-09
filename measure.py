@@ -330,7 +330,8 @@ class GroundMeasure:
     def __init__(self, canvas):
         self.canvas = canvas
         self.mode = "width"
-        self.camera_height = DEFAULT_CAMERA_HEIGHT
+        self.camera_height = DEFAULT_CAMERA_HEIGHT  # hauteur saisie dans le panneau
+        self.calibration = None  # calibration.Calibration : hauteur calée par séquence
         self.clicks = []  # dicts : pic, lon, lat, yaw, elev, profile, terrain
         self.result = None
         self.error = None
@@ -348,6 +349,12 @@ class GroundMeasure:
     def needs_profile(self):
         """Le prochain clic doit-il toucher le sol ? (pas le sommet d'un objet)"""
         return not (self.mode == "height" and len(self.clicks) == 1)
+
+    def _camera(self):
+        """(hauteur de caméra, calée ?) : celle de la séquence si elle a été calée."""
+        sequence = self.clicks[0].get("sequence") if self.clicks else None
+        cam = self.calibration.camera(sequence) if self.calibration and sequence else None
+        return (cam["height"], True) if cam else (self.camera_height, False)
 
     def add_click(self, click, notice=None):
         if len(self.clicks) >= 2:
@@ -376,11 +383,11 @@ class GroundMeasure:
                     if axis is None:
                         raise ground.GroundError("Axe de la route inconnu pour cette photo : largeur "
                                                  "impossible à calculer.")
-                    self.result = ground.measure_width(self.camera_height, *self.clicks, axis)
+                    self.result = ground.measure_width(self._camera()[0], *self.clicks, axis)
                 else:
-                    self.result = ground.measure_height(self.camera_height, *self.clicks)
+                    self.result = ground.measure_height(self._camera()[0], *self.clicks)
             elif len(self.clicks) == 1:
-                ground._ground_point(self.camera_height, self.clicks[0])  # contrôle du premier clic
+                ground._ground_point(self._camera()[0], self.clicks[0])  # contrôle du premier clic
         except ground.GroundError as exc:
             self.error = str(exc)
             if len(self.clicks) == 1:
@@ -398,7 +405,7 @@ class GroundMeasure:
             label = "{} m".format(_num(self.result["value"], 2))
             extra = self.result.get("clicked")
         elif len(self.clicks) == 1 and not self.error:
-            points = [ground._ground_point(self.camera_height, self.clicks[0])[1]]
+            points = [ground._ground_point(self._camera()[0], self.clicks[0])[1]]
         self.item.set_data(points, label, extra)
 
     def viewer_marks(self):
@@ -450,7 +457,9 @@ class GroundMeasure:
         else:
             text = "Hauteur : {} m (±{} m) · objet à {} m".format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["ranges"][0]))
-        text += ". Terrain : {}, caméra à {} m.".format(self._terrain_label(), _num(self.camera_height, 2))
+        height, calibrated = self._camera()
+        text += ". Terrain : {}, caméra à {} m{}.".format(self._terrain_label(), _num(height, 2),
+                                                        " (calée)" if calibrated else "")
         if self.notice:
             text += " ({}.)".format(self.notice)
         return text
@@ -464,10 +473,11 @@ class CalibrationTool:
     (inclinaison de la photo), ou repère cliqué dans la photo puis sur la carte
     (cap de la séquence)."""
 
-    def __init__(self, canvas, calibration, current):
+    def __init__(self, canvas, calibration, current, reference=None):
         self.canvas = canvas
         self.calibration = calibration
         self.current = current  # () -> (photo, séquence) affichées
+        self.reference = reference  # () -> ("ground" | "height", longueur connue en m)
         self.mode = "tilt"
         self.clicks = []  # clics en attente (dicts de PanoramaxDock.photoClicked)
         self.error = None
@@ -479,7 +489,13 @@ class CalibrationTool:
         self.reset()
 
     def needs_profile(self):
-        return False
+        """Le prochain clic doit-il toucher le sol ? (hauteur de caméra, sauf sommet d'un objet)"""
+        if self.mode != "camera":
+            return False
+        return self._reference()[0] == "ground" or not self.clicks
+
+    def _reference(self):
+        return self.reference() if self.reference else ("ground", 0.0)
 
     def waiting_map(self):
         """Le repère cliqué dans la photo attend son clic sur la carte."""
@@ -487,7 +503,9 @@ class CalibrationTool:
 
     def add_click(self, click, notice=None):
         self.error, self.last = None, None
-        if self.mode == "heading":
+        if self.mode == "camera":
+            self._add_camera_click(click)
+        elif self.mode == "heading":
             if not click.get("sequence"):
                 self.error = "Séquence de la photo inconnue : recalage du cap impossible."
             else:
@@ -512,6 +530,27 @@ class CalibrationTool:
                                       "du premier, pour corriger toute l'inclinaison.")
         self._draw()
         return self.status()
+
+    def _add_camera_click(self, click):
+        if not click.get("sequence"):
+            self.error = "Séquence de la photo inconnue : calage de la hauteur impossible."
+            return
+        if self.clicks and self.clicks[0]["pic"] != click["pic"]:
+            self.clicks = []  # les deux clics se font sur la même photo
+        self.clicks.append(click)
+        if len(self.clicks) < 2:
+            return
+        clicks, self.clicks = self.clicks, []
+        kind, known = self._reference()
+        try:
+            r = self.calibration.add_camera_height(click["sequence"], kind, clicks, known)
+        except calibration.CalibrationError as exc:
+            self.error = str(exc)
+        else:
+            self.last = "Caméra à {} m (±{} m) d'après cette référence de {} m.".format(
+                _num(r["height"], 2), _num(r["sigma"], 2), _num(known, 2))
+            if r["sigma"] > 0.25:
+                self.last += " Référence trop loin ou trop courte pour être précise : prenez-en une plus proche."
 
     def add_map_point(self, mlon, mlat):
         """Repère cliqué sur la carte (WGS84), après son clic dans la photo."""
@@ -546,6 +585,8 @@ class CalibrationTool:
             self.calibration.clear_tilt(pic)
         elif self.mode == "heading" and sequence:
             self.calibration.clear_heading(sequence)
+        elif self.mode == "camera" and sequence:
+            self.calibration.clear_camera(sequence)
         self.reset()
 
     def remove(self):
@@ -570,7 +611,7 @@ class CalibrationTool:
             pos = c.get("pos") or [None, None]
             points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1],
                            "abs_yaw": c["raw"][0], "elev": c["raw"][1]})
-        return {"points": points, "label": "", "beside": self.mode == "tilt"}
+        return {"points": points, "label": "", "beside": self.mode in ("tilt", "camera")}
 
     def status(self):
         n = len(self.clicks)
@@ -579,6 +620,18 @@ class CalibrationTool:
             text = self.error + " "
         elif self.last:
             text = self.last + " "
+        if self.mode == "camera":
+            kind, known = self._reference()
+            if kind == "height":
+                if n == 1:
+                    return text + "Cliquez le sommet de l'objet, sur la même photo."
+                return text + ("Cliquez au pied d'un objet de hauteur connue ({} m), puis à son sommet. "
+                               "Choisissez-le proche (moins de 10–15 m).".format(_num(known, 2)))
+            if n == 1:
+                return text + "Cliquez la seconde extrémité, au sol, sur la même photo."
+            return text + ("Cliquez au sol les deux extrémités d'une longueur connue ({} m) : trait de marquage, "
+                           "place de stationnement, ou longueur mesurée sur la carte. Choisissez-la proche "
+                           "(moins de 10–15 m) et plutôt en travers de la vue : dans l'axe, elle est moins précise.".format(_num(known, 2)))
         if self.mode == "tilt":
             if n == 1:
                 return text + "Cliquez le sommet du même objet."

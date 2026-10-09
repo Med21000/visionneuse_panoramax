@@ -428,6 +428,7 @@ MEASURE_MODES = (
     ("Hauteur d'un objet", "height"),
     ("Calage : inclinaison (objets verticaux)", "tilt"),
     ("Calage : cap (repère sur la carte)", "heading"),
+    ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
 
 NO_WEBENGINE_TEXT = (
@@ -459,6 +460,7 @@ class PanoramaxDock(QDockWidget):
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
+    referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
 
     def __init__(self, parent=None):
@@ -563,6 +565,26 @@ class PanoramaxDock(QDockWidget):
         self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 1.9)))
         self.spin_camera.valueChanged.connect(self._on_camera_height)
         mlay.addWidget(self.spin_camera)
+        self.cmb_reference = QComboBox()
+        self.cmb_reference.addItem("au sol", "ground")
+        self.cmb_reference.addItem("en hauteur", "height")
+        self.cmb_reference.setToolTip("Longueur connue au sol (deux clics) ou hauteur d'un objet (pied puis sommet)")
+        self.cmb_reference.setCurrentIndex(max(0, self.cmb_reference.findData(
+            QgsSettings().value("visionneuse_panoramax/reference_kind", "ground"))))
+        self.cmb_reference.currentIndexChanged.connect(self._on_reference)
+        mlay.addWidget(self.cmb_reference)
+        self.spin_reference = QDoubleSpinBox()
+        self.spin_reference.setRange(0.1, 50.0)
+        self.spin_reference.setSingleStep(0.1)
+        self.spin_reference.setDecimals(2)
+        self.spin_reference.setSuffix(" m")
+        self.spin_reference.setToolTip(
+            "Longueur réelle de la référence. Exemples : place de stationnement 2,30 à 2,50 m de large, "
+            "bande de passage piéton 0,50 m, trait de marquage 3 m. Une longueur visible sur l'orthophoto "
+            "peut aussi se mesurer avec l'outil de mesure de QGIS.")
+        self.spin_reference.setValue(float(QgsSettings().value("visionneuse_panoramax/reference_length", 2.5)))
+        self.spin_reference.valueChanged.connect(self._on_reference)
+        mlay.addWidget(self.spin_reference)
         mlay.addStretch(1)
         btn_clear = QPushButton("Effacer")
         btn_clear.setToolTip("Effacer la mesure en cours")
@@ -749,6 +771,17 @@ class PanoramaxDock(QDockWidget):
         self._update_measure_widgets()
         self.measureModeChanged.emit(self.measure_mode())
 
+    def reference(self):
+        """Référence du calage de la hauteur de caméra : ("ground" | "height", longueur en m)."""
+        return self.cmb_reference.currentData() or "ground", self.spin_reference.value()
+
+    def _on_reference(self, *args):
+        kind, length = self.reference()
+        settings = QgsSettings()
+        settings.setValue("visionneuse_panoramax/reference_kind", kind)
+        settings.setValue("visionneuse_panoramax/reference_length", float(length))
+        self.referenceChanged.emit()
+
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
         self.cameraHeightChanged.emit(float(value))
@@ -759,8 +792,11 @@ class PanoramaxDock(QDockWidget):
         active = self.btn_measure.isChecked()
         for w in (self.btn_aim, self.btn_save):
             w.setVisible(mode == "tri")
-        for w in (self.lbl_camera, self.spin_camera, self.terrain_row):
+        for w in (self.lbl_camera, self.spin_camera):
             w.setVisible(mode in ("width", "height"))
+        self.terrain_row.setVisible(mode in ("width", "height", "camera"))
+        for w in (self.cmb_reference, self.spin_reference):
+            w.setVisible(mode == "camera")
         self.update_calibration_label()
         crosshair = active and mode == "tri"
         if not active or mode == "tri":
@@ -801,6 +837,11 @@ class PanoramaxDock(QDockWidget):
             parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
                 tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
                 "s" if tilt["count"] > 1 else "").replace(".", ","))
+        camera = self.calibration.camera(sequence) if sequence else None
+        if camera:
+            parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
+                camera["height"], camera["sigma"], camera["count"],
+                "s" if camera["count"] > 1 else "").replace(".", ","))
         heading = self.calibration.heading(sequence) if sequence else None
         if heading:
             parts.append("cap de la séquence {:+.2f}° (±{:.2f}°, {} repère{})".format(

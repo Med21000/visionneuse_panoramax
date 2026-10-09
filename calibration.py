@@ -8,6 +8,10 @@
   chacun impose que la vraie verticale soit dans le plan qui contient la caméra
   et l'objet. Un objet corrige la pente vue de côté dans sa direction ; deux
   objets à peu près à angle droit corrigent l'inclinaison complète.
+- Hauteur de caméra (par séquence) : on mesure une longueur connue, au sol
+  (trait de marquage, place de stationnement) ou en hauteur (objet de hauteur
+  connue). Les longueurs mesurées étant à peu près proportionnelles à la
+  hauteur de la caméra, on cherche celle qui redonne la longueur connue.
 - Cap (par séquence) : on clique dans la photo un repère visible sur la carte,
   puis ce repère sur la carte. Le décalage mesuré est combiné au cap d'origine
   selon leurs précisions (moyenne pondérée) : un repère proche, où l'erreur de
@@ -20,6 +24,7 @@ Calage conservé pour la session QGIS. Module sans dépendance à QGIS.
 
 import math
 
+from . import ground
 from .triangulation import _local
 
 MAX_TILT = 10.0  # au-delà, les clics sont sûrement faux (objet penché, pied/sommet inversés)
@@ -32,6 +37,9 @@ MAP_ERROR = 0.5  # précision de position du repère sur la carte (m)
 DEFAULT_ACCURACY = 3.0  # précision GPS supposée quand la photo ne l'indique pas (m)
 SURVEY_PRIOR = 0.5  # précision du cap d'origine, matériel de relevé (degrés)
 PRIOR = 3.0  # précision du cap d'origine, autres appareils (boussole, trajectoire GPS)
+
+
+CAMERA_MIN, CAMERA_MAX = 0.3, 6.0  # plage de hauteurs de caméra admises (m)
 
 
 class CalibrationError(ValueError):
@@ -123,12 +131,75 @@ def untilt(up, yaw, elev):
     return angles(r)
 
 
+def _reference_length(kind, camera_height, clicks):
+    """Longueur mesurée (m) avec une hauteur de caméra donnée : distance entre deux
+    points au sol ("ground") ou hauteur d'un objet, pied puis sommet ("height")."""
+    if kind == "height":
+        return ground.measure_height(camera_height, *clicks)["value"]
+    (_, p, z1), (_, q, z2) = (ground._ground_point(camera_height, c) for c in clicks)
+    x, y = _local(q[0], q[1], p[0], p[1])
+    return math.sqrt(x * x + y * y + (z2 - z1) ** 2)
+
+
+def _solve_height(kind, clicks, known):
+    """Hauteur de caméra qui redonne la longueur connue (dichotomie : la longueur
+    mesurée croît avec la hauteur de caméra)."""
+    def excess(h):
+        try:
+            return _reference_length(kind, h, clicks) - known
+        except ground.GroundError:
+            return float("inf")  # point trop loin : caméra trop haute
+
+    lo, hi = CAMERA_MIN, CAMERA_MAX
+    if excess(lo) > 0:
+        raise CalibrationError("Longueur mesurée trop grande même avec une caméra à {} m : vérifiez la "
+                               "longueur connue et les clics.".format(str(CAMERA_MIN).replace(".", ",")))
+    if excess(hi) < 0:
+        raise CalibrationError("Longueur mesurée trop petite même avec une caméra à {} m : vérifiez la "
+                               "longueur connue et les clics.".format(str(CAMERA_MAX).replace(".", ",")))
+    for _ in range(40):
+        mid = (lo + hi) / 2.0
+        if excess(mid) > 0:
+            hi = mid
+        else:
+            lo = mid
+    return (lo + hi) / 2.0
+
+
+def camera_height(kind, clicks, known):
+    """Hauteur de caméra (m) et son incertitude, d'après une longueur connue.
+
+    kind : "ground" (deux clics au sol) ou "height" (pied au sol, puis sommet) ;
+    clicks : dicts avec elev (corrigée de l'inclinaison), yaw, lon, lat, profile.
+    L'incertitude correspond à ±ground.PITCH_ERROR sur l'élévation de chaque clic.
+    """
+    if known <= 0:
+        raise CalibrationError("Indiquez la longueur connue.")
+    if kind == "height" and clicks[0].get("pic") != clicks[1].get("pic"):
+        raise CalibrationError("Le pied et le sommet doivent être cliqués sur la même photo.")
+    try:
+        h = _solve_height(kind, clicks, known)
+    except ground.GroundError as exc:
+        raise CalibrationError(str(exc))
+    spread = 0.0
+    for i in range(len(clicks)):
+        for sign in (-1, 1):
+            moved = [dict(c) for c in clicks]
+            moved[i]["elev"] += sign * ground.PITCH_ERROR
+            try:
+                spread = max(spread, abs(_solve_height(kind, moved, known) - h))
+            except (CalibrationError, ground.GroundError):
+                spread = max(spread, h)  # référence trop loin pour être fiable
+    return h, max(spread, 0.005)
+
+
 class Calibration:
     """Calages de la session : inclinaison par photo, décalage de cap par séquence."""
 
     def __init__(self):
         self.verticals = {}  # pic -> [((cap, élév.) pied, (cap, élév.) sommet)]
         self.landmarks = {}  # séquence -> [dicts : pic, lon, lat, yaw, elev, mlon, mlat, accuracy, prior]
+        self.heights = {}  # séquence -> [(hauteur de caméra, incertitude)]
         self._tilts = {}
 
     # Inclinaison ---------------------------------------------------------
@@ -148,6 +219,23 @@ class Calibration:
     def untilted(self, pic, yaw, elev):
         t = self._tilts.get(pic)
         return untilt(t["up"], yaw, elev) if t else (yaw % 360, elev)
+
+    # Hauteur de caméra --------------------------------------------------------
+    def add_camera_height(self, sequence, kind, clicks, known):
+        h, sigma = camera_height(kind, clicks, known)
+        self.heights.setdefault(sequence, []).append((h, sigma))
+        return {"height": h, "sigma": sigma}
+
+    def camera(self, sequence):
+        """Hauteur de caméra calée de la séquence : dict height, sigma, count, ou None."""
+        obs = self.heights.get(sequence)
+        if not obs:
+            return None
+        sw = sum(1.0 / s ** 2 for _, s in obs)
+        return {"height": sum(h / s ** 2 for h, s in obs) / sw, "sigma": 1.0 / math.sqrt(sw), "count": len(obs)}
+
+    def clear_camera(self, sequence):
+        self.heights.pop(sequence, None)
 
     # Cap -------------------------------------------------------------------
     def add_landmark(self, sequence, pic, lon, lat, yaw, elev, mlon, mlat, accuracy, survey):

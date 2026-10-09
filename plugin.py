@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Classe principale du plugin Visionneuse Panoramax."""
 
+import json
 import os
 
 from qgis.core import (
@@ -21,12 +22,15 @@ from qgis.PyQt.QtWidgets import QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
+from .calibration import Calibration
 from .measure import CalibrationTool, GroundMeasure, Triangulator
 from .terrain import TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
+PROJECT_SCOPE = "visionneuse_panoramax"  # section du plugin dans le projet QGIS
+CALIBRATION_KEY = "calibration"
 
 
 class LandmarkTool(QgsMapToolPan):
@@ -73,6 +77,8 @@ class PanoramaxPlugin:
         self.triangulator = None
         self.ground = None
         self.calibrator = None
+        self.calibration = Calibration()  # enregistré dans le projet QGIS
+        self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
         self.terrain = TerrainProvider()
@@ -101,7 +107,20 @@ class PanoramaxPlugin:
         self.landmark_tool.pointed.connect(self._on_landmark_clicked)
         self.landmark_tool.cancelled.connect(self._on_landmark_cancelled)
 
+        # Calage enregistré dans le projet : relu à l'ouverture, vidé pour un nouveau projet
+        project = QgsProject.instance()
+        project.readProject.connect(self._load_calibration)
+        project.cleared.connect(self._load_calibration)
+        self._load_calibration()
+
     def unload(self):
+        project = QgsProject.instance()
+        for signal in (project.readProject, project.cleared):
+            try:
+                signal.disconnect(self._load_calibration)
+            except (TypeError, RuntimeError):
+                pass
+        self.calibration.changed = None
         for action in self.actions:
             self.iface.removePluginWebMenu(MENU, action)
             self.iface.removeWebToolBarIcon(action)
@@ -137,6 +156,7 @@ class PanoramaxPlugin:
     def _ensure_dock(self):
         if self.dock is None:
             self.dock = PanoramaxDock(self.iface.mainWindow())
+            self.dock.calibration = self.calibration
             self.dock.pictureChanged.connect(self._on_picture_changed)
             self.dock.pickToolRequested.connect(self.activate_pick_tool)
             self.dock.instanceChanged.connect(self._on_instance_changed)
@@ -155,6 +175,30 @@ class PanoramaxPlugin:
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
+
+    # ------------------------------------------------------------------
+    # Calage enregistré dans le projet QGIS
+    # ------------------------------------------------------------------
+    def _save_calibration(self):
+        """Écrit le calage dans le projet (qui passe en « modifié », à enregistrer)."""
+        QgsProject.instance().writeEntry(PROJECT_SCOPE, CALIBRATION_KEY,
+                                         json.dumps(self.calibration.to_dict(), separators=(",", ":")))
+
+    def _load_calibration(self, *args):
+        text, _ = QgsProject.instance().readEntry(PROJECT_SCOPE, CALIBRATION_KEY, "")
+        try:
+            data = json.loads(text) if text else None
+        except ValueError:
+            data = None
+            self.iface.messageBar().pushMessage("Panoramax", "Calage du projet illisible : ignoré.",
+                                                level=Qgis.MessageLevel.Warning, duration=6)
+        self.calibration.load(data)
+        if self.calibrator is not None:
+            self.calibrator.reset()  # clics en attente et visées vers les repères
+        if self.dock is not None:
+            self.dock.update_calibration_label()
+            if self.dock.btn_measure.isChecked():
+                self._show_measure(self._active_measure().status())
 
     def toggle_viewer(self, checked=True):
         dock = self._ensure_dock()

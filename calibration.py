@@ -21,7 +21,7 @@
 
 Directions : (cap absolu en degrés, 0 = nord, sens horaire ; élévation en
 degrés). Les corrections s'appliquent dans cet ordre : inclinaison, puis cap.
-Calage conservé pour la session QGIS. Module sans dépendance à QGIS.
+Calage enregistré dans le projet QGIS (voir plugin.py). Module sans dépendance à QGIS.
 """
 
 import math
@@ -202,19 +202,67 @@ def camera_height(kind, clicks, known):
 
 
 class Calibration:
-    """Calages de la session : inclinaison par photo, décalage de cap par séquence."""
+    """Calages : inclinaison par photo ; cap, position et hauteur de caméra par séquence.
+
+    Seules les observations sont conservées (clics et repères) : les corrections en sont
+    recalculées. to_dict / load permettent de les enregistrer (dans le projet QGIS) ;
+    `changed`, s'il est défini, est appelé après chaque modification.
+    """
+
+    FORMAT = 1  # version du format enregistré
 
     def __init__(self):
         self.verticals = {}  # pic -> [((cap, élév.) pied, (cap, élév.) sommet)]
         self.landmarks = {}  # séquence -> [dicts : pic, lon, lat, yaw, elev, mlon, mlat, accuracy, prior]
         self.heights = {}  # séquence -> [(hauteur de caméra, incertitude)]
         self._tilts = {}
+        self.changed = None
+
+    def _notify(self):
+        if self.changed is not None:
+            self.changed()
+
+    # Enregistrement --------------------------------------------------------
+    def to_dict(self):
+        return {
+            "format": self.FORMAT,
+            "verticals": {pic: [[list(b), list(t)] for b, t in v] for pic, v in self.verticals.items()},
+            "landmarks": self.landmarks,
+            "heights": {seq: [list(o) for o in obs] for seq, obs in self.heights.items()},
+        }
+
+    def load(self, data):
+        """Remplace le calage par celui enregistré (dict de to_dict, ou None : calage vide).
+        Les entrées illisibles sont ignorées. Ne déclenche pas `changed`."""
+        self.verticals, self.landmarks, self.heights, self._tilts = {}, {}, {}, {}
+        if not isinstance(data, dict) or data.get("format") != self.FORMAT:
+            return
+        keys = ("pic", "lon", "lat", "yaw", "elev", "mlon", "mlat", "accuracy", "prior")
+        try:
+            for pic, verticals in (data.get("verticals") or {}).items():
+                verticals = [((float(b[0]), float(b[1])), (float(t[0]), float(t[1]))) for b, t in verticals]
+                try:
+                    self._tilts[pic] = tilt_from_verticals(verticals)
+                    self.verticals[pic] = verticals
+                except CalibrationError:
+                    pass
+            for seq, obs in (data.get("landmarks") or {}).items():
+                obs = [{k: (o[k] if k == "pic" else float(o[k])) for k in keys} for o in obs]
+                if obs:
+                    self.landmarks[seq] = obs
+            for seq, obs in (data.get("heights") or {}).items():
+                obs = [(float(h), float(s)) for h, s in obs if float(s) > 0]
+                if obs:
+                    self.heights[seq] = obs
+        except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+            pass  # format abîmé : on garde ce qui a pu être lu
 
     # Inclinaison ---------------------------------------------------------
     def add_vertical(self, pic, bottom, top):
         verticals = self.verticals.get(pic, []) + [(bottom, top)]
         result = tilt_from_verticals(verticals)  # lève CalibrationError sans rien garder
         self.verticals[pic], self._tilts[pic] = verticals, result
+        self._notify()
         return result
 
     def tilt(self, pic):
@@ -223,6 +271,7 @@ class Calibration:
     def clear_tilt(self, pic):
         self.verticals.pop(pic, None)
         self._tilts.pop(pic, None)
+        self._notify()
 
     def untilted(self, pic, yaw, elev):
         t = self._tilts.get(pic)
@@ -232,6 +281,7 @@ class Calibration:
     def add_camera_height(self, sequence, kind, clicks, known):
         h, sigma = camera_height(kind, clicks, known)
         self.heights.setdefault(sequence, []).append((h, sigma))
+        self._notify()
         return {"height": h, "sigma": sigma}
 
     def camera(self, sequence):
@@ -244,6 +294,7 @@ class Calibration:
 
     def clear_camera(self, sequence):
         self.heights.pop(sequence, None)
+        self._notify()
 
     # Cap -------------------------------------------------------------------
     def add_landmark(self, sequence, pic, lon, lat, yaw, elev, mlon, mlat, accuracy, survey):
@@ -272,6 +323,7 @@ class Calibration:
                 raise CalibrationError("Ce repère s'écarte de {}° de ce que prévoient les précédents : repère "
                                        "mal pointé sur la carte ou dans la photo ?".format(_fr(r)))
         self.landmarks.setdefault(sequence, []).append(obs)
+        self._notify()
         return {"offset": offset, "sigma": sigma, "distance": dist}
 
     def _landmark_offset(self, obs):
@@ -359,6 +411,7 @@ class Calibration:
 
     def clear_heading(self, sequence):
         self.landmarks.pop(sequence, None)
+        self._notify()
 
     # Application -----------------------------------------------------------
     def correct(self, pic, sequence, yaw, elev, lon=None, lat=None):

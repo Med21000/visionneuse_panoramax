@@ -7,7 +7,6 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
 - Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche.
 - Filaire des séquences en tuiles vectorielles.
-- Extraction des séquences et des photos en couches vecteur.
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
 - Mesures (bouton « 📐 Mesure ») :
   - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;

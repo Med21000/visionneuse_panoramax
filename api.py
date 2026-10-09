@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Accès à l'API Panoramax (méta-catalogue national) et utilitaires réseau."""
 
-import gzip
 import json
 import math
 import time
@@ -149,17 +148,6 @@ def fetch_json(url, callback, prefer_cache=False, timeout_ms=None):
             callback(None, "Réponse JSON invalide : {}".format(exc))
 
     return fetch(url, done, prefer_cache, timeout_ms)
-
-
-def fetch_blocking(url):
-    """GET bloquant (utilisé pour l'extraction des tuiles). Retourne bytes ou lève IOError."""
-    reply = QgsNetworkAccessManager.instance().blockingGet(_request(url, prefer_cache=True))
-    if reply.error() != QNetworkReply.NetworkError.NoError:
-        raise IOError(reply.errorString())
-    data = bytes(reply.content())
-    if data[:2] == b"\x1f\x8b":  # tuile servie compressée sans décompression automatique
-        data = gzip.decompress(data)
-    return data
 
 
 def search_url(lon, lat, radius_m=25, limit=20):

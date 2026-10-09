@@ -15,7 +15,7 @@ from qgis.core import (
 from qgis.gui import QgsMapToolEmitPoint
 from qgis.PyQt.QtCore import QUrl, Qt
 from qgis.PyQt.QtGui import QAction, QDesktopServices, QIcon
-from qgis.PyQt.QtWidgets import QApplication, QProgressDialog, QPushButton
+from qgis.PyQt.QtWidgets import QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
@@ -56,10 +56,6 @@ class PanoramaxPlugin:
                                          self.activate_pick_tool, checkable=True, toolbar=False)
         self._add_action(icon, "Ajouter le filaire Panoramax (tuiles vectorielles)", self.add_tile_layer,
                          toolbar=False)
-        self._add_action(icon, "Extraire les séquences de l'emprise en couche vecteur",
-                         lambda: self.extract("sequences"), toolbar=False)
-        self._add_action(icon, "Extraire les photos de l'emprise en couche de points",
-                         lambda: self.extract("pictures"), toolbar=False)
 
         self.tool = QgsMapToolEmitPoint(self.canvas)
         self.tool.setAction(self.act_pick)
@@ -100,7 +96,6 @@ class PanoramaxPlugin:
         if self.dock is None:
             self.dock = PanoramaxDock(self.iface.mainWindow())
             self.dock.pictureChanged.connect(self._on_picture_changed)
-            self.dock.extractRequested.connect(self.extract)
             self.dock.pickToolRequested.connect(self.activate_pick_tool)
             self.dock.instanceChanged.connect(self._on_instance_changed)
             self.dock.viewChanged.connect(self._on_view_changed)
@@ -158,38 +153,6 @@ class PanoramaxPlugin:
             self.iface.messageBar().pushMessage(
                 "Panoramax", "Impossible de créer la couche de tuiles vectorielles.",
                 level=Qgis.MessageLevel.Critical, duration=6)
-
-    def extract(self, kind):
-        extent = self.canvas.extent()
-        crs = self.canvas.mapSettings().destinationCrs()
-
-        dlg = QProgressDialog("Téléchargement des tuiles Panoramax…", "Annuler", 0, 100,
-                              self.iface.mainWindow())
-        dlg.setWindowTitle("Panoramax")
-        dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setMinimumDuration(300)
-
-        def progress(done, total):
-            dlg.setMaximum(max(total, 1))
-            dlg.setValue(done)
-            QApplication.processEvents()
-            return not dlg.wasCanceled()
-
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            layer, msg = layers.extract(kind, extent, crs, progress)
-        except Exception as exc:  # erreur inattendue : on informe sans planter QGIS
-            layer, msg = None, "Erreur : {}".format(exc)
-        finally:
-            QApplication.restoreOverrideCursor()
-            dlg.close()
-
-        if layer is not None:
-            QgsProject.instance().addMapLayer(layer)
-            level = Qgis.MessageLevel.Success if layer.featureCount() else Qgis.MessageLevel.Warning
-        else:
-            level = Qgis.MessageLevel.Warning
-        self.iface.messageBar().pushMessage("Panoramax", msg, level=level, duration=8)
 
     # ------------------------------------------------------------------
     # Outil clic

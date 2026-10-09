@@ -25,7 +25,7 @@ from .cursor import ViewCursor
 from .calibration import Calibration
 from .measure import CalibrationTool, GroundMeasure, Triangulator
 from .terrain import TerrainProvider
-from .viewer_dock import PanoramaxDock
+from .viewer_dock import GROUND_MODES, PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
@@ -371,8 +371,10 @@ class PanoramaxPlugin:
         self.dock.set_measure_status(text)
         self.dock.update_calibration_label()
         mode = self.dock.measure_mode()
-        tool = {"width": self.ground, "height": self.ground, "tilt": self.calibrator,
-                "heading": self.calibrator, "camera": self.calibrator}.get(mode) if self.dock.btn_measure.isChecked() else None
+        tool = None
+        if self.dock.btn_measure.isChecked():
+            tool = {"width": self.ground, "road": self.ground, "height": self.ground, "tilt": self.calibrator,
+                    "heading": self.calibrator, "camera": self.calibrator}.get(mode)
         # Mesures terminées, gardées à l'écran jusqu'à « Tout effacer », puis mesure en cours
         marks = self.ground.done_marks() if self.ground is not None else []
         current = tool.viewer_marks() if tool is not None else None
@@ -470,7 +472,7 @@ class PanoramaxPlugin:
             self.ground.clear()  # les profils des clics viennent de l'ancienne source
         if self.calibrator is not None:
             self.calibrator.reset()
-            if self.dock.measure_mode() in ("width", "height"):
+            if self.dock.measure_mode() in GROUND_MODES:
                 self._show_measure(self.ground.status())
 
     def _on_reference_changed(self):
@@ -481,7 +483,7 @@ class PanoramaxPlugin:
     def _on_camera_height(self, value):
         ground = self._ensure_ground()
         ground.set_camera_height(value)
-        if self.dock.measure_mode() in ("width", "height"):
+        if self.dock.measure_mode() in GROUND_MODES:
             self._show_measure(ground.status())
 
     def _on_measure_save(self):

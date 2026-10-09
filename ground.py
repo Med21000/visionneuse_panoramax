@@ -93,6 +93,24 @@ def _spread(fn, clicks):
     return worst
 
 
+def measure_distance(camera_height, a, b):
+    """Distance directe entre deux clics au sol (largeur parallèle à la route, juste dans n'importe quelle
+    direction) : longueur en 3D, qui suit la pente entre les deux points."""
+    def split(clicks):
+        (_, p, z1), (_, q, z2) = (_ground_point(camera_height, c) for c in clicks)
+        x, y = _local(q[0], q[1], p[0], p[1])
+        return math.hypot(x, y), z2 - z1
+
+    def distance(clicks):
+        horizontal, rise = split(clicks)
+        return math.hypot(horizontal, rise)
+
+    (d1, p1, _), (d2, p2, _) = _ground_point(camera_height, a), _ground_point(camera_height, b)
+    horizontal, rise = split([a, b])
+    return {"points": [p1, p2], "ranges": [d1, d2], "value": math.hypot(horizontal, rise),
+            "horizontal": horizontal, "rise": rise, "uncertainty": _spread(distance, [a, b])}
+
+
 def measure_width(camera_height, a, b, axis):
     """Largeur perpendiculaire à un axe (cap de la route) entre deux clics au sol.
 

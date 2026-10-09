@@ -320,7 +320,8 @@ class MeasureItem(QgsMapCanvasItem):
 
 
 class GroundMeasure:
-    """Deux clics dans la photo : largeur perpendiculaire à la route ("width") ou
+    """Deux clics dans la photo : largeur parallèle à la route, distance directe entre deux points
+    au sol ("width"), largeur perpendiculaire à la chaussée ("road") ou
     hauteur d'un objet ("height").
 
     Chaque clic qui doit toucher le sol porte le profil du terrain le long de sa
@@ -405,6 +406,8 @@ class GroundMeasure:
         try:
             if len(self.clicks) == 2:
                 if self.mode == "width":
+                    self.result = ground.measure_distance(self._camera()[0], *self.clicks)
+                elif self.mode == "road":
                     axis = self.clicks[0].get("axis")
                     if axis is None:
                         raise ground.GroundError("Axe de la route inconnu pour cette photo : largeur "
@@ -445,7 +448,7 @@ class GroundMeasure:
         # Visionneuse web : seuls les clics dont la position dans la photo est connue
         label = ""
         if self.result:
-            symbol = {"width": "↔ ", "height": "↕ "}.get(self.mode, "")
+            symbol = {"width": "↔ ", "road": "↔ ", "height": "↕ "}.get(self.mode, "")
             label = "{}{} m ± {} m".format(symbol, _num(self.result["value"], 2), _num(self.result["uncertainty"], 2))
         # Hauteur : trait vertical sur l'objet, l'étiquette se met à côté (vers le centre de la vue)
         return {"points": points, "label": label, "beside": self.mode == "height"}
@@ -464,6 +467,11 @@ class GroundMeasure:
         prefix = (self.error + " ") if self.error else ""
         if self.mode == "width":
             if n == 0:
+                return prefix + "Cliquez au sol à une extrémité de l'objet."
+            if n == 1 and not self.error:
+                return "Cliquez au sol à l'autre extrémité : la distance directe entre les deux points est mesurée."
+        elif self.mode == "road":
+            if n == 0:
                 return prefix + "Cliquez au pied du premier bord (bordure, marquage, limite de chaussée…)."
             if n == 1 and not self.error:
                 return ("Cliquez au pied du bord opposé, pas forcément juste en face : la largeur est "
@@ -477,7 +485,13 @@ class GroundMeasure:
             return self.error + " Cliquez à nouveau pour recommencer."
         r = self.result
         if self.mode == "width":
-            text = "Largeur : {} m (±{} m) perpendiculairement à la route · en biais {} m · axe {}° ({})".format(
+            text = "Largeur : {} m (±{} m) entre les deux points · à {} et {} m de la photo".format(
+                _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["ranges"][0]), _num(r["ranges"][1]))
+            if abs(r["rise"]) >= 0.05:
+                text += " · dénivelé {} m".format(_num(r["rise"], 2))
+        elif self.mode == "road":
+            text = ("Largeur perpendiculaire à la chaussée : {} m (±{} m) · en biais {} m "
+                    "· axe {}° ({})").format(
                 _num(r["value"], 2), _num(r["uncertainty"], 2), _num(r["oblique"], 2), _num(r["axis"], 0),
                 self.clicks[0].get("axis_source") or "?")
         else:

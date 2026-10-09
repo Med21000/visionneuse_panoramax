@@ -451,13 +451,16 @@ NAV_BLOCK_JS = r"""
 """
 
 MEASURE_MODES = (
-    ("Triangulation", "tri"),
-    ("Largeur (route…)", "width"),
+    ("Largeur perpendiculaire à la chaussée", "road"),
+    ("Largeur parallèle à la route", "width"),
     ("Hauteur d'un objet", "height"),
+    ("Triangulation d'un objet", "tri"),
     ("Calage : inclinaison (objets verticaux)", "tilt"),
     ("Calage : cap et position (repères sur la carte)", "heading"),
     ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
+
+GROUND_MODES = ("width", "road", "height")  # mesures au sol par lancer de rayon (GroundMeasure)
 
 NO_WEBENGINE_TEXT = (
     "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
@@ -826,8 +829,8 @@ class PanoramaxDock(QDockWidget):
         for w in (self.btn_aim, self.btn_save):
             w.setVisible(mode == "tri")
         for w in (self.lbl_camera, self.spin_camera):
-            w.setVisible(mode in ("width", "height"))
-        self.terrain_row.setVisible(mode in ("width", "height", "camera"))
+            w.setVisible(mode in GROUND_MODES)
+        self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
         for w in (self.cmb_reference, self.spin_reference):
             w.setVisible(mode == "camera")
         self.update_calibration_label()

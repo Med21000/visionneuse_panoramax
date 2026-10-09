@@ -182,14 +182,16 @@ CROSSHAIR_JS = r"""
 (function(show){
   var e = document.getElementById('qgis-crosshair');
   if (!show) { if (e) e.remove(); return; }
-  if (e || !document.body) return;
+  if (!document.body) return;
+  var html = '<svg width="48" height="48" viewBox="0 0 48 48" fill="none">'
+    + '<circle cx="24" cy="24" r="21.5" stroke="#fff" stroke-width="1.5"/>'  // la croix entière à l'intérieur
+    + '<path d="M24 4v16M24 28v16M4 24h16M28 24h16" stroke="#ff8a80" stroke-width="1.5"/>'
+    + '<circle cx="24" cy="24" r="1.2" fill="#fff"/></svg>';
+  if (e) { if (e.innerHTML !== html) e.innerHTML = html; return; }  // mis à jour si la page l'a déjà
   e = document.createElement('div');
   e.id = 'qgis-crosshair';
-  e.innerHTML = '<svg width="44" height="44" viewBox="0 0 44 44" fill="none">'
-    + '<path d="M22 2v16M22 26v16M2 22h16M26 22h16" stroke="#fff" stroke-width="3.5" opacity=".9"/>'
-    + '<path d="M22 2v16M22 26v16M2 22h16M26 22h16" stroke="#ff1744" stroke-width="1.5"/>'
-    + '<circle cx="22" cy="22" r="1.2" fill="#ff1744"/></svg>';
-  e.style.cssText = 'position:fixed;left:50%;top:50%;width:44px;height:44px;margin:-22px 0 0 -22px;'
+  e.innerHTML = html;
+  e.style.cssText = 'position:fixed;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;'
     + 'pointer-events:none;z-index:2147483647';
   document.body.appendChild(e);
 })(__SHOW__)
@@ -231,16 +233,20 @@ CLICKS_JS = r"""
   var v = window.__pnxViewer;
   var box = v && v.psv && v.psv.container;
   var root = box && box.getRootNode ? box.getRootNode() : null;
-  if (root && !(root.getElementById && root.getElementById('qgis-cursor-style'))) {
-    var st = document.createElement('style');
-    st.id = 'qgis-cursor-style';
-    st.textContent = '.psv-container, .psv-container * { cursor: url("data:image/svg+xml;utf8,'
+  if (root) {
+    var css = '.psv-container, .psv-container * { cursor: url("data:image/svg+xml;utf8,'
       + "<svg xmlns='http://www.w3.org/2000/svg' width='33' height='33'>"
-      + "<path d='M16.5 0v13M16.5 20v13M0 16.5h13M20 16.5h13' stroke='white' stroke-width='3.5' opacity='.9'/>"
-      + "<path d='M16.5 0v13M16.5 20v13M0 16.5h13M20 16.5h13' stroke='%23ff1744' stroke-width='1.5'/>"
-      + "<circle cx='16.5' cy='16.5' r='1' fill='%23ff1744'/></svg>"
+      + "<circle cx='16.5' cy='16.5' r='15.5' fill='none' stroke='white' stroke-width='1.5'/>"
+      + "<path d='M16.5 2v11M16.5 20v11M2 16.5h11M20 16.5h11' stroke='%23ff8a80' stroke-width='1.5'/>"
+      + "<circle cx='16.5' cy='16.5' r='1' fill='white'/></svg>"
       + '") 16 16, crosshair !important; }';
-    (root === document ? document.head : root).appendChild(st);
+    var st = root.getElementById ? root.getElementById('qgis-cursor-style') : null;
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'qgis-cursor-style';
+      (root === document ? document.head : root).appendChild(st);
+    }
+    if (st.textContent !== css) st.textContent = css;  // mis à jour si la page l'a déjà
   }
   var out = JSON.stringify(window.__qgisClicks || []);
   window.__qgisClicks = [];
@@ -270,7 +276,9 @@ MARKS_JS = r"""
   if (!M || !M.addMarker) return;
   var pic = v.psv.getPictureId ? (v.psv.getPictureId() || '') : '';
   var pts = (state.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; });
-  var ids = ['qgis-line-halo', 'qgis-line', 'qgis-p0', 'qgis-p1', 'qgis-label'];
+  // Anciens identifiants (ext, h) gardés pour effacer les repères d'une version précédente
+  var ids = ['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line', 'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1',
+             'qgis-label'];
   // Étiquette à côté du trait (hauteur) : du côté du centre de la vue, recalculé quand
   // la vue tourne de l'autre côté du trait
   var side = '';
@@ -285,19 +293,15 @@ MARKS_JS = r"""
   if (key === window.__qgisMarkKey && present) return;
   window.__qgisMarkKey = key;
   ids.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
-  var dot = '<svg width="14" height="14" viewBox="0 0 14 14"><circle cx="7" cy="7" r="5" fill="none" '
-    + 'stroke="#fff" stroke-width="3"/><circle cx="7" cy="7" r="5" fill="none" stroke="#e53935" '
-    + 'stroke-width="1.5"/><rect x="6.5" y="6.5" width="1" height="1" fill="#e53935"/></svg>';
-  if (pts.length === 2) {
-    var line = [[pts[0].yaw, pts[0].pitch], [pts[1].yaw, pts[1].pitch]];
-    M.addMarker({id: 'qgis-line-halo', polyline: line,
-                 svgStyle: {stroke: 'rgba(255,255,255,0.85)', strokeWidth: '4px'}});
-    M.addMarker({id: 'qgis-line', polyline: line, svgStyle: {stroke: '#e53935', strokeWidth: '1.5px'}});
-  }
+  // Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
+  // Trait par-dessus les croix (même couche SVG : ordre d'ajout).
+  var cross = 'M0 9H18M9 0V18';
+  var line = pts.length === 2 ? [[pts[0].yaw, pts[0].pitch], [pts[1].yaw, pts[1].pitch]] : null;
   pts.forEach(function(p, i){
-    M.addMarker({id: 'qgis-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, html: dot,
-                 size: {width: 14, height: 14}, anchor: 'center center', zIndex: 100});
+    M.addMarker({id: 'qgis-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross,
+                 anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
   });
+  if (line) M.addMarker({id: 'qgis-line', polyline: line, svgStyle: {stroke: '#ff8a80', strokeWidth: '1.5px', fill: 'none'}});
   if (state.label && pts.length) {
     var at = pts[0];
     if (pts.length === 2) {  // milieu du trait (moyenne des directions)
@@ -308,6 +312,14 @@ MARKS_JS = r"""
       at = {yaw: Math.atan2(x, z), pitch: Math.atan2(y, Math.sqrt(x * x + z * z))};
     }
     var text = String(state.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
+    // Flèche de tête allongée au double dans son sens. ↔ (largeur) : la flèche cachée en double
+    // réserve exactement la place, la visible est étirée depuis le bord gauche. ↕ (hauteur) :
+    // une ligne de 2em lui fait la place, l'étiquette grandit d'autant.
+    text = text.replace(/^↔/, '<span style="position:relative;display:inline-block">'
+      + '<span style="visibility:hidden">↔↔</span><span style="position:absolute;left:0;top:0;'
+      + 'transform:scaleX(2);transform-origin:0 50%">↔</span></span>');
+    text = text.replace(/^↕/, '<span style="display:inline-block;line-height:2em;vertical-align:middle;'
+      + 'transform:scaleY(2)">↕</span>');
     var anchor = side === 'left' ? 'center right' : side === 'right' ? 'center left' : 'bottom center';
     var margin = side === 'left' ? 'margin-right:14px;' : side === 'right' ? 'margin-left:14px;' : 'margin-bottom:10px;';
     M.addMarker({id: 'qgis-label', position: {yaw: at.yaw, pitch: at.pitch}, anchor: anchor, zIndex: 101,

@@ -17,6 +17,7 @@ from qgis.PyQt.QtGui import QColor, QFont, QPainter, QPen
 from qgis.PyQt.QtWidgets import QSizePolicy, QWidget
 
 MIN_FOV, MAX_FOV = 25.0, 120.0
+LIGHT_RED = QColor(255, 138, 128)  # trait de mesure et réticule de visée (#ff8a80)
 
 
 def _event_pos(event):
@@ -231,25 +232,36 @@ class PanoWidget(QWidget):
         if not pts:
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        red = QColor(229, 57, 53)
-        if len(pts) == 2:
-            p.setPen(QPen(QColor(255, 255, 255, 215), 4))
-            p.drawLine(pts[0], pts[1])
-            p.setPen(QPen(red, 1.5))
-            p.drawLine(pts[0], pts[1])
-        p.setBrush(Qt.BrushStyle.NoBrush)
+        # Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
+        # Trait par-dessus les croix.
+        arm = 9.0
+        white = QPen(QColor(255, 255, 255), 1.5)
+        white.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(white)
         for q in pts:
-            p.setPen(QPen(QColor(255, 255, 255), 3))
-            p.drawEllipse(q, 5, 5)
-            p.setPen(QPen(red, 1.5))
-            p.drawEllipse(q, 5, 5)
+            p.drawLine(QPointF(q.x() - arm, q.y()), QPointF(q.x() + arm, q.y()))
+            p.drawLine(QPointF(q.x(), q.y() - arm), QPointF(q.x(), q.y() + arm))
+        if len(pts) == 2:
+            pen = QPen(LIGHT_RED, 1.5)
+            pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(pen)
+            p.drawLine(pts[0], pts[1])
         if self.mark_label:
             at = QPointF((pts[0].x() + pts[-1].x()) / 2.0, (pts[0].y() + pts[-1].y()) / 2.0)
             font = QFont(self.font())
             font.setBold(True)
             p.setFont(font)
-            w = p.fontMetrics().horizontalAdvance(self.mark_label) + 14
-            h = p.fontMetrics().height() + 4
+            fm = p.fontMetrics()
+            # Flèche de tête allongée au double dans son sens : ↔ (largeur) en largeur,
+            # ↕ (hauteur) en hauteur, l'étiquette grandit d'autant
+            arrow = self.mark_label[0] if self.mark_label[0] in "↔↕" else ""
+            rest = self.mark_label[len(arrow):]
+            sx, sy = (2.0, 1.0) if arrow == "↔" else (1.0, 2.0) if arrow else (1.0, 1.0)
+            aw = sx * fm.horizontalAdvance(arrow) if arrow else 0
+            glyph = fm.tightBoundingRect(arrow) if arrow else QRectF()
+            tw = aw + fm.horizontalAdvance(rest)
+            w = tw + 14
+            h = max(fm.height(), sy * glyph.height()) + 4
             if self.mark_beside and len(pts) == 2:
                 # À côté du trait, du côté du centre de la vue, pour ne pas masquer l'objet
                 x = at.x() - 14 - w if at.x() > self.width() / 2.0 else at.x() + 14
@@ -260,7 +272,17 @@ class PanoWidget(QWidget):
             p.setBrush(QColor(255, 255, 255, 235))
             p.drawRoundedRect(rect, 4, 4)
             p.setPen(QPen(QColor(183, 28, 28)))
-            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.mark_label)
+            x0 = rect.center().x() - tw / 2.0
+            base = rect.top() + (h - fm.height()) / 2.0 + fm.ascent()
+            p.drawText(QPointF(x0 + aw, base), rest)
+            if arrow:
+                # Étirement autour du centre de la flèche, centrée verticalement dans l'étiquette
+                gy = glyph.top() + glyph.height() / 2.0  # centre de la flèche par rapport à la ligne de base
+                p.save()
+                p.translate(x0, rect.center().y())
+                p.scale(sx, sy)
+                p.drawText(QPointF(0, -gy), arrow)
+                p.restore()
 
     def _paint_compass(self, p):
         heading, fov = self.current_view()
@@ -279,10 +301,18 @@ class PanoWidget(QWidget):
         if self.is360 or self.crosshair:
             # Repère central (axe de visée)
             c = QPointF(self.width() / 2.0, self.height() / 2.0)
-            if self.crosshair:  # réticule de visée : rouge vif sur liseré blanc
-                p.setPen(QPen(QColor(255, 255, 255, 230), 3.5))
+            # Réticule de visée (triangulation) en rouge clair, sinon repère orange
+            if self.crosshair:  # cercle blanc autour du réticule, la croix entière à l'intérieur
+                p.setPen(QPen(QColor(255, 255, 255), 1.5))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(c, 9.5, 9.5)
+            p.setPen(QPen(LIGHT_RED if self.crosshair else QColor(255, 111, 0, 200), 1.5))
+            if self.crosshair:  # branches écartées du centre, point blanc au milieu
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    p.drawLine(QPointF(c.x() + 2.5 * dx, c.y() + 2.5 * dy), QPointF(c.x() + 8 * dx, c.y() + 8 * dy))
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(255, 255, 255))
+                p.drawEllipse(c, 1.0, 1.0)
+            else:
                 p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8))
                 p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()))
-            p.setPen(QPen(QColor(255, 23, 68) if self.crosshair else QColor(255, 111, 0, 200), 1.5))
-            p.drawLine(QPointF(c.x(), c.y() - 8), QPointF(c.x(), c.y() + 8))
-            p.drawLine(QPointF(c.x() - 8, c.y()), QPointF(c.x() + 8, c.y()))

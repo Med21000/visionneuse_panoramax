@@ -17,10 +17,12 @@ from qgis.core import (
 from qgis.gui import QgsMapToolEmitPoint
 from qgis.PyQt.QtCore import QUrl, Qt
 from qgis.PyQt.QtGui import QAction, QDesktopServices, QIcon
-from qgis.PyQt.QtWidgets import QApplication, QProgressDialog, QPushButton
+from qgis.PyQt.QtWidgets import QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
+from .measure import GroundMeasure, Triangulator
+from .terrain import TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -36,6 +38,9 @@ class PanoramaxPlugin:
         self.dock = None
         self.tool = None
         self.cursor = None
+        self.triangulator = None
+        self.ground = None
+        self.terrain = TerrainProvider()
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -53,10 +58,6 @@ class PanoramaxPlugin:
                                          self.activate_pick_tool, checkable=True, toolbar=False)
         self._add_action(icon, "Ajouter le filaire Panoramax (tuiles vectorielles)", self.add_tile_layer,
                          toolbar=False)
-        self._add_action(icon, "Extraire les séquences de l'emprise en couche vecteur",
-                         lambda: self.extract("sequences"), toolbar=False)
-        self._add_action(icon, "Extraire les photos de l'emprise en couche de points",
-                         lambda: self.extract("pictures"), toolbar=False)
 
         self.tool = QgsMapToolEmitPoint(self.canvas)
         self.tool.setAction(self.act_pick)
@@ -71,6 +72,10 @@ class PanoramaxPlugin:
             self.canvas.unsetMapTool(self.tool)
         self.tool = None
         self._clear_marker()
+        for tool in (self.triangulator, self.ground):
+            if tool is not None:
+                tool.remove()
+        self.triangulator = self.ground = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -93,11 +98,19 @@ class PanoramaxPlugin:
         if self.dock is None:
             self.dock = PanoramaxDock(self.iface.mainWindow())
             self.dock.pictureChanged.connect(self._on_picture_changed)
-            self.dock.extractRequested.connect(self.extract)
             self.dock.pickToolRequested.connect(self.activate_pick_tool)
             self.dock.instanceChanged.connect(self._on_instance_changed)
             self.dock.viewChanged.connect(self._on_view_changed)
             self.dock.message.connect(self._show_message)
+            self.dock.measureToggled.connect(self._on_measure_toggled)
+            self.dock.aimRequested.connect(self._on_aim)
+            self.dock.measureSaveRequested.connect(self._on_measure_save)
+            self.dock.measureClearRequested.connect(self._on_measure_clear)
+            self.dock.measureModeChanged.connect(self._on_measure_mode)
+            self.dock.photoClicked.connect(self._on_photo_clicked)
+            self.dock.cameraHeightChanged.connect(self._on_camera_height)
+            self.dock.terrainChanged.connect(self._on_terrain_changed)
+            self.terrain.use_ign = self.dock.use_ign()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -142,38 +155,6 @@ class PanoramaxPlugin:
             self.iface.messageBar().pushMessage(
                 "Panoramax", "Impossible de créer la couche de tuiles vectorielles.",
                 level=Qgis.MessageLevel.Critical, duration=6)
-
-    def extract(self, kind):
-        extent = self.canvas.extent()
-        crs = self.canvas.mapSettings().destinationCrs()
-
-        dlg = QProgressDialog("Téléchargement des tuiles Panoramax…", "Annuler", 0, 100,
-                              self.iface.mainWindow())
-        dlg.setWindowTitle("Panoramax")
-        dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        dlg.setMinimumDuration(300)
-
-        def progress(done, total):
-            dlg.setMaximum(max(total, 1))
-            dlg.setValue(done)
-            QApplication.processEvents()
-            return not dlg.wasCanceled()
-
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            layer, msg = layers.extract(kind, extent, crs, progress)
-        except Exception as exc:  # erreur inattendue : on informe sans planter QGIS
-            layer, msg = None, "Erreur : {}".format(exc)
-        finally:
-            QApplication.restoreOverrideCursor()
-            dlg.close()
-
-        if layer is not None:
-            QgsProject.instance().addMapLayer(layer)
-            level = Qgis.MessageLevel.Success if layer.featureCount() else Qgis.MessageLevel.Warning
-        else:
-            level = Qgis.MessageLevel.Warning
-        self.iface.messageBar().pushMessage("Panoramax", msg, level=level, duration=8)
 
     # ------------------------------------------------------------------
     # Outil clic
@@ -263,3 +244,90 @@ class PanoramaxPlugin:
         if self.cursor is not None:
             self.cursor.remove()
             self.cursor = None
+
+    # ------------------------------------------------------------------
+    # Mesures : triangulation, largeur, hauteur
+    # ------------------------------------------------------------------
+    def _ensure_triangulator(self):
+        if self.triangulator is None:
+            self.triangulator = Triangulator(self.canvas)
+        return self.triangulator
+
+    def _ensure_ground(self):
+        if self.ground is None:
+            self.ground = GroundMeasure(self.canvas)
+            self.ground.camera_height = self.dock.camera_height()
+        return self.ground
+
+    def _active_measure(self):
+        mode = self.dock.measure_mode()
+        if mode == "tri":
+            return self._ensure_triangulator()
+        ground = self._ensure_ground()
+        if ground.mode != mode:
+            ground.set_mode(mode)
+        return ground
+
+    def _show_measure(self, text):
+        """Texte de la mesure dans le panneau et repères dans la visionneuse."""
+        self.dock.set_measure_status(text)
+        active = self.dock.btn_measure.isChecked() and self.dock.measure_mode() != "tri"
+        self.dock.set_measure_marks(self.ground.viewer_marks() if active and self.ground is not None else None)
+
+    def _clear_measures(self):
+        for tool in (self.triangulator, self.ground):
+            if tool is not None:
+                tool.clear()
+
+    def _on_measure_toggled(self, checked):
+        if not checked:
+            self._clear_measures()
+        self._show_measure(self._active_measure().status())
+
+    def _on_measure_mode(self, mode):
+        self._clear_measures()
+        self._show_measure(self._active_measure().status())
+
+    def _on_aim(self, sighting):
+        self._show_measure(self._ensure_triangulator().add(sighting))
+
+    def _on_photo_clicked(self, click):
+        tool = self._active_measure()
+        if not isinstance(tool, GroundMeasure) or not tool.needs_profile():
+            self._show_measure(tool.add_click(click))  # sommet d'un objet : pas de terrain
+            return
+        self._show_measure("Altitude du terrain le long de la visée…")
+        mode = tool.mode
+
+        def done(profile, label, warning):
+            if self.ground is not tool or tool.mode != mode:
+                return  # mesure effacée ou mode changé entre-temps
+            click.update(profile=profile, terrain=label)
+            self._show_measure(tool.add_click(click, warning))
+
+        self.terrain.profile(click["lon"], click["lat"], click["yaw"], done)
+
+    def _on_terrain_changed(self):
+        self.terrain.use_ign = self.dock.use_ign()
+        if self.ground is not None:
+            self.ground.clear()  # les profils des clics viennent de l'ancienne source
+            if self.dock.measure_mode() != "tri":
+                self._show_measure(self.ground.status())
+
+    def _on_camera_height(self, value):
+        ground = self._ensure_ground()
+        ground.set_camera_height(value)
+        if self.dock.measure_mode() != "tri":
+            self._show_measure(ground.status())
+
+    def _on_measure_save(self):
+        tri = self._ensure_triangulator()
+        ok, msg = tri.save()
+        self.iface.messageBar().pushMessage(
+            "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
+        self._show_measure(tri.status())
+
+    def _on_measure_clear(self):
+        tool = self._active_measure()
+        tool.clear()
+        self._show_measure(tool.status())

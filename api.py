@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Accès à l'API Panoramax (méta-catalogue national) et utilitaires réseau."""
 
-import gzip
 import json
 import math
 import time
@@ -104,9 +103,11 @@ def parse_viewer_url(url):
     return result
 
 
-def _request(url, prefer_cache=False):
+def _request(url, prefer_cache=False, timeout_ms=None):
     req = QNetworkRequest(QUrl(url))
     req.setRawHeader(b"User-Agent", b"QGIS-Visionneuse-Panoramax/1.0")
+    if timeout_ms:
+        req.setTransferTimeout(int(timeout_ms))  # sans réponse dans ce délai : requête abandonnée
     if prefer_cache:
         # Utilise le cache disque réseau de QGIS dès qu'une copie existe
         req.setAttribute(QNetworkRequest.Attribute.CacheLoadControlAttribute,
@@ -114,14 +115,19 @@ def _request(url, prefer_cache=False):
     return req
 
 
-def fetch(url, callback, prefer_cache=False):
+def fetch(url, callback, prefer_cache=False, timeout_ms=None):
     """GET asynchrone. callback(bytes | None, message_erreur | None)."""
-    reply = QgsNetworkAccessManager.instance().get(_request(url, prefer_cache))
+    reply = QgsNetworkAccessManager.instance().get(_request(url, prefer_cache, timeout_ms))
     _pending.add(reply)
 
     def done():
         _pending.discard(reply)
-        if reply.error() != QNetworkReply.NetworkError.NoError:
+        err = reply.error()
+        timeout_errors = (QNetworkReply.NetworkError.OperationCanceledError,
+                          getattr(QNetworkReply.NetworkError, "TimeoutError", None))
+        if timeout_ms and err in timeout_errors:
+            callback(None, "pas de réponse en {:.0f} s".format(timeout_ms / 1000.0))
+        elif err != QNetworkReply.NetworkError.NoError:
             callback(None, reply.errorString())
         else:
             callback(bytes(reply.readAll()), None)
@@ -131,7 +137,7 @@ def fetch(url, callback, prefer_cache=False):
     return reply
 
 
-def fetch_json(url, callback, prefer_cache=False):
+def fetch_json(url, callback, prefer_cache=False, timeout_ms=None):
     """GET asynchrone d'un JSON. callback(dict | None, message_erreur | None)."""
 
     def done(data, error):
@@ -143,18 +149,7 @@ def fetch_json(url, callback, prefer_cache=False):
         except (ValueError, UnicodeDecodeError) as exc:
             callback(None, "Réponse JSON invalide : {}".format(exc))
 
-    return fetch(url, done, prefer_cache)
-
-
-def fetch_blocking(url):
-    """GET bloquant (utilisé pour l'extraction des tuiles). Retourne bytes ou lève IOError."""
-    reply = QgsNetworkAccessManager.instance().blockingGet(_request(url, prefer_cache=True))
-    if reply.error() != QNetworkReply.NetworkError.NoError:
-        raise IOError(reply.errorString())
-    data = bytes(reply.content())
-    if data[:2] == b"\x1f\x8b":  # tuile servie compressée sans décompression automatique
-        data = gzip.decompress(data)
-    return data
+    return fetch(url, done, prefer_cache, timeout_ms)
 
 
 def search_url(lon, lat, radius_m=25, limit=20):
@@ -328,3 +323,30 @@ def nearest_cached(lon, lat, max_m):
     dx = (flon - lon) * 111320.0 * math.cos(math.radians(lat))
     dy = (flat - lat) * 111320.0
     return feat if math.hypot(dx, dy) <= max_m else None
+
+
+def sequence_axis(item):
+    """Direction de déplacement le long de la séquence (cap en degrés), ou None.
+
+    Calculée entre les photos voisines (précédente et suivante, déjà en cache)
+    pour suivre l'axe de la voie, plutôt que l'orientation de la caméra.
+    """
+    def position(feat):
+        try:
+            return [float(v) for v in feat["geometry"]["coordinates"][:2]]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    here = position(item)
+    prev_item = cached_item(id_from_href(item_link(item, "prev")))
+    next_item = cached_item(id_from_href(item_link(item, "next")))
+    a = position(prev_item) if prev_item else None
+    b = position(next_item) if next_item else None
+    a, b = (a or here), (b or here)
+    if a is None or b is None or a == b:
+        return None
+    dx = (b[0] - a[0]) * math.cos(math.radians((a[1] + b[1]) / 2))
+    dy = b[1] - a[1]
+    if math.hypot(dx, dy) * 111320.0 < 0.5:  # photos quasi confondues (arrêt) : direction peu fiable
+        return None
+    return math.degrees(math.atan2(dx, dy)) % 360

@@ -40,6 +40,7 @@ import re
 from . import api
 from . import calibration
 from .calibration import Calibration
+from .measure import FREE_SURFACES
 from .pano_widget import PanoWidget
 
 
@@ -455,12 +456,13 @@ MEASURE_MODES = (
     ("Largeur parallèle à la route", "width"),
     ("Hauteur d'un objet", "height"),
     ("Triangulation d'un objet", "tri"),
+    ("Mesure libre 3D", "free"),
     ("Calage : inclinaison (objets verticaux)", "tilt"),
     ("Calage : cap et position (repères sur la carte)", "heading"),
     ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
 
-GROUND_MODES = ("width", "road", "height")  # mesures au sol par lancer de rayon (GroundMeasure)
+GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
 
 NO_WEBENGINE_TEXT = (
     "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
@@ -492,6 +494,10 @@ class PanoramaxDock(QDockWidget):
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
+    # Mesure libre 3D : surface choisie, façade à (re)définir, hauteur du plan horizontal
+    surfaceChanged = pyqtSignal(str)
+    facadeRequested = pyqtSignal()
+    planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
 
@@ -641,6 +647,36 @@ class PanoramaxDock(QDockWidget):
         tlay.addWidget(self.chk_ign)
         tlay.addStretch(1)
         mbox.addWidget(self.terrain_row)
+        self.free_row = QWidget(self.measure_box)
+        flay = QHBoxLayout(self.free_row)
+        flay.setContentsMargins(0, 0, 0, 0)
+        flay.addWidget(QLabel("Surface :"))
+        self.cmb_surface = QComboBox()
+        for label, key in FREE_SURFACES:
+            self.cmb_surface.addItem(label, key)
+        self.cmb_surface.setToolTip(
+            "Surface sur laquelle se trouvent les points cliqués : le sol, une façade (plan vertical défini "
+            "par deux clics au pied du mur), le plan vertical face à la caméra passant par le premier point "
+            "(cliqué au sol), un plan horizontal à une hauteur donnée, ou aucune (triangulation depuis deux photos)")
+        self.cmb_surface.currentIndexChanged.connect(self._on_surface)
+        flay.addWidget(self.cmb_surface)
+        self.btn_facade = QPushButton("Définir la façade")
+        self.btn_facade.setToolTip("Cliquer ensuite au pied du mur, à ses deux extrémités")
+        self.btn_facade.clicked.connect(self.facadeRequested)
+        flay.addWidget(self.btn_facade)
+        self.lbl_plane = QLabel("à")
+        flay.addWidget(self.lbl_plane)
+        self.spin_plane = QDoubleSpinBox()
+        self.spin_plane.setRange(-20.0, 50.0)
+        self.spin_plane.setSingleStep(0.1)
+        self.spin_plane.setDecimals(2)
+        self.spin_plane.setSuffix(" m du sol")
+        self.spin_plane.setValue(1.0)
+        self.spin_plane.setToolTip("Hauteur du plan horizontal au-dessus du sol sous la caméra")
+        self.spin_plane.valueChanged.connect(lambda v: self.planeHeightChanged.emit(float(v)))
+        flay.addWidget(self.spin_plane)
+        flay.addStretch(1)
+        mbox.addWidget(self.free_row)
         self.lbl_calibration = QLabel("")
         self.lbl_calibration.setWordWrap(True)
         mbox.addWidget(self.lbl_calibration)
@@ -818,6 +854,14 @@ class PanoramaxDock(QDockWidget):
         settings.setValue("visionneuse_panoramax/reference_length", float(length))
         self.referenceChanged.emit()
 
+    def surface(self):
+        """Surface de la mesure libre 3D (voir measure.FREE_SURFACES)."""
+        return self.cmb_surface.currentData() or "ground"
+
+    def _on_surface(self, index):
+        self._update_measure_widgets()
+        self.surfaceChanged.emit(self.surface())
+
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
         self.cameraHeightChanged.emit(float(value))
@@ -833,6 +877,11 @@ class PanoramaxDock(QDockWidget):
         self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
         for w in (self.cmb_reference, self.spin_reference):
             w.setVisible(mode == "camera")
+        surface = self.surface()
+        self.free_row.setVisible(mode == "free")
+        self.btn_facade.setVisible(surface == "facade")
+        for w in (self.lbl_plane, self.spin_plane):
+            w.setVisible(surface == "horizontal")
         self.update_calibration_label()
         crosshair = active and mode == "tri"
         if self.web is not None:

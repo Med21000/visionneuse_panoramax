@@ -5,7 +5,7 @@ Ce document décrit en détail comment la Visionneuse Panoramax mesure à partir
 Sommaire :
 
 1. [Principes communs](#1-principes-communs)
-2. [Méthodes de mesure](#2-méthodes-de-mesure)
+2. [Méthodes de mesure](#2-méthodes-de-mesure), dont la [mesure libre 3D](#25-mesure-libre-3d)
 3. [Fonctions de calage](#3-fonctions-de-calage)
 4. [Sources d'erreur et ordres de grandeur](#4-sources-derreur-et-ordres-de-grandeur)
 5. [Pistes d'amélioration des calculs](#5-pistes-damélioration-des-calculs)
@@ -115,10 +115,10 @@ Deux modes partagent les mêmes clics au sol mais pas le même calcul. Dans les 
 **Calcul.**
 
 1. Le pied est prolongé jusqu'au sol (section 2.1) : distance horizontale `d`, altitude du sol `z_sol`.
-2. Le sommet est supposé à la **même distance horizontale** (objet vertical) : son altitude vaut `z_caméra + d · tan(e_sommet)`.
+2. Le sommet est pris dans le **plan vertical face à la caméra qui passe par le pied** : à l'écart de cap `Δ` entre le pied et le sommet, il est à la distance horizontale `d / cos Δ`, et son altitude vaut `z_caméra + d / cos Δ · tan(e_sommet)`. Pour un objet fin (poteau, `Δ ≈ 0`), c'est la même distance que le pied ; pour un mur face à la caméra, le sommet peut être cliqué un peu de côté sans fausser la hauteur. Un sommet à plus de 45° de côté est refusé. Ce modèle est exactement celui de la mesure libre sur le plan vertical face à la caméra.
 3. Hauteur = altitude du sommet − `z_sol`.
 
-Sur sol plat, cela revient à `H = h · (1 + tan(e_sommet) / tan(−e_pied))` : la hauteur est **proportionnelle à la hauteur de caméra**. Un sommet sous le pied est refusé (clics inversés).
+Sur sol plat et sommet au-dessus du pied, cela revient à `H = h · (1 + tan(e_sommet) / tan(−e_pied))` : la hauteur est **proportionnelle à la hauteur de caméra**. Le pied doit être cliqué **exactement au contact du sol** : un clic un peu au-dessus, sur le mur, ou masqué par un trottoir ou un véhicule, prolonge le rayon jusqu'au sol derrière le mur, et la distance comme la hauteur sont alors trop grandes (le point s'affiche sur la carte au-delà de la façade). Un sommet sous le pied est refusé (clics inversés).
 
 **Incertitude affichée.** Comme pour la largeur : ±0,5° sur l'élévation de chaque clic.
 
@@ -165,6 +165,42 @@ Une visée lointaine ou une photo mal positionnée compte donc moins. Comme les 
 **Géométrie favorable.** L'erreur de position vaut à peu près `σ / sin θ`, avec `θ` l'angle de croisement : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet. Une troisième visée améliore et contrôle le résultat.
 
 ---
+
+### 2.5 Mesure libre 3D
+
+**But.** Mesurer entre deux points quelconques, dans un plan arbitraire, avec des résultats cohérents avec les autres modes.
+
+**Principe.** Une photo ne donne qu'une direction par clic ; il faut une contrainte de plus pour obtenir un point 3D. Les modes précédents en utilisent chacun une, implicite : le sol pour les largeurs, le plan vertical passant par le pied pour la hauteur. La mesure libre rend ce choix explicite. Chaque clic devient un point 3D dans un repère local unique (est, nord, altitude), avec le même modèle de caméra que les autres modes :
+
+- caméra à la position de la photo (recalée si possible), à la hauteur de caméra (calée pour la séquence, sinon celle du panneau) au-dessus du sol sous la photo. Cette altitude du sol est celle du profil de terrain du premier clic fait sur la photo, puis la même pour tous ses clics : le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart à Commarin), chaque clic aurait sinon sa propre altitude de caméra ;
+- direction du clic corrigée de l'inclinaison et du cap.
+
+Puis le rayon est intersecté avec la **surface** choisie :
+
+| Surface | Définition | Calcul du point |
+|---|---|---|
+| Sol | terrain le long de la visée (section 2.1) | même fonction que les mesures de largeur et de hauteur |
+| Façade | plan vertical passant par deux points cliqués au sol, au pied du mur | intersection rayon–plan : `t = n·(A − C) / n·u`, point `C + t·u` |
+| Plan vertical face à la caméra | plan vertical passant par le premier point (cliqué au sol), de normale horizontale dirigée vers la caméra | le premier point au sol, les suivants sur le plan |
+| Plan horizontal | altitude du sol sous la caméra + hauteur indiquée | intersection rayon–plan |
+| Triangulation 3D | aucune : chaque point est visé depuis deux photos différentes | point le plus proche des deux visées 3D (moindres carrés : `Σ (I − u uᵀ) X = Σ (I − u uᵀ) C`) |
+
+`C` est le centre optique, `u` la direction unitaire du clic, `A` un point du plan et `n` sa normale.
+
+**Mesure.** Sur le plan vertical face à la caméra, la grandeur mesurée est la **hauteur** (composante verticale), comme le préréglage « Hauteur d'un objet » : un sommet cliqué un peu de côté ne l'allonge pas. Sur les autres surfaces, c'est la distance 3D entre les deux points. Dans tous les cas, elle est décomposée en distance horizontale, dénivelé (du premier au second point), et, si l'axe de la route est connu, composantes le long de la route et en travers. Une même mesure donne donc à la fois ce que donnent la largeur parallèle, la largeur perpendiculaire et la hauteur.
+
+**Cohérence.** Les préréglages et la mesure libre partagent le même calcul de point : sur sol plat, la mesure libre au sol redonne exactement la largeur parallèle à la route, et la mesure dans le plan vertical face à la caméra redonne exactement la hauteur d'un objet (vérifié sur scène simulée). La façade et le plan horizontal sont définis dans le repère géographique : on peut les mesurer depuis plusieurs photos.
+
+**Contrôles.** Visée parallèle au plan, point derrière le plan ou à plus de 100 m : refusés. Triangulation 3D : les deux clics d'un point doivent venir de deux photos différentes, se croiser d'au moins 3° et devant les photos. Une **incidence rasante** (moins de 15° entre la visée et le plan) est signalée : l'erreur croît alors comme `1/sin(incidence)`. Des altitudes de sources différentes entre les clics (service IGN et sol plat, par exemple) sont signalées, la composante verticale pouvant en être faussée.
+
+**Incertitude affichée.** Écart maximal de la mesure quand l'élévation de chaque clic varie de ±0,5°, et en triangulation 3D quand le cap varie de l'erreur de visée de la photo. Sur le plan horizontal, la hauteur saisie du plan varie aussi de ±5 cm. Sur une façade, les deux clics qui l'ont définie varient aussi : une erreur sur la distance du mur agrandit ou rétrécit toutes les mesures faites dessus. Sur scène simulée, une fenêtre de 2 m vue en face donne ±0,04 m, et la même vue à 13° d'incidence ±0,58 m.
+
+**Limites.**
+
+- Un point qui n'est pas sur la surface choisie est faux : un balcon ou un appui de fenêtre en saillie est projeté sur le plan de la façade.
+- **Plan horizontal** : il est vu sous une incidence d'autant plus rasante qu'il est proche de la hauteur de la caméra. Avec une caméra à 2 m et un plan à 1 m, il n'est qu'à 1 m sous la caméra, contre 2 m pour le sol : les visées y sont deux fois plus rasantes et l'erreur deux fois plus forte (±0,15 m contre ±0,04 m au sol pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
+- Un plan incliné inconnu (pan de toit) ne se déduit pas d'une photo : il faudrait trois points connus en 3D, par triangulation depuis plusieurs photos.
+- En triangulation 3D, la composante verticale dépend de l'altitude du sol sous chaque photo (profil de terrain) ; la hauteur de caméra, la même pour les deux photos d'une séquence, s'élimine dans les distances.
 
 ## 3. Fonctions de calage
 
@@ -275,9 +311,12 @@ Le calcul est itéré jusqu'à convergence (10 passes au plus). L'inverse de la 
 
 ### Mesures sans hypothèse de sol ni de hauteur de caméra
 
-- **Largeur par triangulation.** Trianguler chaque extrémité ou chaque bord depuis deux ou trois photos : la largeur ne dépend plus ni de la hauteur de caméra, ni de l'inclinaison, ni du terrain.
-- **Triangulation 3D.** Utiliser aussi l'élévation des visées : on obtiendrait l'altitude des points et la hauteur d'un objet par triangulation de son pied et de son sommet, sans hauteur de caméra.
-- **Mesures entre photos.** Relier deux points triangulés pour mesurer une distance quelconque (longueur d'un mur, entraxe de poteaux).
+La mesure libre 3D (section 2.5) le permet déjà par triangulation depuis deux photos. Pistes pour aller plus loin :
+
+- **Plus de deux visées par point** en triangulation 3D, pondérées comme la triangulation planimétrique, avec l'écart des visées comme contrôle.
+- **Plan quelconque** défini par trois points triangulés, pour mesurer sur un pan de toit, un talus ou une rampe.
+- **Points réutilisables** : garder les points mesurés pour les relier entre eux (polyligne, surface, angle) et les enregistrer dans une couche, avec leur altitude.
+- **Préréglages sur le moteur 3D** : réécrire largeurs et hauteur comme des préréglages de la mesure libre (surface et grandeur affichée), pour un seul code de calcul.
 
 ### Modèles et données plus riches
 
@@ -346,3 +385,8 @@ Le calcul est itéré jusqu'à convergence (10 passes au plus). L'inverse de la 
 | `REACH` | 300 m | portée du recalage autour des photos utilisées | `calibration.py` |
 | `OUTLIER` | 4 | seuil de refus d'un repère incohérent (écarts-types) | `calibration.py` |
 | `CAMERA_MIN`, `CAMERA_MAX` | 0,3 m, 6 m | plage de recherche de la hauteur de caméra | `calibration.py` |
+| `MAX_RANGE` | 100 m | portée maximale d'un point sur un plan (mesure libre) | `geometry.py` |
+| `GRAZING` | 15° | incidence en dessous de laquelle une visée sur un plan est signalée | `geometry.py` |
+| `MIN_CROSSING` | 3° | croisement minimal des visées en triangulation 3D | `geometry.py` |
+| `MAX_TOP_OFFSET` | 45° | écart de cap maximal entre le pied et le sommet d'une hauteur | `ground.py` |
+| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur saisie du plan horizontal | `measure.py` |

@@ -139,8 +139,17 @@ def measure_width(camera_height, a, b, axis):
             "uncertainty": _spread(width, [a, b])}
 
 
+MAX_TOP_OFFSET = 45.0  # écart de cap maximal entre le pied et le sommet d'un objet (degrés)
+
+
 def measure_height(camera_height, base, top):
-    """Hauteur d'un objet : clic au pied (au sol) puis au sommet, sur la même photo."""
+    """Hauteur d'un objet : clic au pied (au sol) puis au sommet, sur la même photo.
+
+    Le sommet est pris dans le plan vertical face à la caméra qui passe par le pied :
+    pour un objet fin (poteau), c'est à la même distance que le pied ; pour un mur
+    face à la caméra, le sommet peut être cliqué un peu de côté. Même modèle que la
+    mesure libre sur le plan vertical face à la caméra (geometry.py).
+    """
     if base.get("pic") != top.get("pic"):
         raise GroundError("Le pied et le sommet doivent être cliqués sur la même photo.")
     profile = base.get("profile") or flat_profile()
@@ -148,7 +157,11 @@ def measure_height(camera_height, base, top):
     def height(clicks):
         b, t = clicks
         s, z_ground = intersect(profile, camera_height, b["elev"])
-        z_top = profile[0][1] + camera_height + s * math.tan(math.radians(t["elev"]))
+        offset_angle = (t["yaw"] - b["yaw"] + 540) % 360 - 180
+        if abs(offset_angle) > MAX_TOP_OFFSET:
+            raise GroundError("Le sommet est trop à côté du pied : cliquez-le au-dessus du pied.")
+        reach = s / math.cos(math.radians(offset_angle))  # distance horizontale jusqu'au plan
+        z_top = profile[0][1] + camera_height + reach * math.tan(math.radians(t["elev"]))
         return z_top - z_ground
 
     d, p, _ = _ground_point(camera_height, base)

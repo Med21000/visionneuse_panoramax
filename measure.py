@@ -28,7 +28,7 @@ from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPen
 
-from . import calibration, ground, triangulation
+from . import calibration, geometry, ground, triangulation
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
@@ -699,3 +699,323 @@ class CalibrationTool:
                        "Un repère seul corrige le cap (choisissez-le lointain) ; trois repères ou plus, bien "
                        "répartis autour de la photo, recalent aussi sa position. Le recalage vaut pour les photos "
                        "de la séquence à moins de {} m.".format(_num(calibration.REACH, 0)))
+
+
+# --------------------------------------------------------------------------
+# Mesure libre 3D
+# --------------------------------------------------------------------------
+FREE_SURFACES = (
+    ("Sol", "ground"),
+    ("Façade (plan vertical)", "facade"),
+    ("Plan vertical face à la caméra", "vertical"),
+    ("Plan horizontal", "horizontal"),
+    ("Triangulation 3D (deux photos)", "tri3d"),
+)
+SURFACE_NAMES = {key: label.lower() for label, key in FREE_SURFACES}
+
+
+PLANE_HEIGHT_ERROR = 0.05  # incertitude de la hauteur saisie du plan horizontal (m)
+
+
+class FreeMeasure(GroundMeasure):
+    """Mesure libre entre deux points 3D, chacun pris sur une surface au choix (voir
+    geometry.py) : sol, façade, plan vertical face à la caméra, plan horizontal, ou
+    triangulation depuis deux photos. Même modèle de caméra que les autres mesures
+    (calages, hauteur de caméra, terrain) : un point est le même quel que soit le mode.
+    Le résultat est la distance 3D et sa décomposition.
+    """
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self.mode = "free"
+        self.surface = "ground"
+        self.plane_height = 1.0  # hauteur du plan horizontal au-dessus du sol (m)
+        self.facade = None  # deux points (lon, lat, altitude) au pied du mur
+        self.facade_source = None  # les deux clics qui l'ont définie (pour l'incertitude)
+        self.facade_clicks = []  # clics de définition de la façade en cours
+        self.defining = False  # les prochains clics définissent la façade
+        self.facade_item = None
+        self.incidence = None  # angle d'incidence le plus rasant sur le plan (degrés)
+
+    # Réglages ---------------------------------------------------------------
+    def set_mode(self, mode):
+        pass  # un seul mode
+
+    def set_surface(self, surface):
+        self.finish()
+        self.surface = surface
+        self.defining = surface == "facade" and self.facade is None
+        self._draw()
+
+    def set_plane_height(self, value):
+        self.plane_height = float(value)
+        self._compute()
+
+    def start_facade(self):
+        """Les deux prochains clics, au pied du mur, définissent la façade."""
+        self.finish()
+        self.defining = True
+        self._draw()
+
+    def needs_profile(self):
+        return True  # altitude de la caméra (et du sol) pour chaque clic
+
+    def _height(self, click):
+        """Hauteur de caméra du clic : calée pour sa séquence, sinon celle du panneau."""
+        sequence = click.get("sequence")
+        cam = self.calibration.camera(sequence) if self.calibration and sequence else None
+        return cam["height"] if cam else self.camera_height
+
+    # Clics --------------------------------------------------------------------
+    def add_click(self, click, notice=None):
+        if notice:
+            self.notice = notice
+        if self.defining:
+            self.error = None
+            self.facade_clicks.append(click)
+            if len(self.facade_clicks) == 2:
+                clicks, self.facade_clicks = self.facade_clicks, []
+                try:
+                    self.facade = self._facade_from(clicks)
+                    self.facade_source = clicks
+                    self.defining = False
+                except (geometry.GeometryError, ground.GroundError) as exc:
+                    self.error = str(exc)
+            self._draw()
+            return self.status()
+        if len(self.clicks) >= self._needed():
+            self.finish()  # nouvelle mesure, la précédente reste affichée
+        self.clicks.append(click)
+        self._compute()
+        return self.status()
+
+    def _facade_from(self, clicks):
+        """Façade (deux points lon, lat, altitude) à partir de deux clics au pied du mur."""
+        origin = (clicks[0]["lon"], clicks[0]["lat"])
+        a, b = (geometry.on_ground(c, self._height(c), origin)[0] for c in clicks)
+        geometry.vertical_plane(a, b)  # contrôle
+        return [geometry.to_geographic(a, origin), geometry.to_geographic(b, origin)]
+
+    def _needed(self):
+        return 4 if self.surface == "tri3d" else 2
+
+    def _points(self, clicks, facade=None, plane_height=None):
+        """Points 3D (repère local centré sur le premier clic) des clics complets, et
+        l'angle d'incidence le plus rasant sur le plan. `facade` remplace la façade définie."""
+        facade = facade or self.facade
+        if not clicks:
+            return [], None, None
+        origin = (clicks[0]["lon"], clicks[0]["lat"])
+        h = self._height
+        incidence = None
+        # Altitude du sol sous chaque photo : celle du premier clic fait sur la photo, la même
+        # ensuite pour tous ses clics (le profil d'un clic dépend de la direction visée)
+        ground_z = {}
+        for c in clicks:
+            ground_z.setdefault(c.get("pic"), (c.get("profile") or ground.flat_profile())[0][1])
+
+        def zof(click):
+            return ground_z[click.get("pic")]
+        if self.surface == "ground":
+            pts = [geometry.on_ground(c, h(c), origin)[0] for c in clicks]
+        elif self.surface == "tri3d":
+            pts = []
+            for k in range(0, len(clicks) - 1, 2):
+                pair = clicks[k:k + 2]
+                if pair[0].get("pic") == pair[1].get("pic"):
+                    raise geometry.GeometryError("Changez de photo pour viser le même point sous un autre angle.")
+                pts.append(geometry.triangulate([geometry.camera(c, h(c), origin, zof(c)) for c in pair])[0])
+        else:
+            if self.surface == "facade":
+                if not facade:
+                    raise geometry.GeometryError("Façade non définie : cliquez « Définir la façade ».")
+                plane = geometry.vertical_plane(*(geometry.to_local(*p, origin) for p in facade))
+                planar = clicks
+                pts = []
+            elif self.surface == "vertical":
+                first = geometry.on_ground(clicks[0], h(clicks[0]), origin)[0]
+                plane = geometry.facing_plane(geometry.camera(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0], first)
+                planar, pts = clicks[1:], [first]
+            else:  # horizontal
+                plane = ((0.0, 0.0, zof(clicks[0]) + (self.plane_height if plane_height is None else plane_height)),
+                         (0.0, 0.0, 1.0))
+                planar, pts = clicks, []
+            for c in planar:
+                p, angle = geometry.on_plane(c, h(c), origin, *plane, ground_z=zof(c))
+                pts.append(p)
+                incidence = angle if incidence is None else min(incidence, angle)
+        return pts, incidence, origin
+
+    def _quantity(self, d):
+        """Grandeur mesurée : la hauteur (composante verticale) sur le plan vertical face à la
+        caméra, comme le préréglage « Hauteur d'un objet » ; sinon la distance 3D."""
+        return abs(d["vertical"]) if self.surface == "vertical" else d["d3"]
+
+    def _distance(self, clicks, facade=None, plane_height=None):
+        pts, _, _ = self._points(clicks, facade, plane_height)
+        return self._quantity(geometry.decompose(pts[0], pts[1]))
+
+    def _spread(self, clicks):
+        """Écart maximal de la distance quand l'élévation de chaque clic varie de
+        ±ground.PITCH_ERROR (et, en triangulation, le cap de l'erreur de visée). Sur une
+        façade, ses deux clics de définition varient aussi : la distance du mur fausse
+        toutes les mesures faites dessus, en proportion."""
+        ref = self._distance(clicks)
+        worst = 0.0
+        if self.surface == "horizontal":
+            for sign in (-1, 1):  # hauteur du plan saisie à ±PLANE_HEIGHT_ERROR
+                try:
+                    worst = max(worst, abs(self._distance(
+                        clicks, plane_height=self.plane_height + sign * PLANE_HEIGHT_ERROR) - ref))
+                except (geometry.GeometryError, ground.GroundError):
+                    return float("inf")
+        if self.surface == "facade" and self.facade_source:
+            for i in range(len(self.facade_source)):
+                for sign in (-1, 1):
+                    moved = [dict(x) for x in self.facade_source]
+                    moved[i]["elev"] += sign * ground.PITCH_ERROR
+                    try:
+                        worst = max(worst, abs(self._distance(clicks, self._facade_from(moved)) - ref))
+                    except (geometry.GeometryError, ground.GroundError):
+                        return float("inf")
+        for i, c in enumerate(clicks):
+            moves = [("elev", ground.PITCH_ERROR)]
+            if self.surface == "tri3d":
+                moves.append(("yaw", triangulation.heading_error(c)))
+            for key, step in moves:
+                for sign in (-1, 1):
+                    moved = [dict(x) for x in clicks]
+                    moved[i][key] += sign * step
+                    try:
+                        worst = max(worst, abs(self._distance(moved) - ref))
+                    except (geometry.GeometryError, ground.GroundError):
+                        return float("inf")
+        return worst
+
+    def _compute(self):
+        self.result, self.error, self.incidence = None, None, None
+        try:
+            pts, self.incidence, origin = self._points(self.clicks)
+            if len(pts) == 2 and len(self.clicks) == self._needed():
+                d = geometry.decompose(pts[0], pts[1], self.clicks[0].get("axis"))
+                self.result = {"points": [geometry.to_geographic(p, origin)[:2] for p in pts],
+                               "value": self._quantity(d), "decomposition": d,
+                               "uncertainty": self._spread(self.clicks)}
+        except (geometry.GeometryError, ground.GroundError) as exc:
+            self.error = str(exc)
+            self.clicks.pop()  # clic refusé : on le refait
+        self._draw()
+
+    # Effacement ---------------------------------------------------------------
+    def finish(self):
+        self.facade_clicks = []
+        super().finish()
+
+    def clear(self):
+        self.facade_clicks = []
+        super().clear()
+
+    def clear_all(self):
+        """Efface aussi la façade, à redéfinir."""
+        super().clear_all()
+        self.facade = self.facade_source = None
+        self.defining = self.surface == "facade"
+        self._draw()
+
+    def remove(self):
+        super().remove()
+        if self.facade_item is not None:
+            self.facade_item.remove()
+            self.facade_item = None
+
+    # Affichage ----------------------------------------------------------------
+    def _draw(self):
+        points, label = [], ""
+        if self.result:
+            points = self.result["points"]
+            label = "{} m".format(_num(self.result["value"], 2))
+        elif self.clicks and not self.defining:
+            try:
+                pts, _, origin = self._points(self.clicks)
+                points = [geometry.to_geographic(p, origin)[:2] for p in pts]
+            except (geometry.GeometryError, ground.GroundError):
+                pass
+        if self.item is None and points:
+            self.item = MeasureItem(self.canvas)
+        if self.item is not None:
+            self.item.set_data(points, label)
+        # Façade : trait au pied du mur
+        if self.facade and self.surface == "facade":
+            if self.facade_item is None:
+                self.facade_item = MeasureItem(self.canvas)
+            self.facade_item.set_data([p[:2] for p in self.facade], "façade")
+        elif self.facade_item is not None:
+            self.facade_item.set_data([], "")
+
+    def viewer_marks(self):
+        clicks = self.facade_clicks if self.defining else self.clicks
+        points = []
+        for c in clicks:
+            pos = c.get("pos") or [None, None]
+            raw = c.get("raw") or [c["yaw"], c["elev"]]
+            points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1], "abs_yaw": raw[0], "elev": raw[1]})
+        label, beside = "", False
+        if self.result and not self.defining:
+            d = self.result["decomposition"]
+            beside = self.surface == "vertical" or abs(d["vertical"]) > d["horizontal"]  # trait vertical
+            label = "{}{} m ± {} m".format("↕ " if beside else "↔ ", _num(self.result["value"], 2),
+                                           _num(self.result["uncertainty"], 2))
+        return {"points": points, "label": label, "beside": beside}
+
+    def status(self):
+        prefix = (self.error + " ") if self.error else ""
+        if self.defining:
+            if not self.facade_clicks:
+                return prefix + ("Façade : cliquez au pied du mur, à une extrémité (le plan vertical passera "
+                                 "par les deux points).")
+            return "Façade : cliquez au pied du mur, à l'autre extrémité."
+        n = len(self.clicks)
+        if self.surface == "tri3d" and n < 4:
+            steps = ("Point 1 : cliquez-le sur cette photo.",
+                     "Point 1 : changez de photo et cliquez le même point, sous un autre angle.",
+                     "Point 2 : cliquez-le (sur cette photo ou une autre).",
+                     "Point 2 : changez de photo et cliquez le même point, sous un autre angle.")
+            return prefix + steps[n]
+        if n < 2:
+            hints = {
+                "ground": ("Cliquez le premier point, au sol.", "Cliquez le second point, au sol."),
+                "facade": ("Cliquez le premier point sur la façade.", "Cliquez le second point sur la façade."),
+                "vertical": ("Cliquez le premier point, au sol (pied de l'objet).",
+                             "Cliquez le second point, dans le plan vertical face à la caméra qui passe par le "
+                             "premier (sommet, angle…)."),
+                "horizontal": ("Cliquez le premier point sur le plan horizontal à {} m du sol.".format(
+                    _num(self.plane_height, 2)), "Cliquez le second point sur le même plan."),
+            }[self.surface]
+            return prefix + hints[n]
+        if self.error:
+            return self.error + " Cliquez à nouveau."
+        r, d = self.result, self.result["decomposition"]
+        if self.surface == "vertical":
+            text = "Hauteur : {} m (±{} m) · distance 3D {} · horizontale {}".format(
+                _num(r["value"], 2), _num(r["uncertainty"], 2), _num(d["d3"], 2), _num(d["horizontal"], 2))
+        else:
+            text = "Distance 3D : {} m (±{} m) · horizontale {} · verticale {}".format(
+                _num(d["d3"], 2), _num(r["uncertainty"], 2), _num(d["horizontal"], 2), _num(d["vertical"], 2))
+        if d["along"] is not None:
+            text += " · le long de la route {} · en travers {}".format(_num(d["along"], 2), _num(d["across"], 2))
+        text += " · surface : {}".format(SURFACE_NAMES[self.surface])
+        if self.surface == "horizontal":
+            gap = self._height(self.clicks[0]) - self.plane_height
+            text += " · plan à {} m sous la caméra, incidence {}°".format(
+                _num(gap, 2), _num(self.incidence or 0, 0))
+        if self.incidence is not None and self.incidence < geometry.GRAZING:
+            text += ". Visée rasante sur le plan ({}°) : mesure imprécise, prenez une photo plus en face".format(
+                _num(self.incidence, 0))
+        labels = {c.get("terrain") for c in self.clicks if c.get("terrain")}
+        height = self._height(self.clicks[0])
+        text += ". Terrain : {}, caméra à {} m.".format(" + ".join(sorted(labels)) or ground.FLAT, _num(height, 2))
+        if len(labels) > 1:
+            text += " Altitudes de sources différentes : la composante verticale peut être faussée."
+        if self.notice:
+            text += " ({}.)".format(self.notice)
+        return text

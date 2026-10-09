@@ -23,7 +23,7 @@ from qgis.PyQt.QtWidgets import QPushButton
 from . import api, layers
 from .cursor import ViewCursor
 from .calibration import Calibration
-from .measure import CalibrationTool, GroundMeasure, Triangulator
+from .measure import CalibrationTool, FreeMeasure, GroundMeasure, Triangulator
 from .terrain import TerrainProvider
 from .viewer_dock import GROUND_MODES, PanoramaxDock
 
@@ -77,6 +77,7 @@ class PanoramaxPlugin:
         self.triangulator = None
         self.ground = None
         self.calibrator = None
+        self.free = None  # mesure libre 3D
         self.calibration = Calibration()  # enregistré dans le projet QGIS
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
@@ -131,10 +132,10 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         self.landmark_tool = None
         self._clear_marker()
-        for tool in (self.triangulator, self.ground, self.calibrator):
+        for tool in (self.triangulator, self.ground, self.calibrator, self.free):
             if tool is not None:
                 tool.remove()
-        self.triangulator = self.ground = self.calibrator = None
+        self.triangulator = self.ground = self.calibrator = self.free = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -172,6 +173,9 @@ class PanoramaxPlugin:
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
             self.dock.terrainChanged.connect(self._on_terrain_changed)
             self.dock.referenceChanged.connect(self._on_reference_changed)
+            self.dock.surfaceChanged.connect(self._on_surface_changed)
+            self.dock.facadeRequested.connect(self._on_facade_requested)
+            self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.terrain.use_ign = self.dock.use_ign()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
@@ -352,10 +356,21 @@ class PanoramaxPlugin:
                                               self.dock.reference)
         return self.calibrator
 
+    def _ensure_free(self):
+        if self.free is None:
+            self.free = FreeMeasure(self.canvas)
+            self.free.camera_height = self.dock.camera_height()
+            self.free.calibration = self.dock.calibration
+            self.free.plane_height = self.dock.spin_plane.value()
+            self.free.set_surface(self.dock.surface())
+        return self.free
+
     def _active_measure(self):
         mode = self.dock.measure_mode()
         if mode == "tri":
             return self._ensure_triangulator()
+        if mode == "free":
+            return self._ensure_free()
         if mode in ("tilt", "heading", "camera"):
             tool = self._ensure_calibrator()
             if tool.mode != mode:
@@ -374,9 +389,9 @@ class PanoramaxPlugin:
         tool = None
         if self.dock.btn_measure.isChecked():
             tool = {"width": self.ground, "road": self.ground, "height": self.ground, "tilt": self.calibrator,
-                    "heading": self.calibrator, "camera": self.calibrator}.get(mode)
+                    "heading": self.calibrator, "camera": self.calibrator, "free": self.free}.get(mode)
         # Mesures terminées, gardées à l'écran jusqu'à « Tout effacer », puis mesure en cours
-        marks = self.ground.done_marks() if self.ground is not None else []
+        marks = [m for t in (self.ground, self.free) if t is not None for m in t.done_marks()]
         current = tool.viewer_marks() if tool is not None else None
         if current and current["points"]:
             marks = marks + [current]
@@ -388,8 +403,9 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         if self.triangulator is not None:
             self.triangulator.clear()
-        if self.ground is not None:
-            self.ground.finish()  # réussie, la mesure en cours reste affichée
+        for tool in (self.ground, self.free):
+            if tool is not None:
+                tool.finish()  # réussie, la mesure en cours reste affichée
         if self.calibrator is not None:
             self.calibrator.reset()
 
@@ -468,12 +484,13 @@ class PanoramaxPlugin:
 
     def _on_terrain_changed(self):
         self.terrain.use_ign = self.dock.use_ign()
-        if self.ground is not None:
-            self.ground.clear()  # les profils des clics viennent de l'ancienne source
+        for tool in (self.ground, self.free):
+            if tool is not None:
+                tool.clear()  # les profils des clics viennent de l'ancienne source
         if self.calibrator is not None:
             self.calibrator.reset()
-            if self.dock.measure_mode() in GROUND_MODES:
-                self._show_measure(self.ground.status())
+        if self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
 
     def _on_reference_changed(self):
         if self.calibrator is not None and self.dock.measure_mode() == "camera":
@@ -481,10 +498,25 @@ class PanoramaxPlugin:
             self._show_measure(self.calibrator.status())
 
     def _on_camera_height(self, value):
-        ground = self._ensure_ground()
-        ground.set_camera_height(value)
+        self._ensure_ground().set_camera_height(value)
+        if self.free is not None:
+            self.free.set_camera_height(value)
         if self.dock.measure_mode() in GROUND_MODES:
-            self._show_measure(ground.status())
+            self._show_measure(self._active_measure().status())
+
+    def _on_surface_changed(self, surface):
+        self._ensure_free().set_surface(surface)
+        if self.dock.measure_mode() == "free":
+            self._show_measure(self.free.status())
+
+    def _on_facade_requested(self):
+        self._ensure_free().start_facade()
+        self._show_measure(self.free.status())
+
+    def _on_plane_height(self, value):
+        self._ensure_free().set_plane_height(value)
+        if self.dock.measure_mode() == "free":
+            self._show_measure(self.free.status())
 
     def _on_measure_save(self):
         tri = self._ensure_triangulator()
@@ -498,8 +530,9 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         if self.triangulator is not None:
             self.triangulator.clear()
-        if self.ground is not None:
-            self.ground.clear_all()
+        for tool in (self.ground, self.free):
+            if tool is not None:
+                tool.clear_all()
         if self.calibrator is not None:
             self.calibrator.reset()
         self._show_measure(self._active_measure().status())

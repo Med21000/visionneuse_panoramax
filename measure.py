@@ -508,6 +508,7 @@ class CalibrationTool:
         self.clicks = []  # clics en attente (dicts de PanoramaxDock.photoClicked)
         self.error = None
         self.last = None  # résultat du dernier calage (texte)
+        self.new_camera = None  # hauteur de caméra de la séquence, juste calée (à reporter dans le panneau)
         self.item = None
 
     def set_mode(self, mode):
@@ -573,8 +574,12 @@ class CalibrationTool:
         except calibration.CalibrationError as exc:
             self.error = str(exc)
         else:
+            self.new_camera = self.calibration.camera(click["sequence"])["height"]
             self.last = "Caméra à {} m (±{} m) d'après cette référence de {} m.".format(
                 _num(r["height"], 2), _num(r["sigma"], 2), _num(known, 2))
+            if self.calibration.camera(click["sequence"])["count"] > 1:
+                self.last += " Avec les références précédentes : {} m.".format(_num(self.new_camera, 2))
+            self.last += " Hauteur reportée dans le réglage « Caméra à »."
             if r["sigma"] > 0.25:
                 self.last += " Référence trop loin ou trop courte pour être précise : prenez-en une plus proche."
 

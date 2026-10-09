@@ -452,8 +452,17 @@ class PanoramaxPlugin:
                 return  # mesure effacée ou mode changé entre-temps
             click.update(profile=profile, terrain=label)
             self._show_measure(tool.add_click(click, warning))
+            self._report_camera_height(tool)
 
         self.terrain.profile(click["lon"], click["lat"], click["yaw"], done)
+
+    def _report_camera_height(self, tool):
+        """Hauteur de caméra juste calée : reportée dans le réglage du panneau, qui l'enregistre."""
+        height = getattr(tool, "new_camera", None)
+        if height is not None and self.dock is not None:
+            tool.new_camera = None
+            spin = self.dock.spin_camera
+            spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
 
     def _on_terrain_changed(self):
         self.terrain.use_ign = self.dock.use_ign()

@@ -176,6 +176,44 @@ LIVE_VIEW_JS = r"""
 })()
 """
 
+# Filtrage anisotrope 4x des textures du panorama, contre le crénelage et le scintillement
+# des détails fins quand la photo est vue de loin. Photo Sphere Viewer crée ses textures sans
+# mipmaps (filtre linéaire, anisotropie 1) : on active les mipmaps (trilinéaire), sans
+# lesquels l'anisotropie n'a guère d'effet. Relancé régulièrement pour les tuiles chargées au
+# fil de la navigation ; chaque texture n'est traitée qu'une fois. __ON__ = false rétablit le
+# filtre d'origine quand on décoche l'option.
+ANISO_JS = r"""
+(function(){
+  var v = window.__pnxViewer;
+  var r = v && v.psv && v.psv.renderer;
+  if (!r || !r.scene || !r.scene.traverse) return;
+  var caps = r.renderer && r.renderer.capabilities;
+  var max = (caps && caps.getMaxAnisotropy && caps.getMaxAnisotropy()) || 1;
+  var on = __ON__;
+  var changed = false;
+  r.scene.traverse(function(o){
+    var mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    mats.forEach(function(m){
+      var texs = [m.map];  // matériau simple, ou textures passées au shader de l'adaptateur
+      if (m.uniforms) Object.keys(m.uniforms).forEach(function(k){
+        var u = m.uniforms[k] && m.uniforms[k].value;
+        if (u && u.isTexture) texs.push(u);
+      });
+      texs.forEach(function(t){
+        if (!t || !t.isTexture || !t.image || !!t.__qgisAniso === on) return;
+        t.__qgisAniso = on;
+        t.anisotropy = on ? Math.min(4, max) : 1;
+        t.generateMipmaps = on;
+        t.minFilter = on ? 1008 : 1006;  // THREE.LinearMipmapLinearFilter : THREE.LinearFilter
+        t.needsUpdate = true;
+        changed = true;
+      });
+    });
+  });
+  if (changed && v.psv.needsUpdate) v.psv.needsUpdate();
+})()
+"""
+
 # Réticule de visée (triangulation), centré sur la vue : c'est la direction lue
 # par getXYZ(). Ajouté au document, au-dessus de la visionneuse et sans capter la souris.
 CROSSHAIR_JS = r"""
@@ -552,6 +590,13 @@ class PanoramaxDock(QDockWidget):
         self.chk_follow = QCheckBox("Centrer la carte QGIS sur la photo")
         self.chk_follow.setChecked(True)
         opts.addWidget(self.chk_follow)
+        self.chk_aniso = QCheckBox("Filtrage anisotrope")
+        self.chk_aniso.setToolTip("Filtrage anisotrope 4x des textures : atténue le crénelage et le scintillement "
+                                  "des détails fins vus de loin, en gardant l'image nette. "
+                                  "Peut rendre la navigation un peu moins fluide.")
+        self.chk_aniso.setChecked(QgsSettings().value("visionneuse_panoramax/anisotropic", False, type=bool))
+        self.chk_aniso.toggled.connect(self._on_aniso)
+        opts.addWidget(self.chk_aniso)
         opts.addStretch(1)
         layout.addLayout(opts)
 
@@ -675,6 +720,11 @@ class PanoramaxDock(QDockWidget):
     def _on_terrain_ign(self, checked):
         QgsSettings().setValue("visionneuse_panoramax/terrain_ign", bool(checked))
         self.terrainChanged.emit()
+
+    def _on_aniso(self, checked):
+        QgsSettings().setValue("visionneuse_panoramax/anisotropic", bool(checked))
+        if self.web is not None:
+            self.web.page().runJavaScript(ANISO_JS.replace("__ON__", "true" if checked else "false"))
 
     def _nav_js(self, active):
         """Navigation de la visionneuse pendant une mesure : clic et flèches bloqués pour les
@@ -1027,6 +1077,11 @@ class PanoramaxDock(QDockWidget):
         if self.isVisible() and self.web is not None:
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
+            # Filtrage anisotrope : une lecture sur dix (toutes les secondes) suffit. Décoché,
+            # rien à faire : les nouvelles tuiles gardent le filtre d'origine.
+            self._aniso_tick = (getattr(self, "_aniso_tick", 0) + 1) % 10
+            if self._aniso_tick == 0 and self.chk_aniso.isChecked():
+                page.runJavaScript(ANISO_JS.replace("__ON__", "true"))
             if self.btn_measure.isChecked():  # la page peut avoir été rechargée
                 # Triangulation : on change de photo pour viser sous un autre angle, la
                 # navigation reste libre. Mesures par clics : un clic ne doit pas changer de photo.

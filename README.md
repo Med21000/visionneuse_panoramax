@@ -17,7 +17,7 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 
 ## Mesures
 
-Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, les fonctions de calage, les sources d'erreur et des pistes d'amélioration (calculs et prise de vues) sont détaillées dans [docs/MESURES.md](docs/MESURES.md).
+Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage, les sources d'erreur et des pistes d'amélioration (calculs et prise de vues) sont détaillées dans [docs/MESURES.md](docs/MESURES.md).
 
 ### Largeur et hauteur
 
@@ -63,7 +63,7 @@ Mode « Mesure libre 3D » : chaque clic devient un point en 3D, à l'intersecti
 - **Plan horizontal** : points sur un plan horizontal à la hauteur indiquée au-dessus du sol (dessus d'un muret, d'un quai).
 - **Triangulation 3D (deux photos)** : chaque point est cliqué sur deux photos différentes ; la mesure ne dépend alors ni du sol, ni de la hauteur de caméra.
 
-Le résultat est la distance 3D, avec sa décomposition : horizontale, verticale, le long de la route et en travers. Un point qui n'est pas vraiment sur la surface choisie (balcon ou appui en saillie sur une façade) est faux de toute sa saillie, et une visée rasante sur un plan est signalée. Détails dans [docs/MESURES.md](docs/MESURES.md#25-mesure-libre-3d).
+Le résultat est la distance 3D, avec sa décomposition : horizontale, verticale, le long de la route et en travers. Un point qui n'est pas vraiment sur la surface choisie (balcon ou appui en saillie sur une façade) est faux de toute sa saillie, et une visée rasante sur un plan est signalée. Détails dans [docs/MESURES.md](docs/MESURES.md#45-mesure-libre-3d).
 
 ### Calage des photos
 

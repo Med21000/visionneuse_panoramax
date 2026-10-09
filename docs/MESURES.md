@@ -1,413 +1,550 @@
-# Mesures et calage : méthodes, précision et pistes d'amélioration
+# Mesures et calage
 
-Ce document décrit en détail comment la Visionneuse Panoramax mesure à partir des photos 360°, comment fonctionnent les fonctions de calage, quelles sont les sources d'erreur, et comment améliorer la précision, côté calculs comme côté prise de vues. Le mode d'emploi résumé se trouve dans le [README](../README.md).
+Ce document explique en détail comment la Visionneuse Panoramax mesure à partir des photos 360° : le modèle de caméra, le moteur de calcul commun à toutes les mesures, chaque mode de mesure, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage des photos, les sources d'erreur et les pistes d'amélioration. Le mode d'emploi résumé se trouve dans le [README](../README.md).
 
 Sommaire :
 
-1. [Principes communs](#1-principes-communs)
-2. [Méthodes de mesure](#2-méthodes-de-mesure), dont la [mesure libre 3D](#25-mesure-libre-3d) et le [recalage d'un point sur la carte](#26-recaler-un-point-sur-la-carte)
-3. [Fonctions de calage](#3-fonctions-de-calage)
-4. [Sources d'erreur et ordres de grandeur](#4-sources-derreur-et-ordres-de-grandeur)
-5. [Pistes d'amélioration des calculs](#5-pistes-damélioration-des-calculs)
-6. [Pistes d'amélioration de la prise de vues](#6-pistes-damélioration-de-la-prise-de-vues)
-7. [Annexe : paramètres du code](#7-annexe--paramètres-du-code)
+1. [Vue d'ensemble](#1-vue-densemble)
+2. [Le modèle de caméra](#2-le-modèle-de-caméra)
+3. [Le moteur de mesure](#3-le-moteur-de-mesure)
+4. [Les modes de mesure](#4-les-modes-de-mesure)
+5. [Recaler une mesure dans un plan défini sur la carte QGIS](#5-recaler-une-mesure-dans-un-plan-défini-sur-la-carte-qgis)
+6. [Le calage des photos](#6-le-calage-des-photos)
+7. [Affichage et gestion des mesures](#7-affichage-et-gestion-des-mesures)
+8. [Sources d'erreur et ordres de grandeur](#8-sources-derreur-et-ordres-de-grandeur)
+9. [Pistes d'amélioration des calculs](#9-pistes-damélioration-des-calculs)
+10. [Pistes d'amélioration de la prise de vues](#10-pistes-damélioration-de-la-prise-de-vues)
+11. [Annexe : paramètres du code](#11-annexe--paramètres-du-code)
 
 ---
 
-## 1. Principes communs
+## 1. Vue d'ensemble
 
-### 1.1 Ce que fournit une photo
+### 1.1 Deux sources complémentaires
 
-Toutes les mesures reposent sur trois informations par photo, fournies par Panoramax :
+Une photo et une carte ne donnent pas la même information :
+
+| Source | Ce qu'elle donne bien | Ce qu'elle donne mal |
+|---|---|---|
+| **Photo 360°** | une **direction** très précise pour chaque pixel : un angle de fenêtre, un seuil de porte, un sommet, vus de côté | la **distance** : une direction seule ne dit pas à quelle profondeur se trouve l'objet |
+| **Carte QGIS** (orthophoto, cadastre) | la **position horizontale** des objets vus de haut : bords de bâtiments, bordures, marquages | les détails vus de côté (fenêtres, seuils, sommets), les hauteurs, ce qui est caché par une toiture ou un arbre |
+
+Toutes les mesures du plugin reposent sur ce partage : la photo donne la direction, une **surface** donne la profondeur. Cette surface est d'abord une hypothèse (le sol, un plan vertical), que la carte QGIS permet ensuite de corriger.
+
+### 1.2 Le principe commun
+
+Un clic dans la photo est une demi-droite partant de la caméra (le **rayon de visée**). Le point mesuré est l'**intersection de ce rayon avec une surface** :
+
+- le **sol**, pour les largeurs ;
+- le **plan vertical face à la caméra** passant par le pied d'un objet, pour une hauteur ;
+- une **façade**, un **plan horizontal**, ou aucune surface en **triangulation** depuis deux photos, pour la mesure libre ;
+- le **plan calé sur la carte**, une fois la mesure recalée (section 5).
+
+La mesure est ensuite un simple calcul sur deux points 3D : distance, composante horizontale, verticale, le long de la route ou en travers.
+
+### 1.3 Les modes
+
+| Mode | Surface des points | Grandeur affichée |
+|---|---|---|
+| Largeur perpendiculaire à la chaussée | sol | composante en travers de l'axe de la route |
+| Largeur parallèle à la route | sol | distance 3D entre les deux points |
+| Hauteur d'un objet | pied au sol, sommet dans le plan vertical face à la caméra | composante verticale |
+| Triangulation d'un objet | aucune : visées depuis plusieurs photos | position sur la carte |
+| Mesure libre 3D | au choix : sol, façade, plan vertical face à la caméra, plan horizontal, triangulation 3D | distance 3D décomposée (hauteur sur le plan vertical) |
+| Calage : inclinaison, cap et position, hauteur de caméra | — | corrections appliquées ensuite à toutes les mesures |
+
+Les quatre premiers modes de mesure au sol ou en plan, ainsi que la mesure libre, partagent le même moteur de calcul : un point est le même quel que soit le mode.
+
+---
+
+## 2. Le modèle de caméra
+
+### 2.1 Ce que fournit une photo
 
 | Information | Source | Qualité typique |
 |---|---|---|
-| Position (lon, lat) | GPS de la caméra, `geometry` de la photo | 2 m (matériel de relevé, GPS corrigé) à 4–5 m (caméras grand public, téléphones), indiquée dans `quality:horizontal_accuracy` |
-| Cap du centre de l'image | `view:azimuth` (arrondi au degré par l'API), ou EXIF `GPSImgDirection` (au centième de degré quand l'appareil le fournit) | 0,3° (centrale inertielle de relevé) à plusieurs degrés (boussole de téléphone) |
-| Image équirectangulaire | photo 360° assemblée | chaque pixel correspond à une direction (cap, élévation) |
+| Position (lon, lat) | GPS de la caméra | 2 m (matériel de relevé, GPS corrigé) à 4–5 m (caméras grand public, téléphones), indiquée par Panoramax dans `quality:horizontal_accuracy` |
+| Cap du centre de l'image | `view:azimuth` (arrondi au degré par l'API) ou EXIF `GPSImgDirection` (au centième quand l'appareil le fournit) | 0,3° (centrale inertielle de relevé) à plusieurs degrés (boussole de téléphone) |
+| Image équirectangulaire | photo 360° assemblée | chaque pixel correspond à une direction |
 
-Le plugin ne connaît **ni la hauteur de la caméra au-dessus du sol, ni son inclinaison** : il suppose une caméra de niveau, à la hauteur indiquée dans le panneau (1,90 m par défaut). Les fonctions de calage (section 3) servent précisément à mesurer ces inconnues et à corriger le cap et la position.
+Le plugin ne connaît ni la **hauteur de la caméra** au-dessus du sol, ni son **inclinaison**. Il suppose une caméra de niveau, à la hauteur indiquée dans le panneau (1,90 m par défaut), jusqu'à ce que ces valeurs soient calées (section 6).
 
-### 1.2 Repère et directions
+### 2.2 Repère et directions
 
-- Les calculs se font dans un **plan tangent local** (est, nord) centré sur la zone de mesure : sur quelques centaines de mètres, l'erreur due à la projection est négligeable devant la précision du GPS.
-- Une **direction** est un couple (cap absolu, élévation) en degrés : cap 0 = nord, sens horaire ; élévation positive vers le haut. Un vecteur unitaire (est, nord, haut) lui correspond : `(sin cap · cos élév, cos cap · cos élév, sin élév)`.
+- Les calculs se font dans un **repère local** (est, nord, altitude) en mètres, centré sur la mesure : sur quelques centaines de mètres, l'erreur due à la projection est négligeable devant la précision du GPS.
+- Une **direction** est un couple (cap, élévation) en degrés : cap 0 = nord, sens horaire ; élévation positive vers le haut. Son vecteur unitaire est `(sin cap · cos élév, cos cap · cos élév, sin élév)`.
 
-### 1.3 D'un clic à une direction
+### 2.3 D'un clic à une direction
 
-- **Visionneuse web** (Photo Sphere Viewer) : la visionneuse calcule elle-même, par lancer de rayon sur la sphère, la position du clic dans la photo (angle dans la photo et élévation). Le cap absolu vaut cet angle plus le cap de la photo. Un second calcul, à partir de la position du clic à l'écran, du champ de vision et de l'orientation de la vue, sert de contrôle (journal QGIS « Panoramax »).
-- **Visionneuse de secours** (sans QtWebEngine) : l'image équirectangulaire est affichée directement ; la direction d'un pixel s'en déduit linéairement.
+- **Visionneuse web** (Photo Sphere Viewer) : la visionneuse calcule par lancer de rayon sur la sphère la position du clic dans la photo. Le cap absolu vaut cet angle plus le cap de la photo. Un second calcul, à partir de la position du clic à l'écran, sert de contrôle (journal QGIS « Panoramax »).
+- **Visionneuse de secours** (sans QtWebEngine) : l'image équirectangulaire est affichée directement, la direction d'un pixel s'en déduit linéairement.
 - **Visée au réticule** (triangulation) : direction du centre de la vue.
 
-### 1.4 Cap précis
+### 2.4 Cap précis
 
-L'API Panoramax arrondit `view:azimuth` au degré, soit jusqu'à 0,5° d'erreur de visée (17 cm à 20 m, 87 cm à 100 m). Quand l'EXIF de la photo contient `GPSImgDirection` (au centième de degré sur le matériel de relevé), le plugin l'utilise à la place, mais seulement s'il concorde à moins de 1° avec `view:azimuth` : il s'agit alors bien de la même mesure non arrondie, et non d'un cap que Panoramax aurait corrigé. La visionneuse web, elle, s'oriente sur la valeur arrondie : le plugin corrige l'écart dans ses calculs.
+L'API Panoramax arrondit `view:azimuth` au degré, soit jusqu'à 0,5° d'erreur de visée (17 cm à 20 m). Quand l'EXIF contient `GPSImgDirection` au centième et qu'il concorde à moins de 1° avec `view:azimuth` (même mesure, non arrondie), le plugin l'utilise. La visionneuse web s'oriente sur la valeur arrondie : le plugin corrige l'écart dans ses calculs.
 
-Sur les photos IMAJING imajbox 360 HD du Conseil départemental de la Côte-d'Or, le cap EXIF suit la trajectoire du véhicule à 0,33° près (écart-type sur 700 photos en ligne droite). Il s'en écarte de 3,2° de façon constante, parce que la caméra est montée un peu de biais : l'EXIF décrit bien l'orientation de l'image (vérifié sur le point de fuite d'une route droite).
+Sur les photos IMAJING imajbox 360 HD du Conseil départemental de la Côte-d'Or, le cap EXIF suit la trajectoire du véhicule à 0,33° près (écart-type sur 700 photos en ligne droite), avec un décalage constant de 3,2° dû au montage de la caméra : l'EXIF décrit bien l'orientation de l'image (vérifié sur le point de fuite d'une route droite).
 
-### 1.5 Ordre d'application des corrections
+### 2.5 Position de la caméra
 
-Pour chaque clic ou visée, le plugin applique dans cet ordre :
+Le centre optique d'une photo est :
+
+- en plan, à la position de la photo (recalée si un calage de position existe, section 6.3) ;
+- en altitude, à l'**altitude du sol sous la photo** plus la **hauteur de caméra** (calée pour la séquence, sinon celle du panneau).
+
+L'altitude du sol sous la photo est celle du profil de terrain du **premier clic fait sur cette photo** dans la mesure, puis la même pour tous ses clics. Le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart d'une direction à l'autre à Commarin), chaque clic aurait sinon sa propre altitude de caméra, et les hauteurs mesurées sur un plan en seraient faussées.
+
+### 2.6 Corrections appliquées à chaque clic
+
+Dans cet ordre :
 
 1. **inclinaison** de la photo (calage par objets verticaux) ;
 2. **décalage de cap** de la séquence (calage par repères) ;
 3. **position recalée** de la photo (calage par repères, à partir de trois repères) ;
-4. **hauteur de caméra** calée pour la séquence, dans les mesures au sol.
+4. **hauteur de caméra** calée pour la séquence.
 
 ---
 
-## 2. Méthodes de mesure
+## 3. Le moteur de mesure
 
-### 2.1 Point au sol par lancer de rayon
+### 3.1 Point au sol
 
-C'est la brique des mesures de largeur et de hauteur.
+**Principe.** On suit le rayon de visée jusqu'à ce qu'il passe sous le terrain. Sur sol plat, la distance horizontale du point vaut `d = h / tan(−e)`, avec `h` la hauteur de caméra et `e` l'élévation du clic.
 
-**Principe.** La caméra est à une hauteur `h` au-dessus du sol. Un clic donne une direction (cap, élévation `e`, négative vers le sol). On suit ce rayon jusqu'à ce qu'il passe sous le terrain : le point d'intersection est le point au sol cliqué.
-
-Sur un sol plat, la distance horizontale du point vaut :
-
-```
-d = h / tan(−e)
-```
-
-**Profil du terrain.** Le sol n'est pas forcément plat : le plugin demande l'altitude du terrain le long de la visée, de 30 m derrière la photo à 90 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
+**Profil du terrain.** Le plugin demande l'altitude du terrain le long de la visée, de 30 m derrière la photo à 90 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
 
 1. **service d'altimétrie de l'IGN** (RGE ALTI 1 m, France), 241 points tous les 0,5 m, si la case « Service d'altimétrie IGN » est cochée ;
-2. **OpenTopoData EU-DEM 25 m** (Europe), puis **Open-Meteo Copernicus 90 m** (monde) : modèles grossiers, dont seule la pente générale a un sens ;
+2. **OpenTopoData EU-DEM 25 m** (Europe), puis **Open-Meteo Copernicus 90 m** (monde), dont seule la pente générale a un sens ;
 3. à défaut, **sol plat**.
 
-**Pente de la route plutôt que profil brut.** Le plugin n'utilise pas le profil tel quel, mais la **droite de pente** du terrain autour de la photo, ajustée par la méthode de **Theil-Sen** : la pente retenue est la médiane des pentes entre toutes les paires de points, et l'ordonnée la médiane des résidus. Un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit ; or un creux d'un mètre sous la visée allonge les distances de moitié. La médiane ignore ces accidents tant qu'ils couvrent moins d'un tiers de la fenêtre, et garde la vraie pente d'une rue. Les sources de secours, qui sont des modèles de surface (bâtiments et arbres compris), sont écartées si leur pente dépasse 12 %.
+**Pente de la route plutôt que profil brut.** Le plugin retient la **droite de pente** du terrain ajustée par la méthode de **Theil-Sen** (pente médiane des paires de points, ordonnée médiane des résidus). Un modèle de terrain nu ignore les ponts et contient fossés, talus et bruit ; un creux d'un mètre sous la visée allongerait les distances de moitié. La médiane ignore ces accidents tant qu'ils couvrent moins d'un tiers de la fenêtre. Les sources de secours, qui sont des modèles de surface (bâtiments compris), sont écartées si leur pente dépasse 12 %. Sur la photo de Commarin étudiée, le terrain réel reste à moins de 10 cm de la droite retenue jusqu'à 15 m, devant comme sur le côté.
 
-**Intersection.** Le terrain étant linéaire entre deux échantillons, l'intersection rayon–terrain est calculée exactement. Un point qui ne touche pas le sol dans les 60 m est refusé.
+**Intersection.** Le terrain étant linéaire entre deux échantillons, l'intersection est exacte. Un point qui ne touche pas le sol dans les 60 m est refusé.
 
-**Sensibilité.** La distance dépend fortement de l'élévation du clic, donc de l'inclinaison de la caméra et de la précision du clic :
+**Sensibilité.** `δd ≈ d² / h · δe` (δe en radians). Avec une caméra à 2 m, 0,5° d'erreur d'élévation déplace un point à 8 m de 0,28 m, et un point à 15 m de 0,98 m.
 
-```
-δd ≈ d² / h · δe     (δe en radians)
-```
+**Le piège du pied mal cliqué.** Le point est sur le sol **là où le rayon le touche**. Si le clic n'est pas exactement au contact du sol (un peu au-dessus sur le mur, ou sur un trottoir, une voiture qui masque le pied), le rayon traverse le mur et ne touche le sol que derrière : le point tombe sur la carte **au-delà de la façade**, et la distance est trop grande. C'est la principale raison d'être du recalage sur la carte (section 5).
 
-Avec une caméra à 2 m, une erreur de 0,5° déplace un point situé à 8 m de 0,28 m, et un point à 15 m de 0,98 m. D'où la consigne : **mesurer à moins de 15–20 m**, et caler l'inclinaison (section 3.2).
+### 3.2 Point sur un plan
 
-### 2.2 Largeur perpendiculaire à la chaussée et largeur parallèle à la route
-
-Deux modes partagent les mêmes clics au sol mais pas le même calcul. Dans les deux cas, chaque clic est prolongé jusqu'au sol (section 2.1) : on obtient deux points au sol `P` et `Q`.
-
-**Largeur parallèle à la route** (distance directe).
-
-- **Clics.** Les deux extrémités de l'objet, au sol, typiquement le long de la route sur le côté du véhicule : façade, portail, place de stationnement. Le calcul étant une distance directe, il reste juste dans n'importe quelle direction.
-- **Calcul.** Longueur de `PQ` en trois dimensions : distance horizontale et dénivelé entre les deux points, qui suit donc la pente. Le dénivelé est indiqué à partir de 5 cm.
-
-**Largeur perpendiculaire à la chaussée**.
-
-- **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé, sur la même photo ou sur deux photos.
-- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule, par exemple), la composante perpendiculaire est presque nulle : c'est la largeur parallèle à la route qu'il faut alors utiliser.
-- **Calcul :**
-
-1. L'**axe de la route** est la direction de la séquence, calculée entre la photo précédente et la photo suivante. À défaut (photos voisines inconnues ou confondues lors d'un arrêt), c'est l'orientation de la photo.
-2. La **largeur** est la composante de `PQ` perpendiculaire à l'axe : les deux clics n'ont pas besoin d'être exactement en face l'un de l'autre. Le point dessiné en face du premier est le pied de la perpendiculaire. La distance en biais `|PQ|` est aussi indiquée.
-
-**Incertitude affichée.** Écart maximal du résultat quand l'élévation de chaque clic varie de ±0,5°. Elle ne tient pas compte de l'erreur de hauteur de caméra : une hauteur fausse de 10 % fausse la largeur de 10 % environ (section 3.4).
-
-### 2.3 Hauteur d'un objet
-
-**Clics.** Pied de l'objet (au sol), puis sommet, sur la même photo.
-
-**Calcul.**
-
-1. Le pied est prolongé jusqu'au sol (section 2.1) : distance horizontale `d`, altitude du sol `z_sol`.
-2. Le sommet est pris dans le **plan vertical face à la caméra qui passe par le pied** : à l'écart de cap `Δ` entre le pied et le sommet, il est à la distance horizontale `d / cos Δ`, et son altitude vaut `z_caméra + d / cos Δ · tan(e_sommet)`. Pour un objet fin (poteau, `Δ ≈ 0`), c'est la même distance que le pied ; pour un mur face à la caméra, le sommet peut être cliqué un peu de côté sans fausser la hauteur. Un sommet à plus de 45° de côté est refusé. Ce modèle est exactement celui de la mesure libre sur le plan vertical face à la caméra.
-3. Hauteur = altitude du sommet − `z_sol`.
-
-Sur sol plat et sommet au-dessus du pied, cela revient à `H = h · (1 + tan(e_sommet) / tan(−e_pied))` : la hauteur est **proportionnelle à la hauteur de caméra**. Le pied doit être cliqué **exactement au contact du sol** : un clic un peu au-dessus, sur le mur, ou masqué par un trottoir ou un véhicule, prolonge le rayon jusqu'au sol derrière le mur, et la distance comme la hauteur sont alors trop grandes (le point s'affiche sur la carte au-delà de la façade). Un sommet sous le pied est refusé (clics inversés).
-
-**Incertitude affichée.** Comme pour la largeur : ±0,5° sur l'élévation de chaque clic.
-
-### 2.4 Triangulation d'un objet
-
-**But.** Positionner sur la carte un objet visible de plusieurs photos (panneau, poteau, regard…), sans hypothèse sur le sol ni sur la hauteur de caméra.
-
-**Visées.** Dans chaque photo, on place le réticule sur l'objet puis « 🎯 Viser ». Une visée est une demi-droite partant de la position de la photo dans la direction du réticule (cap uniquement : la triangulation est planimétrique).
-
-**Calcul (moindres carrés pondérés).**
-
-Le point retenu `X` minimise la somme pondérée des carrés des distances perpendiculaires aux droites de visée :
+Le rayon `C + t·u` (centre optique `C`, direction unitaire `u`) coupe le plan passant par `A` de normale `n` en
 
 ```
-X = argmin Σ wᵢ · dist(X, visée i)²
+t = n·(A − C) / n·u        point = C + t·u
 ```
 
-Ce qui donne un système linéaire 2×2 (équations normales) :
+Plans utilisés :
+
+| Plan | Définition |
+|---|---|
+| Plan vertical face à la caméra | vertical, passant par un point (le pied d'un objet), de normale horizontale dirigée vers la caméra |
+| Façade | vertical, passant par deux points au pied du mur |
+| Plan horizontal | altitude du sol sous la caméra + hauteur saisie |
+| Plan calé sur la carte | vertical, passant par les points glissés sur la carte (section 5) |
+
+**Contrôles.** Visée parallèle au plan, point derrière le plan ou à plus de 100 m : refusés. Une **incidence rasante** (moins de 15° entre la visée et le plan) est signalée : l'erreur croît alors comme `1/sin(incidence)`.
+
+### 3.3 Point triangulé en 3D
+
+Sans surface : chaque point est visé depuis deux photos différentes, et le point retenu est le plus proche des deux visées 3D au sens des moindres carrés :
 
 ```
-Σ wᵢ (I − uᵢ uᵢᵀ) X = Σ wᵢ (I − uᵢ uᵢᵀ) Pᵢ
+Σ (I − u uᵀ) X = Σ (I − u uᵀ) C
 ```
 
-avec `Pᵢ` la position de la photo, `uᵢ` la direction de visée unitaire.
+Les deux visées doivent se croiser d'au moins 3°, et devant les photos. Le résultat ne dépend ni du sol ni de la hauteur de caméra (elle s'élimine dans les distances quand les deux photos sont de la même séquence) ; sa composante verticale dépend seulement de l'altitude du sol sous chaque photo.
 
-**Pondération.** Le poids d'une visée est l'inverse du carré de son écart latéral probable :
+### 3.4 Grandeurs
 
-```
-σᵢ² = (tᵢ · tan εᵢ)² + aᵢ²       wᵢ = 1 / σᵢ²
-```
+Entre deux points `P` et `Q`, le moteur calcule la distance 3D, sa composante horizontale, le dénivelé (de `P` à `Q`) et, si l'axe de la route est connu, les composantes le long de la route et en travers. L'**axe de la route** est la direction de la séquence, calculée entre la photo précédente et la suivante ; à défaut, l'orientation de la photo.
 
-- `tᵢ` : distance de la photo au point le long de la visée ;
-- `εᵢ` : erreur de visée supposée, 1° en général, 0,5° pour le matériel de relevé (GPS à 2 m ou mieux, cap EXIF précis), ou l'erreur issue du calage du cap ;
-- `aᵢ` : précision de la position GPS de la photo (3 m supposés si inconnue), ou celle de la position recalée.
+### 3.5 Incertitude affichée
 
-Une visée lointaine ou une photo mal positionnée compte donc moins. Comme les distances `tᵢ` dépendent du point, le calcul est itéré (4 passes, la première sans pondération).
+C'est l'écart maximal de la grandeur quand on fait varier, une à une :
 
-**Contrôles.** Visées presque parallèles (croisement < 3°), point derrière une photo (visées qui ne se croisent pas devant), point à plus de 500 m : refusés avec un message.
+- l'élévation de chaque clic de ±0,5° (inclinaison mal connue) ;
+- en triangulation 3D, le cap de chaque clic de l'erreur de visée de la photo ;
+- la position de chaque point recalé sur la carte de ±0,5 m (section 5) ;
+- les clics de définition de la façade (±0,5° d'élévation), ou ses extrémités de ±0,5 m une fois recalées sur la carte ;
+- la hauteur saisie du plan horizontal de ±5 cm.
 
-**Résultats affichés.** Distances à chaque photo, meilleur angle de croisement, **incertitude** (grand axe de l'ellipse de covariance `(Σ wᵢ (I − uᵢ uᵢᵀ))⁻¹`), **écart des visées** (écart quadratique moyen des visées au point, à partir de 3 visées), précision GPS, avertissement si le GPS est moins bon que ±5 m ou si le croisement est inférieur à 15°.
-
-**Enregistrement.** « Enregistrer le point » l'ajoute à la couche temporaire « Panoramax – points triangulés » (nombre de visées, angle, incertitude, écart, distance maximale, précision GPS, photos utilisées, date).
-
-**Géométrie favorable.** L'erreur de position vaut à peu près `σ / sin θ`, avec `θ` l'angle de croisement : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet. Une troisième visée améliore et contrôle le résultat.
+Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplacent ou agrandissent la mesure entière (sections 6 et 8).
 
 ---
 
-### 2.5 Mesure libre 3D
+## 4. Les modes de mesure
 
-**But.** Mesurer entre deux points quelconques, dans un plan arbitraire, avec des résultats cohérents avec les autres modes.
+### 4.1 Largeur perpendiculaire à la chaussée
 
-**Principe.** Une photo ne donne qu'une direction par clic ; il faut une contrainte de plus pour obtenir un point 3D. Les modes précédents en utilisent chacun une, implicite : le sol pour les largeurs, le plan vertical passant par le pied pour la hauteur. La mesure libre rend ce choix explicite. Chaque clic devient un point 3D dans un repère local unique (est, nord, altitude), avec le même modèle de caméra que les autres modes :
+- **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé.
+- **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le second bord cliqué est relié en pointillés au pied de la perpendiculaire. La distance en biais est aussi indiquée.
+- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la largeur parallèle.
 
-- caméra à la position de la photo (recalée si possible), à la hauteur de caméra (calée pour la séquence, sinon celle du panneau) au-dessus du sol sous la photo. Cette altitude du sol est celle du profil de terrain du premier clic fait sur la photo, puis la même pour tous ses clics : le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart à Commarin), chaque clic aurait sinon sa propre altitude de caméra ;
-- direction du clic corrigée de l'inclinaison et du cap.
+### 4.2 Largeur parallèle à la route
 
-Puis le rayon est intersecté avec la **surface** choisie :
+- **Clics.** Les deux extrémités de l'objet, au sol, typiquement le long de la route sur le côté du véhicule : façade, portail, place de stationnement.
+- **Calcul.** Distance 3D entre les deux points au sol (elle suit la pente) ; le dénivelé est indiqué à partir de 5 cm. Le calcul étant une distance directe, il reste juste dans n'importe quelle direction.
 
-| Surface | Définition | Calcul du point |
-|---|---|---|
-| Sol | terrain le long de la visée (section 2.1) | même fonction que les mesures de largeur et de hauteur |
-| Façade | plan vertical passant par deux points cliqués au sol, au pied du mur | intersection rayon–plan : `t = n·(A − C) / n·u`, point `C + t·u` |
-| Plan vertical face à la caméra | plan vertical passant par le premier point (cliqué au sol), de normale horizontale dirigée vers la caméra | le premier point au sol, les suivants sur le plan |
-| Plan horizontal | altitude du sol sous la caméra + hauteur indiquée | intersection rayon–plan |
-| Triangulation 3D | aucune : chaque point est visé depuis deux photos différentes | point le plus proche des deux visées 3D (moindres carrés : `Σ (I − u uᵀ) X = Σ (I − u uᵀ) C`) |
+### 4.3 Hauteur d'un objet
 
-`C` est le centre optique, `u` la direction unitaire du clic, `A` un point du plan et `n` sa normale.
+- **Clics.** Pied de l'objet, **exactement au contact du sol**, puis sommet, sur la même photo.
+- **Calcul.** Le pied est un point au sol ; le sommet est pris dans le **plan vertical face à la caméra qui passe par le pied**. À l'écart de cap `Δ` entre pied et sommet, il est à la distance horizontale `d / cos Δ`. Pour un objet fin (poteau, `Δ ≈ 0`), c'est la distance du pied ; pour un mur face à la caméra, le sommet peut être cliqué un peu de côté sans fausser la hauteur. Un sommet à plus de 45° de côté, ou sous le pied, est refusé. La hauteur affichée est la composante verticale.
+- **Sensibilité.** Sur sol plat, `H = h · (1 + tan e_sommet / tan(−e_pied))` : la hauteur est proportionnelle à la hauteur de caméra, et très sensible au clic du pied. Quand le pied est caché, le recalage sur la carte (section 5) la rend indépendante de l'un et de l'autre.
 
-**Mesure.** Sur le plan vertical face à la caméra, la grandeur mesurée est la **hauteur** (composante verticale), comme le préréglage « Hauteur d'un objet » : un sommet cliqué un peu de côté ne l'allonge pas. Sur les autres surfaces, c'est la distance 3D entre les deux points. Dans tous les cas, elle est décomposée en distance horizontale, dénivelé (du premier au second point), et, si l'axe de la route est connu, composantes le long de la route et en travers. Une même mesure donne donc à la fois ce que donnent la largeur parallèle, la largeur perpendiculaire et la hauteur.
+### 4.4 Triangulation d'un objet
 
-**Cohérence.** Les préréglages sont calculés par ce même moteur : la largeur perpendiculaire à la chaussée est la composante en travers de la route de deux points au sol, la largeur parallèle à la route leur distance 3D, et la hauteur d'un objet la composante verticale entre un point au sol et un point du plan vertical face à la caméra. Un point est donc le même quel que soit le mode. La façade et le plan horizontal sont définis dans le repère géographique : on peut les mesurer depuis plusieurs photos.
+**But.** Positionner sur la carte un objet visible de plusieurs photos (panneau, poteau, regard), sans hypothèse sur le sol.
 
-**Façade recalée sur la carte.** La façade est définie par deux clics au pied du mur dans la photo : chaque point est prolongé jusqu'au sol, si bien que sa distance dépend du terrain, de la hauteur de caméra et de l'inclinaison, et qu'un pied masqué (trottoir, véhicule) ou cliqué un peu haut la repousse derrière le mur. Ses deux extrémités s'affichent sur la carte : en les **glissant sur le bord du bâtiment** (orthophoto, cadastre, BD TOPO), la façade ne dépend plus d'aucune de ces hypothèses, et toutes les mesures prises dessus sont recalculées. Sur scène simulée, avec une hauteur de caméra fausse de 40 cm et des pieds cliqués 15 cm trop haut, une fenêtre de 2,00 m est mesurée 1,73 m sur la façade définie dans la photo, et exactement 2,00 m une fois ses extrémités recalées. Recalée, son incertitude compte une erreur de placement de ±0,5 m à chaque extrémité.
+**Visées.** Réticule sur l'objet, « 🎯 Viser », puis même chose depuis une autre photo décalée sur le côté. Chaque visée est une demi-droite horizontale (planimétrique).
 
-**Contrôles.** Visée parallèle au plan, point derrière le plan ou à plus de 100 m : refusés. Triangulation 3D : les deux clics d'un point doivent venir de deux photos différentes, se croiser d'au moins 3° et devant les photos. Une **incidence rasante** (moins de 15° entre la visée et le plan) est signalée : l'erreur croît alors comme `1/sin(incidence)`. Des altitudes de sources différentes entre les clics (service IGN et sol plat, par exemple) sont signalées, la composante verticale pouvant en être faussée.
+**Calcul.** Moindres carrés pondérés :
 
-**Incertitude affichée.** Écart maximal de la mesure quand l'élévation de chaque clic varie de ±0,5°, et en triangulation 3D quand le cap varie de l'erreur de visée de la photo. Sur le plan horizontal, la hauteur saisie du plan varie aussi de ±5 cm. Sur une façade, les deux clics qui l'ont définie varient aussi : une erreur sur la distance du mur agrandit ou rétrécit toutes les mesures faites dessus. Sur scène simulée, une fenêtre de 2 m vue en face donne ±0,04 m, et la même vue à 13° d'incidence ±0,58 m.
+```
+Σ wᵢ (I − uᵢ uᵢᵀ) X = Σ wᵢ (I − uᵢ uᵢᵀ) Pᵢ        wᵢ = 1 / σᵢ²,   σᵢ² = (tᵢ · tan εᵢ)² + aᵢ²
+```
+
+avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0,5° pour le matériel de relevé, ou celle issue du calage du cap) et `aᵢ` la précision de position de la photo (GPS, 3 m si inconnue, ou position recalée). Une visée lointaine ou une photo mal positionnée compte moins ; le calcul est itéré (4 passes).
+
+**Contrôles.** Visées presque parallèles (moins de 3°), point derrière une photo ou à plus de 500 m : refusés. Croisement inférieur à 15° ou GPS moins bon que ±5 m : signalés.
+
+**Résultats.** Distances, angle de croisement, incertitude (grand axe de l'ellipse de covariance), écart des visées (à partir de 3), précision GPS. « Enregistrer le point » l'ajoute à la couche temporaire « Panoramax – points triangulés ».
+
+**Géométrie favorable.** L'erreur vaut à peu près `σ / sin θ` (θ : angle de croisement) : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet.
+
+**Ordre de grandeur.** Sur 15 points simulés à partir de vraies photos imajbox du CD21 (visées à 5–30 m), l'écart médian au point visé est de 3 cm (11 cm au plus) avec le cap EXIF précis et la pondération, contre 8 cm (29 cm) auparavant. Ces écarts sont relatifs aux positions GPS des photos : la position absolue reste à la précision du GPS, sauf recalage (section 6.3).
+
+### 4.5 Mesure libre 3D
+
+**But.** Mesurer entre deux points quelconques, dans un plan au choix, avec des résultats cohérents avec les autres modes.
+
+**Surfaces** (liste « Surface ») :
+
+- **Sol** : comme les largeurs ;
+- **Façade (plan vertical)** : « Définir la façade », puis deux clics au pied du mur ; on mesure ensuite n'importe quoi sur la façade (fenêtres, portes, portails), y compris depuis d'autres photos. Ses extrémités se recalent sur la carte (section 5.5) ;
+- **Plan vertical face à la caméra** : premier point au sol, second dans le plan qui passe par lui ; la grandeur affichée est alors la **hauteur**, comme le préréglage ;
+- **Plan horizontal** : à la hauteur saisie au-dessus du sol (dessus d'un muret, d'un quai) ;
+- **Triangulation 3D (deux photos)** : chaque point cliqué sur deux photos différentes ; mesure indépendante du sol et de la hauteur de caméra.
+
+**Résultat.** Distance 3D (ou hauteur sur le plan vertical), décomposée en horizontale, verticale, le long de la route et en travers.
 
 **Limites.**
 
 - Un point qui n'est pas sur la surface choisie est faux : un balcon ou un appui de fenêtre en saillie est projeté sur le plan de la façade.
-- **Plan horizontal** : il est vu sous une incidence d'autant plus rasante qu'il est proche de la hauteur de la caméra. Avec une caméra à 2 m et un plan à 1 m, il n'est qu'à 1 m sous la caméra, contre 2 m pour le sol : les visées y sont deux fois plus rasantes et l'erreur deux fois plus forte (±0,15 m contre ±0,04 m au sol pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
-- Un plan incliné inconnu (pan de toit) ne se déduit pas d'une photo : il faudrait trois points connus en 3D, par triangulation depuis plusieurs photos.
-- En triangulation 3D, la composante verticale dépend de l'altitude du sol sous chaque photo (profil de terrain) ; la hauteur de caméra, la même pour les deux photos d'une séquence, s'élimine dans les distances.
+- Le **plan horizontal** est vu d'autant plus en rasant qu'il est proche de la hauteur de la caméra : à 1 m sous une caméra à 2 m, les visées y sont deux fois plus rasantes qu'au sol (±0,15 m contre ±0,04 m pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
+- Des altitudes de sources différentes entre les clics (service IGN et sol plat) sont signalées : la composante verticale peut en être faussée.
 
-### 2.6 Recaler un point sur la carte
+**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la largeur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
 
-**But.** Corriger après coup un point mal placé, que l'on repère sur la carte : par exemple un pied cliqué un peu au-dessus du sol, ou masqué par un trottoir, dont le rayon a traversé le mur et rejoint le sol derrière la façade.
+---
 
-**Utilisation.** Pendant les largeurs, hauteurs et mesures libres, un outil propre est actif sur la carte : **glisser un point rouge** d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ; glisser ailleurs déplace la carte, la molette zoome, un simple clic ouvre la photo la plus proche. L'outil précédent revient quand on arrête de mesurer ou qu'on passe en triangulation ou en calage. Tous les points des mesures affichées sont recalables, mesures terminées comprises ; pour une hauteur, seul le pied l'est, le sommet en découlant. Les extrémités de la façade se recalent de la même façon.
+## 5. Recaler une mesure dans un plan défini sur la carte QGIS
 
-**Calcul.** La position horizontale du point vient de la carte. Son altitude est celle du **rayon de visée** à cette distance de la caméra : `z = z_caméra + distance · tan(élévation)`. Le point reste donc sur la direction cliquée dans la photo, à la distance lue sur la carte. La mesure est recalculée (pour une hauteur, le plan vertical passe par le pied recalé). Dans la visionneuse, le repère du point est reprojeté là où la caméra voit le point recalé : il ne bouge pas si le point a été glissé le long de sa visée (plus près ou plus loin), il se déplace s'il a été glissé de côté ; l'étiquette prend la nouvelle valeur.
+### 5.1 Le problème
 
-**Conséquence.** Pour une hauteur, `H = distance · (tan e_sommet − tan e_pied)` : elle ne dépend plus ni du terrain, ni de la hauteur de caméra, seulement de la distance lue sur la carte et des deux angles. Sur scène simulée, avec une hauteur de caméra fausse de 40 cm et un pied cliqué 20 cm trop haut, le pied est replacé de 5,3 m à 6,0 m de la photo, et la hauteur entre le point cliqué et le sommet est retrouvée exactement (2,80 m).
+Les mesures au sol et les hauteurs reposent sur le point où le rayon touche le sol. Or ce point est souvent mal placé :
 
-**Viser à nouveau dans la visionneuse.** Une orthophoto vue de haut ne montre ni un angle de fenêtre, ni un seuil de porte, ni un pied de mur caché : le glisser sur la carte fixe surtout la **profondeur** du point, c'est-à-dire son plan. Le recalage définit le **plan calé de la mesure** : vertical, passant par les deux premiers points glissés sur la carte (le mur tracé sur la carte), ou, si un seul l'a été, passant par lui avec une normale horizontale orientée vers la photo qui l'avait visé. Ce plan reste mémorisé jusqu'au prochain glisser. Pour placer un point avec précision, on clique dans la visionneuse sur son repère, entre deux mesures (à moins de 1° de lui) : un cercle jaune l'entoure. Le clic suivant, même tout près du repère (une correction fine l'est toujours), remplace son clic d'origine, et le point est pris à l'**intersection du nouveau rayon et du plan calé**, qu'il ait été lui-même glissé ou non : la carte donne la profondeur, la photo la position dans le plan (latérale et en hauteur). Dans une mesure qui n'a pas été calée, le point est simplement visé à nouveau sur sa surface ; en triangulation 3D, depuis l'une des photos qui l'ont visé. « Effacer » annule la sélection (sans effacer la mesure) ; un clic près d'un repère au milieu d'une mesure poursuit la mesure.
+- pied **masqué** (voiture, trottoir, végétation) ou cliqué **un peu haut** sur le mur : le rayon rejoint le sol derrière la façade ;
+- **hauteur de caméra** fausse ou **inclinaison** non calée : toutes les distances sont faussées en proportion ;
+- **terrain** mal décrit (bordure, trottoir surélevé).
 
-Pour une largeur le long d'un mur, il faut glisser **les deux** points sur le mur : avec un seul, le plan calé est face à la caméra et non le long du mur. Sur scène simulée (fenêtre de 2,00 m au pied d'un mur à 6 m, hauteur de caméra fausse de 40 cm) : 1,60 m avec les clics bruts ; après avoir glissé les deux points sur le mur à 30 cm près, puis visé chaque coin dans la photo, **2,00 m**, les points étant à 1 à 8 cm de leur vraie position. On peut alterner librement glisser sur la carte et viser dans la photo.
+Sur la carte QGIS, ces erreurs se voient immédiatement : les points rouges tombent dans les bâtiments ou les jardins au lieu d'être sur le bord du bâti.
 
-Sur scène simulée (porte de 2,10 m dans un mur à 6 m, pied caché par une voiture, hauteur de caméra fausse de 40 cm) : 1,69 m avec les clics bruts, 1,97 m une fois le pied glissé sur la carte à 30 cm près, puis **2,11 m** après avoir visé le seuil de la porte, le pied étant placé à 3 cm de sa vraie position.
+### 5.2 Le principe : la carte fixe le plan, la photo place le point
 
-**Incertitude.** Un point recalé est supposé placé sur la carte à ±0,5 m : à 6 m, cela fait environ 8 % sur une hauteur. Le message indique le nombre de points recalés.
+La carte vue de haut ne permet qu'un placement grossier, mais elle donne de façon fiable **la profondeur** d'un point : la distance de la caméra au mur, au poteau, à la bordure. La photo, elle, ne donne pas la profondeur, mais donne la **position fine** du point vu de côté (un angle de fenêtre, un seuil, un sommet).
 
-## 3. Fonctions de calage
+Le recalage combine les deux en deux gestes, que l'on peut alterner librement :
 
-### 3.1 Pourquoi caler
+1. **Sur la carte QGIS**, on **glisse** les points de la mesure à peu près à leur place (sur le bord du bâtiment de l'orthophoto ou du cadastre) : cela définit le **plan calé** de la mesure ;
+2. **Dans la visionneuse**, on **vise à nouveau** chaque point avec précision : il est replacé à l'intersection de la nouvelle visée et du plan calé.
 
-Les mesures supposent une caméra de niveau, à une hauteur connue, avec une position et un cap justes. En pratique :
+### 5.3 Glisser un point sur la carte
 
-- un véhicule penche (dévers, freinage, montée sur un trottoir) et une caméra est rarement fixée parfaitement de niveau : **0,5° d'inclinaison** suffit à fausser d'un mètre un point au sol à 15 m ;
-- la **hauteur de caméra** varie selon le support (toit de voiture, perche, casque, sac à dos) : une hauteur fausse de 10 % fausse largeurs et hauteurs de 10 % ;
-- le **cap** peut être faux de plusieurs degrés (boussole, trajectoire GPS), et la **position** de plusieurs mètres.
+**Outil de la carte.** Pendant les largeurs, les hauteurs et la mesure libre, un outil propre est actif sur la carte QGIS :
 
-Les calages mesurent ces défauts à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures, sont rappelés sous les boutons de mesure, et sont **enregistrés dans le projet QGIS** : seules les observations (clics, repères) sont stockées, les corrections en sont recalculées à l'ouverture. « Effacer » supprime le calage du mode affiché.
+- **glisser un point rouge** d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ;
+- **glisser une extrémité de façade** déplace la façade (section 5.5) ;
+- **glisser ailleurs** déplace la carte, la molette zoome ;
+- un **simple clic** ailleurs ouvre la photo la plus proche.
 
-### 3.2 Inclinaison (objets verticaux), par photo
+Le curseur devient une main au survol d'un point déplaçable. L'outil précédent revient quand on arrête de mesurer ou qu'on passe en triangulation ou en calage.
 
-**But.** Trouver la vraie verticale dans le repère de la photo, pour corriger l'élévation et le cap de tous les clics.
+**Points concernés.** Tous les points des mesures affichées, mesures terminées comprises. Pour une hauteur (plan vertical face à la caméra), seul le **pied** se glisse : le sommet en découle.
 
-**Clics.** Pied puis sommet d'objets bien verticaux : poteau, angle de façade, montant de portail. Chaque objet doit monter d'au moins 3° dans l'image, pied et sommet ne doivent pas s'écarter de plus de 30° en cap.
+**Calcul d'un point glissé.** Sa position horizontale est celle de la carte ; son altitude est celle du **rayon de visée** à cette distance de la caméra :
 
-**Calcul.**
+```
+z = z_caméra + distance · tan(élévation)
+```
 
-1. Pour chaque objet, les directions du pied `b` et du sommet `s` définissent un plan passant par la caméra, qui contient l'objet, donc la vraie verticale. Sa normale est `n = b × s`.
-2. La vraie verticale `v` doit être perpendiculaire à toutes ces normales : `n · v = 0`. En posant `v = (a, b, 1)` (petite inclinaison), chaque objet donne une équation linéaire en `(a, b)`, résolue par moindres carrés. Un amortissement minime donne la plus petite correction compatible quand les équations ne suffisent pas.
-3. Toute direction cliquée est ensuite tournée (formule de Rodrigues) de la rotation qui ramène `v` au zénith.
+Le point reste donc sur la direction cliquée dans la photo, à la profondeur lue sur la carte. Pour une hauteur, il en résulte
 
-**Un ou deux objets.** Un objet ne contraint que l'inclinaison **vue de côté** dans sa direction : la correction est partielle, et le plugin le signale. Deux objets à environ **90° l'un de l'autre** déterminent l'inclinaison complète. Au-delà, le résidu (écart des objets à la verticale retenue) contrôle la cohérence des clics. Une inclinaison trouvée de plus de 10° est refusée (objet penché ou clics faux).
+```
+H = distance · (tan e_sommet − tan e_pied)
+```
 
-**Portée.** La photo seule : l'inclinaison d'un véhicule change d'une photo à l'autre.
+qui ne dépend plus ni du terrain, ni de la hauteur de caméra : seulement de la distance lue sur la carte et des deux angles visés.
 
-### 3.3 Cap et position (repères sur la carte), par séquence
+### 5.4 Le plan calé de la mesure
 
-**But.** Corriger le cap de la séquence et, avec assez de repères, la position GPS des photos. C'est un **relèvement**, comme en topographie : on retrouve la position et l'orientation d'un appareil à partir des directions sous lesquelles il voit des points connus.
+Glisser des points définit un **plan vertical**, mémorisé avec la mesure :
 
-**Clics.** Un repère net, visible aussi sur la carte ou l'orthophoto (poteau, angle de bâtiment, borne), est cliqué dans la photo, puis sur la carte. Pendant le pointage, la carte reste libre : glisser pour la déplacer, molette pour zoomer, Échap pour annuler.
+| Points glissés | Plan calé |
+|---|---|
+| un seul | vertical, passant par lui, de normale horizontale orientée vers la photo qui avait visé ce point (elle reste fixe ensuite, même si l'on vise depuis une autre photo) |
+| deux (ou plus) | vertical, passant par les deux premiers : c'est **le mur tracé sur la carte** (s'ils sont distants d'au moins 20 cm ; sinon, comme pour un seul point) |
 
-**Calcul (moindres carrés avec a priori, Gauss-Newton).** Trois inconnues communes aux photos des repères : le décalage de cap `θ` et le décalage de position `(sx, sy)`. Pour chaque repère `Mᵢ` vu depuis la photo `Pᵢ` sous le cap mesuré `yᵢ` (corrigé de l'inclinaison) :
+Le plan reste mémorisé jusqu'au prochain glisser, qui le redéfinit. Pour une largeur le long d'un mur, il faut glisser **les deux** points : avec un seul, le plan est face à la caméra et non le long du mur.
+
+### 5.5 Façade recalée sur la carte
+
+En mesure libre, la façade définie dans la photo (deux clics au pied du mur) hérite des défauts du point au sol : un pied masqué ou cliqué un peu haut la repousse derrière le mur. Ses deux extrémités s'affichent sur la carte : en les **glissant sur le bord du bâtiment**, la façade ne dépend plus du sol, du trottoir ni de la hauteur de caméra, et **toutes les mesures prises dessus sont recalculées**. Son incertitude devient alors celle de la carte (±0,5 m à chaque extrémité).
+
+### 5.6 Viser à nouveau dans la visionneuse
+
+**Sélection.** Entre deux mesures (pas au milieu de l'une d'elles), cliquer dans la visionneuse sur le **repère** d'un point, à moins de 1° de lui : un **cercle jaune** l'entoure. Le message indique s'il sera placé dans le plan calé ou sur sa surface d'origine.
+
+**Nouvelle visée.** Le **clic suivant**, même tout près du repère (une correction fine l'est toujours), remplace le clic d'origine du point :
+
+- si la mesure a un plan calé, le point est pris à l'**intersection du nouveau rayon et du plan calé**, qu'il ait été lui-même glissé ou non : la carte donne la profondeur, la photo la position dans le plan, latérale et en hauteur ;
+- sinon, il est simplement visé à nouveau sur la surface de la mesure (le sol, par exemple) ;
+- en triangulation 3D, il est visé à nouveau depuis l'une des photos qui l'avaient visé.
+
+**Annuler.** « Effacer », tant qu'un point est sélectionné, annule la sélection sans effacer la mesure.
+
+**Alterner.** On peut glisser à nouveau sur la carte (le point repart à la position lâchée et le plan est redéfini), puis viser à nouveau, autant de fois que nécessaire.
+
+### 5.7 Ce que montre la visionneuse
+
+Chaque repère est **reprojeté** là où la caméra voit le point 3D :
+
+- un point glissé **le long de sa visée** (plus près ou plus loin) ne bouge pas dans l'image : la caméra le voit toujours dans la même direction, seule la valeur change ;
+- un point glissé **de côté** se déplace dans l'image, et le trait avec lui ;
+- l'étiquette prend toujours la nouvelle valeur.
+
+Le message du panneau rappelle le nombre de points recalés et visés à nouveau, et chaque résultat se termine par « Point mal placé : glissez-le sur la carte. »
+
+### 5.8 Déroulés types
+
+**Hauteur d'une porte dont le pied est caché par une voiture.**
+
+1. Mode « Hauteur d'un objet » : cliquer le pied (sur la voiture, faute de mieux), puis le haut de la porte.
+2. Sur la carte, glisser le pied sur le bord du bâtiment, devant la porte.
+3. Dans la visionneuse, cliquer le repère du pied (cercle jaune), puis viser le seuil de la porte.
+
+Sur scène simulée (porte de 2,10 m dans un mur à 6 m, hauteur de caméra fausse de 40 cm) : 1,69 m avec les clics bruts, 1,97 m une fois le pied glissé sur la carte à 30 cm près, puis **2,11 m** après avoir visé le seuil, le pied étant placé à 3 cm de sa vraie position.
+
+**Largeur d'une fenêtre ou d'un portail le long d'un mur.**
+
+1. Mode « Largeur parallèle à la route » : cliquer les deux coins au pied.
+2. Sur la carte, glisser **les deux** points sur le bord du bâtiment : le plan calé est le mur.
+3. Viser à nouveau chaque coin dans la photo.
+
+Sur scène simulée (fenêtre de 2,00 m au pied d'un mur à 6 m, hauteur de caméra fausse de 40 cm) : 1,60 m avec les clics bruts ; après avoir glissé les deux points sur le mur à 30 cm près puis visé chaque coin, **2,00 m**, les points étant à 1 à 8 cm de leur vraie position.
+
+**Mesures en série sur une façade.**
+
+1. Mesure libre, surface « Façade » : « Définir la façade », deux clics au pied du mur.
+2. Sur la carte, glisser les deux extrémités de la façade sur le bord du bâtiment.
+3. Mesurer fenêtres, portes et portails : toutes les mesures sont dans le plan de la façade, et suivent si on la recale encore.
+
+Sur scène simulée (pieds de mur masqués, cliqués 15 cm trop haut, hauteur de caméra fausse) : une fenêtre de 2,00 m est mesurée 1,73 m sur la façade définie dans la photo, et exactement 2,00 m une fois ses extrémités recalées.
+
+**Poteau dont le pied est cliqué trop haut.** Glisser le pied à sa place sur la carte suffit : sur scène simulée (pied cliqué 20 cm trop haut, caméra fausse de 40 cm), le pied passe de 5,3 m à 6,0 m de la photo et la hauteur entre le point cliqué et le sommet est retrouvée exactement (2,80 m). Pour la hauteur depuis le vrai pied, viser ensuite ce pied dans la photo.
+
+### 5.9 Précision et limites
+
+- **Incertitude.** Chaque point glissé est supposé placé à ±0,5 m sur la carte : sur une hauteur à 6 m, cela fait environ 8 %. Viser à nouveau ne la réduit que dans le plan (position latérale et hauteur) ; la profondeur reste celle de la carte. Elle est d'autant meilleure que l'orthophoto est précise et bien calée, et que le bord du bâtiment y est net.
+- **Bord de toiture.** Sur l'orthophoto, on voit souvent le **débord de toit**, pas le pied du mur ; le cadastre ou la BD TOPO donnent mieux l'emprise au sol. Un débord de 50 cm à 6 m fausse une hauteur d'environ 8 %.
+- **Décalage de l'orthophoto.** Une orthophoto non vraie (« ortho » classique) décale les bâtiments hauts, leur sommet étant vu de biais.
+- **Plan vertical uniquement.** Le plan calé est vertical : il ne convient pas à un objet incliné (toiture, talus).
+- **Non enregistré.** Les mesures et leurs recalages ne sont pas enregistrés dans le projet QGIS, contrairement au calage des photos.
+
+---
+
+## 6. Le calage des photos
+
+Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **enregistrés dans le projet QGIS** (seules les observations sont stockées, les corrections en sont recalculées à l'ouverture ; le projet passe en « modifié »). « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
+
+Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont complémentaires : le premier corrige **une mesure** après coup ; le second corrige **la photo ou la séquence** pour toutes les mesures à venir.
+
+### 6.1 Inclinaison (objets verticaux), par photo
+
+**But.** Trouver la vraie verticale dans le repère de la photo. Un véhicule penche (dévers d'environ 2 %, soit 1,1°, freinage, trottoir), et une caméra est rarement de niveau : 0,5° suffit à fausser d'un mètre un point au sol à 15 m. Le roulis fausse surtout les mesures prises sur le côté du véhicule.
+
+**Clics.** Pied puis sommet d'objets bien verticaux (poteau, angle de façade, montant de portail), montant d'au moins 3° dans l'image, pied et sommet à moins de 30° de cap l'un de l'autre.
+
+**Calcul.** Les directions du pied `b` et du sommet `s` définissent un plan contenant la vraie verticale, de normale `n = b × s`. La verticale `v = (a, b, 1)` doit vérifier `n · v = 0` pour chaque objet ; ces équations sont résolues par moindres carrés (avec un amortissement minime qui donne la plus petite correction compatible). Toute direction est ensuite tournée (formule de Rodrigues) de la rotation qui ramène `v` au zénith.
+
+**Un ou deux objets.** Un objet ne corrige que l'inclinaison vue de côté dans sa direction (correction partielle, signalée) ; deux objets à environ 90° l'un de l'autre corrigent l'inclinaison complète ; au-delà, le résidu contrôle la cohérence. Une inclinaison de plus de 10° est refusée.
+
+**Vérification.** Caméra simulée penchée de 2,5° : retrouvée exactement avec deux poteaux, un point au sol étant ensuite corrigé au centième de degré.
+
+### 6.2 Hauteur de caméra (longueur connue), par séquence
+
+**But.** Mesurer la hauteur réelle de la caméra, dont les mesures au sol dépendent proportionnellement.
+
+**Référence.** « au sol » (deux extrémités : place de stationnement de 2,30 à 2,50 m, bande de passage piéton de 0,50 m, trait de marquage, longueur mesurée sur l'orthophoto) ou « en hauteur » (pied puis sommet d'un objet de hauteur connue), avec sa longueur réelle.
+
+**Calcul.** Recherche par dichotomie, entre 0,3 et 6 m, de la hauteur qui redonne la longueur connue, avec le vrai profil de terrain et les clics corrigés de l'inclinaison. Incertitude : ±0,5° sur l'élévation de chaque clic. Plusieurs références se combinent (moyenne pondérée par `1/σ²`).
+
+**Conseils.** Référence proche (moins de 10–15 m) et, au sol, **en travers** de la vue : dans l'axe, une longueur est la différence de deux distances et elle est bien moins précise.
+
+**Effet.** La hauteur calée remplace la valeur saisie pour les mesures de la séquence, et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
+
+### 6.3 Cap et position (repères sur la carte), par séquence
+
+**But.** Corriger le cap de la séquence et, avec assez de repères, la position GPS des photos, par **relèvement**.
+
+**Clics.** Un repère net (poteau, angle de bâtiment, borne) cliqué dans la photo, puis sur la carte (glisser pour déplacer la carte, Échap pour annuler).
+
+**Calcul.** Trois inconnues communes aux photos des repères, le décalage de cap `θ` et le décalage de position `(sx, sy)`, ajustées par moindres carrés (Gauss-Newton) sur
 
 ```
 gisement(Mᵢ − Pᵢ − s) = yᵢ + θ
 ```
 
-Les résidus sont pondérés par la précision de la visée : clic à ±0,1° et repère pointé sur la carte à ±0,5 m, soit un angle d'autant plus grand que le repère est proche. Chaque inconnue garde son **a priori** :
-
-- décalage de cap nul, à ±0,5° pour le matériel de relevé ou ±3° pour les autres appareils ;
-- position GPS juste, à ±sa précision.
-
-Le calcul est itéré jusqu'à convergence (10 passes au plus). L'inverse de la matrice normale donne les incertitudes du cap et de la position.
+avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de relevé) ou ±3° (autres appareils), position GPS juste à ±sa précision. Chaque repère est pondéré par la précision de sa visée (clic à ±0,1°, repère sur la carte à ±0,5 m).
 
 **Conséquences.**
 
-- **Un repère** corrige surtout le cap, et ne le dégrade jamais : un repère proche, où l'erreur GPS de la photo pèse lourd, ne le corrige que peu. Pour le cap seul, choisir un repère **lointain** : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°.
-- **Trois repères ou plus, bien répartis autour de la photo** (devant, derrière, sur les côtés) recalent aussi la **position**. Pour la position, des repères **proches** sont au contraire les plus utiles. La position n'est déclarée recalée qu'à partir de trois repères, et si son incertitude tombe sous 70 % de la précision GPS.
-- **Contrôle.** À partir du quatrième, un repère est comparé à la direction que prévoient les autres seuls ; s'il s'en écarte de plus de quatre écarts-types (et de plus de 1°), il est refusé (repère mal pointé).
+- **Un repère** corrige surtout le cap, sans jamais le dégrader ; pour le cap, choisir un repère **lointain** (à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°).
+- **Trois repères ou plus, bien répartis** autour de la photo recalent aussi la **position** ; des repères **proches** y sont alors utiles.
+- À partir du quatrième, un repère incohérent avec ce que prévoient les autres (plus de quatre écarts-types et de 1°) est refusé.
+- Le recalage ne vaut que pour les photos à **moins de 300 m** de celles qui l'ont servi (le GPS dérive au fil d'une séquence). Il part toujours de la position GPS d'origine.
 
-**Portée.** Le décalage GPS dérive au fil d'une longue séquence : le recalage ne s'applique qu'aux photos situées à **moins de 300 m** des photos qui l'ont servi. Le calcul part toujours de la position GPS d'origine, jamais d'une position déjà recalée.
+**Ordre de grandeur (simulation).** GPS faussé de 1,7 m et cap de 1°, cinq repères à 30–120 m pointés à ±0,5 m : erreur de position médiane ramenée de 1,70 m à 0,29 m sur 200 tirages, aucun bon repère refusé. Un objet triangulé ensuite depuis deux photos passe de 1,40 m à 0,44 m d'erreur.
 
-**Effet.** Les clics et visées utilisent le cap corrigé, la position recalée et sa précision (au lieu de celle du GPS), et l'erreur de visée issue du calage.
+### 6.4 Ordre conseillé
 
-**Ordre de grandeur (simulation).** GPS faussé de 1,7 m et cap de 1°, cinq repères à 30–120 m pointés à ±0,5 m : erreur de position médiane ramenée de 1,70 m à 0,29 m sur 200 tirages, cap retrouvé à 0,15° près, aucun bon repère refusé à tort. Un objet triangulé ensuite depuis deux photos passe de 1,40 m à 0,44 m d'erreur.
-
-### 3.4 Hauteur de caméra (longueur connue), par séquence
-
-**But.** Mesurer la hauteur réelle de la caméra au-dessus du sol, dont les largeurs et hauteurs dépendent proportionnellement.
-
-**Référence.** Choisir « au sol » ou « en hauteur » et indiquer la longueur réelle :
-
-- **au sol**, deux extrémités cliquées au sol : largeur d'une place de stationnement (2,30 à 2,50 m), bande de passage piéton (0,50 m), trait de marquage, ou longueur mesurée sur l'orthophoto avec l'outil de mesure de QGIS ;
-- **en hauteur**, pied puis sommet d'un objet de hauteur connue.
-
-**Calcul.** La longueur mesurée croît avec la hauteur de caméra supposée (proportionnellement sur sol plat). Le plugin cherche par **dichotomie**, entre 0,3 et 6 m, la hauteur qui redonne la longueur connue, avec le vrai profil de terrain et les clics corrigés de l'inclinaison. L'incertitude est l'écart obtenu en faisant varier l'élévation de chaque clic de ±0,5°. Plusieurs références se combinent par moyenne pondérée (poids `1/σ²`).
-
-**Conseils.** Référence **proche** (moins de 10–15 m). Au sol, la prendre plutôt **en travers** de la vue : une longueur dans l'axe est la différence de deux distances, chacune sensible à l'élévation du clic, et elle est donc bien moins précise.
-
-**Effet.** La hauteur calée remplace la valeur saisie pour les mesures de la séquence, et elle est reportée et enregistrée dans le réglage « Caméra à » du panneau.
-
-### 3.5 Ordre de calage conseillé
-
-1. **Inclinaison** d'abord : elle intervient dans tous les autres calculs, y compris les autres calages.
-2. **Hauteur de caméra** ensuite, une fois pour la séquence (le support ne change pas).
-3. **Cap et position** si l'on triangule ou si l'on reporte des points sur la carte.
-4. Puis mesurer. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
+1. **Inclinaison**, qui intervient dans tous les autres calculs.
+2. **Hauteur de caméra**, une fois pour la séquence.
+3. **Cap et position**, si l'on triangule ou reporte des points sur la carte.
+4. Puis mesurer, et **recaler sur la carte** les mesures qui le demandent (section 5).
 
 ---
 
-## 4. Sources d'erreur et ordres de grandeur
+## 7. Affichage et gestion des mesures
+
+- **Mesures conservées.** Une mesure terminée reste affichée dans la visionneuse (sur la photo où elle a été prise) et sur la carte quand on en commence une autre, qu'on change de mode ou qu'on arrête de mesurer.
+- **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
+- **Visionneuse.** Croix blanches aux points cliqués, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
+- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
+- **Couche.** Seuls les points triangulés s'enregistrent dans une couche (« Panoramax – points triangulés », temporaire, à sauvegarder).
+
+---
+
+## 8. Sources d'erreur et ordres de grandeur
 
 | Source | Ordre de grandeur | Effet principal | Remède dans le plugin |
 |---|---|---|---|
-| Position GPS de la photo | 2 m (relevé) à 5 m et plus (téléphone) | position absolue des points triangulés ; peu d'effet sur largeurs et hauteurs prises sur une photo | recalage par repères (3.3), pondération (2.4) |
-| Cap de la photo | 0,3° (relevé) à plusieurs degrés (boussole) ; +0,5° si arrondi | triangulation : `t · tan ε` de décalage latéral | cap EXIF précis (1.4), recalage du cap (3.3) |
-| Inclinaison de la caméra | 0,5 à 3° | mesures au sol : `δd ≈ d²/h · δe` | calage d'inclinaison (3.2) |
-| Hauteur de caméra | ±10 à 20 % si non calée | largeurs et hauteurs proportionnelles | calage de hauteur (3.4) |
-| Terrain | creux, bosses, ponts, devers | distances au sol | pente de Theil-Sen (2.1) |
+| Pied masqué ou cliqué au-dessus du sol | quelques dizaines de cm à plusieurs mètres de profondeur | point au sol derrière le mur, distance et hauteur trop grandes | glisser le point sur la carte, viser à nouveau (section 5) |
+| Hauteur de caméra | ±10 à 20 % si non calée | largeurs et hauteurs proportionnelles | calage de hauteur (6.2) ; recalage sur la carte, qui l'élimine (5.3) |
+| Inclinaison de la caméra | 0,5 à 3° | mesures au sol : `δd ≈ d²/h · δe`, surtout sur le côté (roulis) | calage d'inclinaison (6.1) ; recalage sur la carte |
+| Terrain | creux, bosses, ponts, bordures | distances au sol | pente de Theil-Sen (3.1) ; recalage sur la carte |
+| Position GPS de la photo | 2 m (relevé) à 5 m et plus | position absolue des points ; peu d'effet sur les longueurs prises sur une photo | recalage par repères (6.3), pondération (4.4) |
+| Cap de la photo | 0,3° à plusieurs degrés ; +0,5° si arrondi | triangulation : `t · tan ε` de décalage latéral | cap EXIF précis (2.4), recalage du cap (6.3) |
+| Position sur la carte | ±0,5 m (orthophoto), débord de toit | profondeur d'un point recalé | choisir le cadastre ou la BD TOPO plutôt que le bord de toit |
+| Incidence rasante sur un plan | erreur en `1/sin(incidence)` | mesures sur façade ou plan horizontal | photo plus en face ; avertissement sous 15° |
 | Précision du clic | 1 pixel = 0,03° sur une image de 12 288 px, bien plus sans zoom | toutes les mesures | zoomer avant de cliquer |
-| Assemblage 360° | parallaxe entre objectifs, surtout près de la caméra et sur les lignes de raccord | décalages locaux de quelques pixels | éviter les raccords |
-| Décalage temporel GPS / prise de vue | à 50 km/h, 10 ms = 14 cm le long de la trajectoire | position le long de la route | recalage par repères |
+| Assemblage 360° | quelques pixels près des raccords | décalages locaux | éviter les raccords |
+| Décalage temporel GPS / prise de vue | à 50 km/h, 10 ms = 14 cm | position le long de la route | recalage par repères |
 
 ---
 
-## 5. Pistes d'amélioration des calculs
+## 9. Pistes d'amélioration des calculs
 
 ### Exploiter mieux les données existantes
 
-- **Inclinaison fournie par la caméra.** Lire `PosePitchDegrees` et `PoseRollDegrees` (XMP GPano) quand ils sont renseignés et non nuls (caméras avec centrale inertielle), pour une correction automatique, sans objets verticaux.
-- **Inclinaison par séquence.** Décomposer l'inclinaison d'une photo en un défaut de montage constant pour la séquence, plus la pente et le dévers de la route (tirés du MNT) : caler deux ou trois photos suffirait pour toute la séquence.
-- **Cap lissé.** Sur le matériel de relevé, combiner le cap EXIF avec la direction de la trajectoire plus un décalage de montage constant (−3,2° sur les imajbox du CD21) pour réduire son bruit.
-- **Axe de la route.** Ajuster l'axe sur plusieurs photos de part et d'autre, plutôt que sur les deux voisines, ou laisser l'utilisateur cliquer l'axe.
+- **Inclinaison fournie par la caméra** : lire `PosePitchDegrees` et `PoseRollDegrees` (XMP GPano) quand ils sont renseignés et non nuls.
+- **Inclinaison par séquence** : décomposer l'inclinaison en un défaut de montage constant plus la pente et le dévers de la route (tirés du MNT), pour caler toute une séquence à partir de deux ou trois photos.
+- **Cap lissé** : combiner le cap EXIF avec la direction de la trajectoire et un décalage de montage constant.
+- **Axe de la route** ajusté sur plusieurs photos, ou cliqué par l'utilisateur.
+
+### Recalage sur la carte
+
+- **Accrochage** : accrocher les points et les extrémités de façade glissés aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
+- **Plan calé depuis une couche** : prendre directement le plan dans l'arête de bâtiment la plus proche, sans glisser.
+- **Enregistrer les mesures** et leurs recalages dans une couche ou dans le projet.
+- **Plan incliné** défini par trois points connus en 3D (triangulés), pour les toitures, talus et rampes.
 
 ### Mesures sans hypothèse de sol ni de hauteur de caméra
 
-La mesure libre 3D (section 2.5) le permet déjà par triangulation depuis deux photos. Pistes pour aller plus loin :
-
-- **Plus de deux visées par point** en triangulation 3D, pondérées comme la triangulation planimétrique, avec l'écart des visées comme contrôle.
-- **Plan quelconque** défini par trois points triangulés, pour mesurer sur un pan de toit, un talus ou une rampe.
-- **Points réutilisables** : garder les points mesurés pour les relier entre eux (polyligne, surface, angle) et les enregistrer dans une couche, avec leur altitude.
-- **Accrochage sur la carte** : accrocher les points et les extrémités de façade glissés sur la carte aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
+- **Plus de deux visées par point** en triangulation 3D, pondérées, avec l'écart des visées comme contrôle.
+- **Points réutilisables** : relier les points mesurés entre eux (polyligne, surface, angle) et les enregistrer avec leur altitude.
 
 ### Modèles et données plus riches
 
-- **LiDAR HD de l'IGN.** Utiliser le MNT LiDAR HD (50 cm, ponts et ouvrages mieux traités) et le nuage de points ou le modèle de surface, pour intersecter un clic avec la façade ou l'objet réellement visé, et non seulement avec le sol.
-- **Repères automatiques.** Proposer comme repères les objets de la BD TOPO ou d'OpenStreetMap (bâtiments, poteaux, bornes), ou accrocher le clic sur la carte aux sommets de ces objets.
-- **Ajustement en bloc de la séquence.** Estimer conjointement la position et l'orientation de toutes les photos d'un tronçon à partir de points homologues détectés automatiquement entre photos voisines (structure à partir du mouvement), contraints par le GPS et quelques repères : c'est la méthode de référence des relevés mobiles, au prix d'un traitement d'image lourd.
-- **Dérive GPS modélisée.** Remplacer la portée fixe de 300 m par un décalage qui varie lentement le long de la séquence (par exemple linéaire par morceaux), ajusté sur des repères répartis.
-- **Décalage temporel.** Estimer, par séquence, le retard entre la prise de vue et la position GPS (décalage le long de la trajectoire proportionnel à la vitesse).
+- **LiDAR HD de l'IGN** : MNT à 50 cm (ponts et ouvrages mieux traités) et nuage de points ou modèle de surface, pour intersecter un clic avec la façade ou l'objet réellement visé.
+- **Ajustement en bloc** de toutes les photos d'un tronçon à partir de points homologues détectés automatiquement (structure à partir du mouvement), contraint par le GPS et quelques repères.
+- **Dérive GPS modélisée** le long de la séquence au lieu d'une portée fixe de 300 m.
+- **Décalage temporel** estimé par séquence.
 
 ### Incertitudes et contrôle
 
-- **Propagation complète.** Propager rigoureusement les covariances (inclinaison calée, hauteur de caméra, position recalée, profil de terrain) jusqu'au résultat, au lieu de l'écart à ±0,5° actuel.
-- **Clic assisté.** Accrocher le clic à un bord détecté dans l'image (gradient), ou affiner au sous-pixel, pour les bordures et marquages.
-- **Contrôle croisé.** Mesurer automatiquement le même objet sur deux photos voisines et signaler les écarts.
+- **Propagation complète** des covariances (inclinaison, hauteur de caméra, position recalée, terrain, carte) au lieu des écarts à ±0,5° et ±0,5 m.
+- **Clic assisté** : accrochage sur un bord détecté dans l'image, affinage sous-pixel.
+- **Contrôle croisé** automatique sur deux photos voisines.
 
 ---
 
-## 6. Pistes d'amélioration de la prise de vues
+## 10. Pistes d'amélioration de la prise de vues
 
 ### Matériel
 
-- **Positionnement GNSS corrigé** (RTK ou post-traitement PPK, centimétrique) : c'est le gain le plus important pour la triangulation et le report de points sur la carte. À défaut, un GNSS externe double fréquence plutôt que celui d'un téléphone.
-- **Centrale inertielle** enregistrant le cap, le roulis et le tangage dans les métadonnées (`GPSImgDirection` au centième, `PosePitchDegrees`, `PoseRollDegrees`), plutôt qu'une boussole magnétique, perturbée par la carrosserie d'un véhicule.
-- **Caméra haute définition** : sur une image de 12 288 px de large, un pixel couvre 0,03°. Préférer une caméra dont l'assemblage est soigné (faible parallaxe entre objectifs).
-- **Synchronisation** de l'horloge de la caméra et du GNSS, pour que la position corresponde à l'instant exact de la prise de vue.
+- **GNSS corrigé** (RTK ou PPK, centimétrique) : le plus grand gain pour la triangulation et le report sur la carte.
+- **Centrale inertielle** enregistrant cap, roulis et tangage dans les métadonnées (`GPSImgDirection` au centième, `PosePitchDegrees`, `PoseRollDegrees`), plutôt qu'une boussole perturbée par la carrosserie.
+- **Caméra haute définition** à l'assemblage soigné (faible parallaxe entre objectifs).
+- **Synchronisation** des horloges de la caméra et du GNSS.
 
 ### Installation
 
-- **Fixation rigide et de niveau**, vérifiée au niveau à bulle : l'inclinaison est la première source d'erreur des mesures au sol. Une fixation stable permettrait aussi de caler l'inclinaison une fois pour toute une séquence (voir section 5).
-- **Hauteur connue et constante** : mesurer la hauteur de l'objectif au-dessus du sol au mètre ruban, et l'indiquer dans la description de la séquence. Plus haut (2 à 2,5 m sur un toit de voiture), on voit mieux par-dessus les véhicules ; plus bas, les mesures au sol proches sont plus précises.
-- **Raccords d'assemblage** orientés vers des zones sans intérêt pour la mesure : connaître l'emplacement des raccords de sa caméra et éviter d'y faire passer les bords de chaussée.
+- **Fixation rigide et de niveau**, vérifiée au niveau à bulle : l'inclinaison est la première source d'erreur des mesures au sol.
+- **Hauteur connue et constante**, mesurée au mètre ruban et indiquée dans la description de la séquence.
+- **Raccords d'assemblage** orientés vers des zones sans intérêt pour la mesure.
 
 ### Acquisition
 
-- **Espacement de 2 à 5 m** entre photos : plus de photos proches des objets, et des visées sous des angles variés pour la triangulation.
-- **Vitesse modérée** : moins de flou de bougé, moins d'effet du décalage temporel, et un GPS plus stable.
-- **Plusieurs passages** (aller et retour, voies différentes) : ils donnent des visées croisées sous des angles favorables, et des positions GPS indépendantes qui se compensent.
-- **Bonnes conditions** : lumière diffuse, sans contre-jour ni ombres portées marquées, chaussée sèche pour des marquages lisibles. Éviter les assemblages HDR qui créent des images fantômes sur les objets en mouvement.
-- **Repères de contrôle** : quelques points connus (bornes géodésiques, marques peintes de dimensions connues, points levés au GNSS) visibles dans les photos permettent de caler et de contrôler les mesures.
+- **Espacement de 2 à 5 m** entre photos, pour des visées sous des angles variés.
+- **Vitesse modérée** : moins de flou, moins de décalage temporel.
+- **Plusieurs passages** (aller et retour, voies différentes) pour des visées croisées et des GPS indépendants.
+- **Bonnes conditions** : lumière diffuse, chaussée sèche ; éviter les assemblages HDR qui créent des images fantômes.
+- **Repères de contrôle** visibles : bornes géodésiques, marques de dimensions connues, points levés au GNSS.
+- **Pieds de façade dégagés** autant que possible (éviter les rues encombrées de véhicules), pour des pieds visibles au contact du sol.
 
 ### Publication
 
-- **Conserver les métadonnées précises** à l'envoi sur Panoramax : cap au centième, précision GPS, inclinaison. Certains logiciels de traitement arrondissent ou suppriment ces champs.
-- **Envoyer les images en pleine résolution.**
-- **Décrire la séquence** : modèle de caméra, hauteur de montage, type de support et de GNSS. Ces informations servent directement au calage.
+- **Conserver les métadonnées précises** à l'envoi : cap au centième, précision GPS, inclinaison.
+- **Pleine résolution.**
+- **Décrire la séquence** : caméra, hauteur de montage, support, GNSS.
 
 ---
 
-## 7. Annexe : paramètres du code
+## 11. Annexe : paramètres du code
 
 | Paramètre | Valeur | Rôle | Fichier |
 |---|---|---|---|
-| `PITCH_ERROR` | 0,5° | erreur d'élévation supposée pour l'incertitude des mesures au sol | `ground.py` |
-| `MAX_DISTANCE` | 60 m | portée maximale d'un point au sol | `ground.py` |
 | `DEFAULT_CAMERA_HEIGHT` | 1,90 m | hauteur de caméra par défaut | `measure.py` |
-| `LINE_FROM`, `LINE_TO` | −30 m, 90 m | fenêtre du profil de terrain le long de la visée | `terrain.py` |
-| `MAX_COARSE_SLOPE` | 12 % | pente maximale admise des sources de secours | `terrain.py` |
-| `HEADING_ERROR` | 1° | erreur de visée supposée (triangulation) | `triangulation.py` |
-| `SURVEY_HEADING_ERROR`, `SURVEY_ACCURACY` | 0,5°, 2 m | matériel de relevé : erreur de visée et précision GPS maximale | `triangulation.py` |
-| `GPS_ACCURACY` | 3 m | précision GPS supposée si la photo ne l'indique pas | `triangulation.py` |
-| `GPS_WARNING` | 5 m | seuil d'avertissement de précision GPS | `triangulation.py` |
+| `PITCH_ERROR` | 0,5° | variation d'élévation des clics pour l'incertitude | `ground.py` |
+| `MAX_DISTANCE` | 60 m | portée maximale d'un point au sol | `ground.py` |
+| `MAX_TOP_OFFSET` | 45° | écart de cap maximal entre pied et sommet d'une hauteur | `ground.py` |
+| `LINE_FROM`, `LINE_TO` | −30 m, 90 m | fenêtre du profil de terrain | `terrain.py` |
+| `MAX_COARSE_SLOPE` | 12 % | pente maximale des sources de secours | `terrain.py` |
+| `MAX_RANGE` | 100 m | portée maximale d'un point sur un plan | `geometry.py` |
+| `GRAZING` | 15° | incidence sous laquelle une visée sur un plan est signalée | `geometry.py` |
+| `MIN_CROSSING` | 3° | croisement minimal en triangulation 3D | `geometry.py` |
+| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur du plan horizontal | `measure_tool.py` |
+| `SELECT_ANGLE` | 1° | écart maximal entre un clic et un repère pour le sélectionner | `measure_tool.py` |
+| poignées sur la carte | 10 px | distance de saisie d'un point à glisser | `plugin.py` |
+| `CLICK_TOLERANCE` | 4 px | au-delà, un clic sur la carte est un glisser | `plugin.py` |
+| `MAP_ERROR` | 0,5 m | précision d'un point placé sur la carte (recalage, repères, façade) | `calibration.py` |
+| `AIM_ERROR` | 0,1° | précision d'un clic dans la photo zoomée | `calibration.py` |
+| `HEADING_ERROR` | 1° | erreur de visée supposée en triangulation | `triangulation.py` |
+| `SURVEY_HEADING_ERROR`, `SURVEY_ACCURACY` | 0,5°, 2 m | matériel de relevé | `triangulation.py` |
+| `GPS_ACCURACY`, `GPS_WARNING` | 3 m, 5 m | précision GPS supposée, seuil d'avertissement | `triangulation.py` |
 | `MIN_ANGLE`, `MAX_DISTANCE` | 3°, 500 m | croisement minimal et distance maximale d'un point triangulé | `triangulation.py` |
 | `MAX_TILT`, `MIN_SPAN`, `MAX_LEAN` | 10°, 3°, 30° | contrôles du calage d'inclinaison | `calibration.py` |
-| `AIM_ERROR`, `MAP_ERROR` | 0,1°, 0,5 m | précision d'un clic dans la photo et d'un repère sur la carte | `calibration.py` |
-| `SURVEY_PRIOR`, `PRIOR` | 0,5°, 3° | précision a priori du cap (relevé, autres appareils) | `calibration.py` |
-| `REACH` | 300 m | portée du recalage autour des photos utilisées | `calibration.py` |
-| `OUTLIER` | 4 | seuil de refus d'un repère incohérent (écarts-types) | `calibration.py` |
+| `SURVEY_PRIOR`, `PRIOR` | 0,5°, 3° | précision a priori du cap | `calibration.py` |
+| `REACH`, `OUTLIER` | 300 m, 4 | portée du recalage, seuil de refus d'un repère | `calibration.py` |
 | `CAMERA_MIN`, `CAMERA_MAX` | 0,3 m, 6 m | plage de recherche de la hauteur de caméra | `calibration.py` |
-| `MAX_RANGE` | 100 m | portée maximale d'un point sur un plan (mesure libre) | `geometry.py` |
-| `GRAZING` | 15° | incidence en dessous de laquelle une visée sur un plan est signalée | `geometry.py` |
-| `MIN_CROSSING` | 3° | croisement minimal des visées en triangulation 3D | `geometry.py` |
-| `MAX_TOP_OFFSET` | 45° | écart de cap maximal entre le pied et le sommet d'une hauteur | `ground.py` |
-| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur saisie du plan horizontal | `measure_tool.py` |
-| `SELECT_ANGLE` | 1° | écart maximal entre un clic et le repère d'un point pour le sélectionner | `measure_tool.py` |

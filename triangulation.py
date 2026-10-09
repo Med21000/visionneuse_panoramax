@@ -60,7 +60,10 @@ def crossing_angle(h1, h2):
 
 
 def heading_error(sighting):
-    """Erreur de visée supposée (degrés) : plus faible pour le matériel de relevé."""
+    """Erreur de visée supposée (degrés) : celle du recalage du cap s'il y en a un
+    ("heading_error", voir calibration.py), plus faible pour le matériel de relevé."""
+    if sighting.get("heading_error") is not None:
+        return float(sighting["heading_error"])
     accuracy = sighting.get("accuracy")
     if sighting.get("precise") and accuracy is not None and accuracy <= SURVEY_ACCURACY:
         return SURVEY_HEADING_ERROR
@@ -96,7 +99,7 @@ def solve(sightings):
 
     sightings : liste de dicts avec au moins "lon", "lat", "heading", et
     éventuellement "accuracy" (précision de la position GPS en m, None si inconnue)
-    et "precise" (cap au centième de degré, voir heading_error).
+    "precise" (cap au centième de degré) et "heading_error" (voir heading_error).
     Retourne un dict : lon, lat, distances (m, une par visée), angle (° de
     croisement le plus favorable), rms (écart moyen des visées au point, m),
     uncertainty (rayon d'incertitude en m pour l'erreur de visée de chaque photo et la

@@ -14,19 +14,51 @@ from qgis.core import (
     QgsSettings,
     QgsUnitTypes,
 )
-from qgis.gui import QgsMapToolEmitPoint
-from qgis.PyQt.QtCore import QUrl, Qt
+from qgis.gui import QgsMapToolEmitPoint, QgsMapToolPan
+from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QAction, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import QPushButton
 
 from . import api, layers
 from .cursor import ViewCursor
-from .measure import GroundMeasure, Triangulator
+from .measure import CalibrationTool, GroundMeasure, Triangulator
 from .terrain import TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
+
+
+class LandmarkTool(QgsMapToolPan):
+    """Pointage d'un repère sur la carte, carte libre : glisser déplace la carte
+    (molette pour zoomer), un clic sans glisser pointe le repère, Échap annule."""
+
+    pointed = pyqtSignal(object)  # QgsPointXY, dans le SCR de la carte
+    cancelled = pyqtSignal()
+    CLICK_TOLERANCE = 4  # pixels : au-delà, c'est un glisser
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._press = None
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def canvasPressEvent(self, event):  # noqa: N802
+        self._press = event.pos() if event.button() == Qt.MouseButton.LeftButton else None
+        super().canvasPressEvent(event)
+
+    def canvasReleaseEvent(self, event):  # noqa: N802
+        press, self._press = self._press, None
+        if (press is not None and event.button() == Qt.MouseButton.LeftButton
+                and (event.pos() - press).manhattanLength() <= self.CLICK_TOLERANCE):
+            self.pointed.emit(self.toMapCoordinates(event.pos()))
+            return  # pas de recentrage de l'outil main sur un simple clic
+        super().canvasReleaseEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class PanoramaxPlugin:
@@ -40,6 +72,9 @@ class PanoramaxPlugin:
         self.cursor = None
         self.triangulator = None
         self.ground = None
+        self.calibrator = None
+        self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
+        self._previous_tool = None
         self.terrain = TerrainProvider()
 
     # ------------------------------------------------------------------
@@ -62,6 +97,9 @@ class PanoramaxPlugin:
         self.tool = QgsMapToolEmitPoint(self.canvas)
         self.tool.setAction(self.act_pick)
         self.tool.canvasClicked.connect(self._on_canvas_clicked)
+        self.landmark_tool = LandmarkTool(self.canvas)
+        self.landmark_tool.pointed.connect(self._on_landmark_clicked)
+        self.landmark_tool.cancelled.connect(self._on_landmark_cancelled)
 
     def unload(self):
         for action in self.actions:
@@ -71,11 +109,13 @@ class PanoramaxPlugin:
         if self.tool is not None and self.canvas.mapTool() is self.tool:
             self.canvas.unsetMapTool(self.tool)
         self.tool = None
+        self._end_landmark_tool()
+        self.landmark_tool = None
         self._clear_marker()
-        for tool in (self.triangulator, self.ground):
+        for tool in (self.triangulator, self.ground, self.calibrator):
             if tool is not None:
                 tool.remove()
-        self.triangulator = self.ground = None
+        self.triangulator = self.ground = self.calibrator = None
         if self.dock is not None:
             self.iface.removeDockWidget(self.dock)
             self.dock.deleteLater()
@@ -259,10 +299,20 @@ class PanoramaxPlugin:
             self.ground.camera_height = self.dock.camera_height()
         return self.ground
 
+    def _ensure_calibrator(self):
+        if self.calibrator is None:
+            self.calibrator = CalibrationTool(self.canvas, self.dock.calibration, self.dock.current_ids)
+        return self.calibrator
+
     def _active_measure(self):
         mode = self.dock.measure_mode()
         if mode == "tri":
             return self._ensure_triangulator()
+        if mode in ("tilt", "heading"):
+            tool = self._ensure_calibrator()
+            if tool.mode != mode:
+                tool.set_mode(mode)
+            return tool
         ground = self._ensure_ground()
         if ground.mode != mode:
             ground.set_mode(mode)
@@ -271,17 +321,55 @@ class PanoramaxPlugin:
     def _show_measure(self, text):
         """Texte de la mesure dans le panneau et repères dans la visionneuse."""
         self.dock.set_measure_status(text)
-        active = self.dock.btn_measure.isChecked() and self.dock.measure_mode() != "tri"
-        self.dock.set_measure_marks(self.ground.viewer_marks() if active and self.ground is not None else None)
+        self.dock.update_calibration_label()
+        mode = self.dock.measure_mode()
+        tool = {"width": self.ground, "height": self.ground, "tilt": self.calibrator,
+                "heading": self.calibrator}.get(mode) if self.dock.btn_measure.isChecked() else None
+        self.dock.set_measure_marks(tool.viewer_marks() if tool is not None else None)
 
     def _clear_measures(self):
+        """Efface les mesures en cours ; le calage déjà fait est conservé."""
+        self._end_landmark_tool()
         for tool in (self.triangulator, self.ground):
             if tool is not None:
                 tool.clear()
+        if self.calibrator is not None:
+            self.calibrator.reset()
+
+    # Repère du calage de cap : clic sur la carte, puis retour à l'outil précédent
+    def _start_landmark_tool(self):
+        if self.canvas.mapTool() is not self.landmark_tool:
+            self._previous_tool = self.canvas.mapTool()
+            self.canvas.setMapTool(self.landmark_tool)
+
+    def _end_landmark_tool(self):
+        if self.landmark_tool is not None and self.canvas.mapTool() is self.landmark_tool:
+            if self._previous_tool is not None:
+                self.canvas.setMapTool(self._previous_tool)
+            else:
+                self.canvas.unsetMapTool(self.landmark_tool)
+        self._previous_tool = None
+
+    def _on_landmark_cancelled(self):
+        self._end_landmark_tool()
+        if self.calibrator is not None:
+            self.calibrator.reset()
+            self._show_measure(self.calibrator.status())
+
+    def _on_landmark_clicked(self, point):
+        if self.calibrator is None:
+            return
+        to_wgs = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), WGS84,
+                                        QgsProject.instance())
+        p = to_wgs.transform(point)
+        self._end_landmark_tool()
+        self._show_measure(self.calibrator.add_map_point(p.x(), p.y()))
 
     def _on_measure_toggled(self, checked):
         if not checked:
             self._clear_measures()
+            if self.calibrator is not None:
+                self.calibrator.remove()  # visées vers les repères, redessinées au besoin
         self._show_measure(self._active_measure().status())
 
     def _on_measure_mode(self, mode):
@@ -294,7 +382,12 @@ class PanoramaxPlugin:
     def _on_photo_clicked(self, click):
         tool = self._active_measure()
         if not isinstance(tool, GroundMeasure) or not tool.needs_profile():
-            self._show_measure(tool.add_click(click))  # sommet d'un objet : pas de terrain
+            self._show_measure(tool.add_click(click))  # sommet d'un objet ou calage : pas de terrain
+            if isinstance(tool, CalibrationTool):
+                if tool.waiting_map():
+                    self._start_landmark_tool()
+                else:
+                    self._end_landmark_tool()
             return
         self._show_measure("Altitude du terrain le long de la visée…")
         mode = tool.mode
@@ -311,13 +404,13 @@ class PanoramaxPlugin:
         self.terrain.use_ign = self.dock.use_ign()
         if self.ground is not None:
             self.ground.clear()  # les profils des clics viennent de l'ancienne source
-            if self.dock.measure_mode() != "tri":
+            if self.dock.measure_mode() in ("width", "height"):
                 self._show_measure(self.ground.status())
 
     def _on_camera_height(self, value):
         ground = self._ensure_ground()
         ground.set_camera_height(value)
-        if self.dock.measure_mode() != "tri":
+        if self.dock.measure_mode() in ("width", "height"):
             self._show_measure(ground.status())
 
     def _on_measure_save(self):
@@ -328,6 +421,7 @@ class PanoramaxPlugin:
         self._show_measure(tri.status())
 
     def _on_measure_clear(self):
+        self._end_landmark_tool()
         tool = self._active_measure()
         tool.clear()
         self._show_measure(tool.status())

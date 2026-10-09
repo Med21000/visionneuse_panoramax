@@ -8,6 +8,8 @@
   être enregistré dans la couche « Panoramax – points triangulés ».
 - Largeur / hauteur : deux clics dans la photo, prolongés jusqu'au terrain
   (voir ground.py et terrain.py) ; les points s'affichent sur la carte.
+- Calage : inclinaison de la photo et cap de la séquence (voir calibration.py),
+  appliqués ensuite à toutes les mesures.
 """
 
 from datetime import datetime
@@ -26,7 +28,7 @@ from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPen
 
-from . import ground, triangulation
+from . import calibration, ground, triangulation
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
@@ -404,8 +406,9 @@ class GroundMeasure:
         points = []
         for c in self.clicks:
             pos = c.get("pos") or [None, None]
+            raw = c.get("raw") or [c["yaw"], c["elev"]]  # repère à l'endroit cliqué, avant calage
             points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1],
-                           "abs_yaw": c["yaw"], "elev": c["elev"]})
+                           "abs_yaw": raw[0], "elev": raw[1]})
         # Visionneuse web : seuls les clics dont la position dans la photo est connue
         label = ""
         if self.result:
@@ -451,3 +454,139 @@ class GroundMeasure:
         if self.notice:
             text += " ({}.)".format(self.notice)
         return text
+
+
+# --------------------------------------------------------------------------
+# Calage : inclinaison et cap
+# --------------------------------------------------------------------------
+class CalibrationTool:
+    """Clics de calage (voir calibration.py) : pied et sommet d'objets verticaux
+    (inclinaison de la photo), ou repère cliqué dans la photo puis sur la carte
+    (cap de la séquence)."""
+
+    def __init__(self, canvas, calibration, current):
+        self.canvas = canvas
+        self.calibration = calibration
+        self.current = current  # () -> (photo, séquence) affichées
+        self.mode = "tilt"
+        self.clicks = []  # clics en attente (dicts de PanoramaxDock.photoClicked)
+        self.error = None
+        self.last = None  # résultat du dernier calage (texte)
+        self.item = None
+
+    def set_mode(self, mode):
+        self.mode = mode
+        self.reset()
+
+    def needs_profile(self):
+        return False
+
+    def waiting_map(self):
+        """Le repère cliqué dans la photo attend son clic sur la carte."""
+        return self.mode == "heading" and len(self.clicks) == 1
+
+    def add_click(self, click, notice=None):
+        self.error, self.last = None, None
+        if self.mode == "heading":
+            if not click.get("sequence"):
+                self.error = "Séquence de la photo inconnue : recalage du cap impossible."
+            else:
+                self.clicks = [click]
+        else:
+            if self.clicks and self.clicks[0]["pic"] != click["pic"]:
+                self.clicks = []  # le sommet doit être sur la même photo que le pied
+            self.clicks.append(click)
+            if len(self.clicks) == 2:
+                bottom, top = (tuple(c["raw"]) for c in self.clicks)
+                self.clicks = []
+                try:
+                    r = self.calibration.add_vertical(click["pic"], bottom, top)
+                except calibration.CalibrationError as exc:
+                    self.error = str(exc)
+                else:
+                    self.last = "Inclinaison de la photo : {}° vers {}°{}.".format(
+                        _num(r["tilt"], 2), _num(r["toward"], 0),
+                        "" if r["residual"] is None else ", écart des objets {}°".format(_num(r["residual"], 2)))
+                    if r["partial"]:
+                        self.last += (" Correction partielle : cliquez un autre objet vertical, à environ 90° "
+                                      "du premier, pour corriger toute l'inclinaison.")
+        self._draw()
+        return self.status()
+
+    def add_map_point(self, mlon, mlat):
+        """Repère cliqué sur la carte (WGS84), après son clic dans la photo."""
+        if not self.waiting_map():
+            return self.status()
+        c, self.clicks = self.clicks[0], []
+        accuracy = c.get("accuracy")
+        survey = bool(c.get("precise")) and accuracy is not None and accuracy <= triangulation.SURVEY_ACCURACY
+        try:
+            r = self.calibration.add_landmark(c["sequence"], c["pic"], c["lon"], c["lat"], c["raw"][0],
+                                              c["raw"][1], mlon, mlat, accuracy, survey)
+        except calibration.CalibrationError as exc:
+            self.error = str(exc)
+        else:
+            self.last = "Repère à {} m : écart de cap {}° (±{}°).".format(
+                _num(r["distance"], 0), _num(r["offset"], 2), _num(r["sigma"], 2))
+            if r["sigma"] > (calibration.SURVEY_PRIOR if survey else calibration.PRIOR):
+                self.last += (" Repère trop proche pour beaucoup corriger le cap : l'erreur de position GPS "
+                              "de la photo y pèse lourd. Un repère plus lointain sera plus efficace.")
+        self._draw()
+        return self.status()
+
+    def reset(self):
+        """Abandonne les clics en attente (le calage déjà fait est conservé)."""
+        self.clicks, self.error, self.last = [], None, None
+        self._draw()
+
+    def clear(self):
+        """Efface le calage du mode : inclinaison de la photo ou cap de la séquence affichée."""
+        pic, sequence = self.current()
+        if self.mode == "tilt" and pic:
+            self.calibration.clear_tilt(pic)
+        elif self.mode == "heading" and sequence:
+            self.calibration.clear_heading(sequence)
+        self.reset()
+
+    def remove(self):
+        if self.item is not None:
+            self.item.remove()
+            self.item = None
+
+    def _draw(self):
+        """Carte : visées vers les repères de la séquence affichée (mode cap)."""
+        _, sequence = self.current()
+        obs = self.calibration.landmarks.get(sequence, []) if self.mode == "heading" else []
+        if self.item is None:
+            if not obs:
+                return
+            self.item = SightingsItem(self.canvas)
+        rays = [(o["lon"], o["lat"], o["mlon"], o["mlat"]) for o in obs]
+        self.item.set_data(rays, (obs[-1]["mlon"], obs[-1]["mlat"]) if obs else None)
+
+    def viewer_marks(self):
+        points = []
+        for c in self.clicks:
+            pos = c.get("pos") or [None, None]
+            points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1],
+                           "abs_yaw": c["raw"][0], "elev": c["raw"][1]})
+        return {"points": points, "label": "", "beside": self.mode == "tilt"}
+
+    def status(self):
+        n = len(self.clicks)
+        text = ""
+        if self.error:
+            text = self.error + " "
+        elif self.last:
+            text = self.last + " "
+        if self.mode == "tilt":
+            if n == 1:
+                return text + "Cliquez le sommet du même objet."
+            return text + ("Cliquez le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). "
+                           "Deux objets à environ 90° l'un de l'autre corrigent toute l'inclinaison de la photo.")
+        if n == 1:
+            return text + ("Cliquez maintenant ce même repère sur la carte QGIS (glisser pour déplacer la carte, "
+                           "molette pour zoomer, Échap pour annuler).")
+        return text + ("Cliquez dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), "
+                       "le plus loin possible : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°. "
+                       "La correction vaut pour toute la séquence.")

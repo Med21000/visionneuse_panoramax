@@ -38,6 +38,7 @@ import os
 import re
 
 from . import api
+from .calibration import Calibration
 from .pano_widget import PanoWidget
 
 
@@ -425,6 +426,8 @@ MEASURE_MODES = (
     ("Triangulation", "tri"),
     ("Largeur (route…)", "width"),
     ("Hauteur d'un objet", "height"),
+    ("Calage : inclinaison (objets verticaux)", "tilt"),
+    ("Calage : cap (repère sur la carte)", "heading"),
 )
 
 NO_WEBENGINE_TEXT = (
@@ -471,6 +474,7 @@ class PanoramaxDock(QDockWidget):
         self._live_ok = False  # True dès que la lecture directe de la visionneuse fonctionne
         self._view = None  # dernière vue connue : cap, inclinaison, zoom, champ vertical
         self._marks = {"points": [], "label": "", "beside": False}  # repères de mesure affichés dans la visionneuse
+        self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
 
         root = QWidget(self)
         layout = QVBoxLayout(root)
@@ -579,6 +583,9 @@ class PanoramaxDock(QDockWidget):
         tlay.addWidget(self.chk_ign)
         tlay.addStretch(1)
         mbox.addWidget(self.terrain_row)
+        self.lbl_calibration = QLabel("")
+        self.lbl_calibration.setWordWrap(True)
+        mbox.addWidget(self.lbl_calibration)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
         mbox.addWidget(self.measure_status)
@@ -753,7 +760,8 @@ class PanoramaxDock(QDockWidget):
         for w in (self.btn_aim, self.btn_save):
             w.setVisible(mode == "tri")
         for w in (self.lbl_camera, self.spin_camera, self.terrain_row):
-            w.setVisible(mode != "tri")
+            w.setVisible(mode in ("width", "height"))
+        self.update_calibration_label()
         crosshair = active and mode == "tri"
         if not active or mode == "tri":
             self.set_measure_marks(None)
@@ -777,8 +785,35 @@ class PanoramaxDock(QDockWidget):
             pts = [(p["abs_yaw"], p["elev"]) for p in self._marks["points"] if p.get("pic") == self._current_pic]
             self.img.set_marks(pts, self._marks.get("label", ""), self._marks.get("beside", False))
 
+    def current_ids(self):
+        """(photo, séquence) affichées, ou (None, None)."""
+        item = self._current_item
+        if not item or item.get("id") != self._current_pic:
+            return None, None
+        return item.get("id"), item.get("collection")
+
+    def update_calibration_label(self):
+        """Calage de la photo et de la séquence affichées, rappelé sous les mesures."""
+        pic, sequence = self.current_ids()
+        parts = []
+        tilt = self.calibration.tilt(pic) if pic else None
+        if tilt:
+            parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
+                tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
+                "s" if tilt["count"] > 1 else "").replace(".", ","))
+        heading = self.calibration.heading(sequence) if sequence else None
+        if heading:
+            parts.append("cap de la séquence {:+.2f}° (±{:.2f}°, {} repère{})".format(
+                heading["offset"], heading["sigma"], heading["count"],
+                "s" if heading["count"] > 1 else "").replace(".", ","))
+        self.lbl_calibration.setText("Calage : " + " · ".join(parts) if parts else "")
+        self.lbl_calibration.setVisible(bool(parts))
+
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
-        """Émet photoClicked si la photo cliquée est bien la photo courante."""
+        """Émet photoClicked si la photo cliquée est bien la photo courante.
+
+        yaw/elev : direction brute dans la photo ; le clic émis porte la direction
+        corrigée du calage (inclinaison, cap) et garde la brute dans "raw"."""
         item = self._current_item
         if not item or item.get("id") != self._current_pic or (pic and pic != self._current_pic):
             self.message.emit("Photo en cours de chargement : cliquez à nouveau.", 1, "")
@@ -790,8 +825,12 @@ class PanoramaxDock(QDockWidget):
         axis, axis_source = api.sequence_axis(item), "séquence"
         if axis is None:
             axis, axis_source = api.item_heading(item), "orientation de la photo"
-        self.photoClicked.emit({"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat),
-                                "yaw": float(yaw) % 360, "elev": float(elev),
+        pic_id, sequence = item.get("id", ""), item.get("collection")
+        cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev))
+        self.photoClicked.emit({"pic": pic_id, "lon": float(lon), "lat": float(lat),
+                                "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
+                                "sequence": sequence, "accuracy": api.item_accuracy(item),
+                                "precise": api.precise_heading(item) is not None,
                                 "axis": axis, "axis_source": axis_source, "pos": pos})
 
     def _on_native_click(self, yaw, elev):
@@ -847,12 +886,13 @@ class PanoramaxDock(QDockWidget):
         except (KeyError, TypeError, ValueError):
             return None
         precise = api.precise_heading(item)
+        pitch = 0.0  # visionneuse de secours : centre de la vue sur l'horizon
         if self.web is None:
             if self.img.pixmap is None:
                 return None  # image pas encore affichée : cap inconnu
             heading = self.img.current_view()[0]  # image déjà orientée sur le cap précis
         elif self._view is not None:
-            heading = self._view["heading"]
+            heading, pitch = self._view["heading"], float(self._view.get("pitch") or 0.0)
             rounded = api.item_heading(item)
             if precise is not None and rounded is not None:
                 heading += precise - rounded  # la visionneuse web s'oriente sur view:azimuth (arrondi)
@@ -860,8 +900,11 @@ class PanoramaxDock(QDockWidget):
             heading = precise if precise is not None else api.item_heading(item)
         if heading is None:
             return None
-        return {"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat), "heading": float(heading) % 360,
-                "accuracy": api.item_accuracy(item), "precise": precise is not None}
+        pic_id, sequence = item.get("id", ""), item.get("collection")
+        heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch)
+        return {"pic": pic_id, "lon": float(lon), "lat": float(lat), "heading": heading,
+                "accuracy": api.item_accuracy(item), "precise": precise is not None,
+                "heading_error": self.calibration.heading_error(sequence)}
 
     def _aim(self):
         sighting = self.current_sighting()
@@ -1173,6 +1216,7 @@ class PanoramaxDock(QDockWidget):
         self._current_item = item
         self._current_pic = pic_id
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
+        self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):
             self.set_measure_marks(self._marks)
         item_fov = self._item_fov(item)

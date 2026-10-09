@@ -10,7 +10,8 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
 - Mesures (bouton « 📐 Mesure ») :
   - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
-  - largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo.
+  - largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo ;
+  - calage des photos : correction de l'inclinaison de la caméra et recalage du cap sur un repère de la carte.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
 ## Mesures
@@ -22,10 +23,10 @@ Cliquer sur « 📐 Mesure » puis choisir le mode.
 1. Mode « Triangulation » : un réticule rouge apparaît au centre de la visionneuse.
 2. Tourner la vue pour placer le réticule sur l'objet, puis « 🎯 Viser ».
 3. Passer à une autre photo, idéalement décalée sur le côté de l'objet, et viser à nouveau le même objet.
-4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement et une incertitude estimée (pour ±1° de visée). Une troisième visée améliore et contrôle le résultat.
+4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement, la précision GPS des photos et une incertitude estimée (erreur de visée de ±1°, ±0,5° pour le matériel de relevé, et précision GPS des photos). Une troisième visée améliore et contrôle le résultat. Chaque visée est pondérée : une visée lointaine ou une photo mal positionnée compte moins.
 5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
 
-La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du mètre) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°.
+La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
 ### Largeur et hauteur
 
@@ -44,7 +45,14 @@ Google Elevation n'est pas proposé : il exige une clé API et un compte de fact
 
 La source utilisée, et la raison d'un éventuel repli, sont indiquées avec le résultat.
 
-Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste sur 120 m) plutôt que le profil brut du terrain : un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) n'est pas corrigée, et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste sur 120 m) plutôt que le profil brut du terrain : un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) se corrige par le calage (voir ci-dessous), et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+
+### Calage des photos
+
+Deux modes corrigent les défauts d'une photo avant de mesurer ; la correction s'applique ensuite à toutes les mesures (triangulation, largeur, hauteur) et reste valable pendant la session QGIS. Le calage en cours est rappelé sous les boutons de mesure, et « Effacer » le supprime.
+
+- **Calage : inclinaison (objets verticaux)**, pour la photo affichée : cliquer le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). Un objet corrige la pente vue dans sa direction ; un second objet, à environ 90° du premier, corrige toute l'inclinaison. C'est la principale source d'erreur des largeurs et des hauteurs.
+- **Calage : cap (repère sur la carte)**, pour toute la séquence : cliquer dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), puis ce même repère sur la carte. Choisir un repère lointain : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°. Le décalage mesuré est combiné au cap d'origine selon leurs précisions, si bien qu'un repère trop proche corrige peu ; plusieurs repères s'additionnent.
 
 ## Installation
 

@@ -438,7 +438,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 - **Mesures conservées.** Une mesure terminée reste affichée dans la visionneuse (sur la photo où elle a été prise) et sur la carte quand on en commence une autre, qu'on change de mode ou qu'on arrête de mesurer.
 - **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
-- **Visionneuse.** Croix blanches aux points cliqués, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
+- **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
 - **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
 - **Couche.** Seuls les points triangulés s'enregistrent dans une couche (« Panoramax – points triangulés », temporaire, à sauvegarder).
 

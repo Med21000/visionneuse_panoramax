@@ -23,6 +23,8 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 
 Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage, les sources d'erreur et des pistes d'amélioration (calculs et prise de vues) sont détaillées dans [docs/MESURES.md](docs/MESURES.md).
 
+![Mesures dans la visionneuse : hauteur d'une porte (2,54 m), largeurs de bandes de passage piéton (1,43 m et 0,47 m)](docs/images/mesures.png)
+
 ### Largeur et hauteur
 
 - **Largeur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
@@ -56,6 +58,8 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
 
 La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
+
+![Triangulation d'un lampadaire : quatre visées, croisement de 83°, incertitude ±2,0 m](docs/images/triangulation.png)
 
 ### Mesure libre 3D
 

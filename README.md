@@ -58,7 +58,7 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 
 La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
-![Triangulation d'un lampadaire : quatre visées, croisement de 83°, incertitude ±2,0 m](docs/images/triangulation.png)
+![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule dans la visionneuse, croisement de 83°, incertitude ±2,0 m](docs/images/triangulation.png)
 
 ### Mesure libre 3D
 

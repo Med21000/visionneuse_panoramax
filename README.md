@@ -6,11 +6,11 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
 - Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche.
-- Filaire des séquences en tuiles vectorielles.
 - Capture Full HD de la vue, recalculée à partir de la photo originale.
 - Mesures (bouton « 📐 Mesure ») :
-  - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
   - largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo.
+  - Mesures libres recalable sur un plan depuis la cartographie QGIS
+  - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
 ## Mesures

@@ -7,8 +7,9 @@ La caméra est à une hauteur connue au-dessus du sol. Un clic donne une
 direction (cap, élévation) ; on suit ce rayon jusqu'à ce qu'il passe sous le
 terrain, décrit par un profil d'altitudes le long de la visée (MNT ou service
 d'altimétrie). Sans profil, le sol est supposé plat et horizontal. On en déduit
-la position des points au sol, la largeur d'une voie (perpendiculairement à son
-axe) et la hauteur d'un objet (pied puis sommet).
+la position des points au sol (utilisée par geometry.py pour toutes les mesures)
+et la hauteur d'un objet, pied puis sommet (utilisée par le calage de la hauteur
+de caméra, avec le même modèle que les mesures).
 
 La précision chute vite avec la distance (une erreur d'inclinaison de 0,5°
 déplace un point situé à 15 m de plus d'un mètre) : réservé aux objets proches.
@@ -93,36 +94,17 @@ def _spread(fn, clicks):
     return worst
 
 
-def measure_width(camera_height, a, b, axis):
-    """Largeur perpendiculaire à un axe (cap de la route) entre deux clics au sol.
-
-    Les deux bords n'ont pas besoin d'être cliqués exactement en face l'un de
-    l'autre : seule la composante perpendiculaire à l'axe est retenue. Le second
-    point dessiné ("points"[1]) est le pied de la perpendiculaire, en face du premier.
-    """
-    ax, ay = math.sin(math.radians(axis)), math.cos(math.radians(axis))
-
-    def split(clicks):
-        (_, p, _), (_, q, _) = (_ground_point(camera_height, c) for c in clicks)
-        x, y = _local(q[0], q[1], p[0], p[1])
-        along = x * ax + y * ay
-        return p, x - along * ax, y - along * ay, along
-
-    def width(clicks):
-        _, px, py, _ = split(clicks)
-        return math.hypot(px, py)
-
-    (d1, p1, _), (d2, p2, _) = _ground_point(camera_height, a), _ground_point(camera_height, b)
-    p, px, py, along = split([a, b])
-    w = math.hypot(px, py)
-    foot = offset(p[0], p[1], math.degrees(math.atan2(px, py)), w)
-    return {"points": [p1, foot], "clicked": p2, "ranges": [d1, d2], "value": w,
-            "oblique": math.hypot(w, along), "axis": axis % 360,
-            "uncertainty": _spread(width, [a, b])}
+MAX_TOP_OFFSET = 45.0  # écart de cap maximal entre le pied et le sommet d'un objet (degrés)
 
 
 def measure_height(camera_height, base, top):
-    """Hauteur d'un objet : clic au pied (au sol) puis au sommet, sur la même photo."""
+    """Hauteur d'un objet : clic au pied (au sol) puis au sommet, sur la même photo.
+
+    Le sommet est pris dans le plan vertical face à la caméra qui passe par le pied :
+    pour un objet fin (poteau), c'est à la même distance que le pied ; pour un mur
+    face à la caméra, le sommet peut être cliqué un peu de côté. Même modèle que la
+    mesure libre sur le plan vertical face à la caméra (geometry.py).
+    """
     if base.get("pic") != top.get("pic"):
         raise GroundError("Le pied et le sommet doivent être cliqués sur la même photo.")
     profile = base.get("profile") or flat_profile()
@@ -130,7 +112,11 @@ def measure_height(camera_height, base, top):
     def height(clicks):
         b, t = clicks
         s, z_ground = intersect(profile, camera_height, b["elev"])
-        z_top = profile[0][1] + camera_height + s * math.tan(math.radians(t["elev"]))
+        offset_angle = (t["yaw"] - b["yaw"] + 540) % 360 - 180
+        if abs(offset_angle) > MAX_TOP_OFFSET:
+            raise GroundError("Le sommet est trop à côté du pied : cliquez-le au-dessus du pied.")
+        reach = s / math.cos(math.radians(offset_angle))  # distance horizontale jusqu'au plan
+        z_top = profile[0][1] + camera_height + reach * math.tan(math.radians(t["elev"]))
         return z_top - z_ground
 
     d, p, _ = _ground_point(camera_height, base)

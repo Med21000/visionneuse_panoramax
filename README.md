@@ -5,34 +5,36 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
 ## Fonctionnalités
 
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
-- Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche.
-- Capture Full HD de la vue, recalculée à partir de la photo originale.
+- Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
+- Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
+- Capture vignette (« 🖼 Capture vignette ») : la visionneuse telle qu'affichée, mesures comprises, enregistrée en PNG et copiée dans le presse-papiers.
+- Option « Filtrage anisotrope » (décochée par défaut, mémorisée) : atténue le crénelage et le scintillement des détails fins vus de loin en gardant l'image nette, au prix d'une navigation un peu moins fluide.
 - Mesures (bouton « 📐 Mesure ») :
-  - largeur (de route, de trottoir…) et hauteur d'un objet, en deux clics dans la photo.
-  - Mesures libres recalable sur un plan depuis la cartographie QGIS
-  - triangulation : positionner un objet (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
+  - largeur perpendiculaire à la chaussée, largeur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
+  - triangulation d'un objet : le positionner (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
+  - mesure libre 3D : distance entre deux points pris au sol, sur une façade, dans un plan vertical ou horizontal, ou par triangulation depuis deux photos ;
+  - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
+  - mesures affichées dans la visionneuse et sur la carte, conservées à l'écran jusqu'à « Tout effacer » ;
+  - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
 - Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
 
 ## Mesures
 
-Cliquer sur « 📐 Mesure » puis choisir le mode.
+Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage, les sources d'erreur et des pistes d'amélioration (calculs et prise de vues) sont détaillées dans [docs/MESURES.md](docs/MESURES.md).
 
-### Triangulation
-
-1. Mode « Triangulation » : un réticule rouge apparaît au centre de la visionneuse.
-2. Tourner la vue pour placer le réticule sur l'objet, puis « 🎯 Viser ».
-3. Passer à une autre photo, idéalement décalée sur le côté de l'objet, et viser à nouveau le même objet.
-4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement et une incertitude estimée (pour ±1° de visée). Une troisième visée améliore et contrôle le résultat.
-5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
-
-La précision dépend surtout de celle du GPS des photos (souvent de l'ordre du mètre) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°.
+![Mesures dans la visionneuse : hauteur d'une porte (2,54 m), largeurs de bandes de passage piéton (1,43 m et 0,47 m)](docs/images/mesures.png)
 
 ### Largeur et hauteur
 
-- **Largeur** : cliquer au pied d'un bord (bordure, marquage, limite de chaussée), puis au pied du bord opposé. Les deux clics n'ont pas besoin d'être exactement en face : la largeur est prise perpendiculairement à l'axe de la route, donné par la direction de la séquence (photos précédente et suivante) ou, à défaut, par l'orientation de la photo. La distance en biais est aussi indiquée.
+- **Largeur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
+- **Largeur perpendiculaire à la chaussée** : cliquer au pied d'un bord (bordure, marquage, limite de chaussée), puis au pied du bord opposé. Les deux clics n'ont pas besoin d'être exactement en face : la largeur est prise perpendiculairement à l'axe de la route, donné par la direction de la séquence (photos précédente et suivante) ou, à défaut, par l'orientation de la photo. La distance en biais est aussi indiquée. À réserver aux mesures en travers de la route : le long de la route, la composante perpendiculaire est presque nulle.
 - **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
 
-Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus de photo. Les points cliqués, le trait qui les relie et la valeur mesurée s'affichent directement dans la visionneuse (accrochés à la photo, ils suivent la vue), ainsi que dans le panneau et sur la carte. Chaque clic est prolongé jusqu'au sol (lancer de rayon), depuis une caméra placée à la hauteur indiquée (1,90 m par défaut, réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo).
+Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus de photo. Les points cliqués, le trait qui les relie et la valeur mesurée s'affichent directement dans la visionneuse (accrochés à la photo, ils suivent la vue), ainsi que dans le panneau et sur la carte. Une mesure terminée reste affichée quand on en commence une autre, quand on change de mode ou quand on arrête de mesurer : plusieurs mesures peuvent ainsi coexister à l'écran, chacune sur la photo où elle a été prise. « Effacer » supprime la mesure en cours, « Tout effacer » toutes les mesures affichées.
+
+**Recaler un point sur la carte** : pendant les mesures, les points rouges des mesures se **glissent sur la carte QGIS**. Si un point tombe mal (au-delà d'une façade, par exemple quand le pied cliqué n'était pas au contact du sol), le faire glisser à sa vraie place : sa position vient alors de la carte et son altitude du rayon de visée, et la mesure est recalculée, y compris une mesure terminée. Une hauteur dont le pied est recalé ne dépend plus ni du terrain ni de la hauteur de caméra. Glisser ailleurs déplace la carte, un simple clic ouvre la photo la plus proche.
+
+**Viser à nouveau dans la visionneuse** : la carte, vue de haut, ne permet qu'un placement grossier ; elle fixe surtout le **plan** du point (sa distance à la caméra). Le **plan calé** est celui de la mesure : vertical, passant par les deux points glissés sur la carte (le mur), ou par le seul point glissé, face à la caméra. Pour placer un point avec précision, cliquer dans la visionneuse sur son repère (entre deux mesures) : un cercle jaune l'entoure. Le clic suivant, même tout près, le replace exactement à l'endroit visé, **dans le plan calé** (ou sur sa surface si la mesure n'a pas été calée). « Effacer » annule la sélection. On peut alterner librement : glisser sur la carte pour le plan, viser dans la photo pour la position fine. Pour une largeur le long d'un mur, glisser les deux points sur le mur, puis viser chacun. Chaque clic est prolongé jusqu'au sol (lancer de rayon), depuis une caméra placée à la hauteur indiquée (1,90 m par défaut, réglable : environ 2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo).
 
 Altitude du terrain : sources essayées dans l'ordre jusqu'à la première qui répond (délai de 5 secondes chacune) :
 
@@ -44,7 +46,39 @@ Google Elevation n'est pas proposé : il exige une clé API et un compte de fact
 
 La source utilisée, et la raison d'un éventuel repli, sont indiquées avec le résultat.
 
-Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste sur 120 m) plutôt que le profil brut du terrain : un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) n'est pas corrigée, et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste sur 120 m) plutôt que le profil brut du terrain : un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) se corrige par le calage (voir ci-dessous), et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+
+### Triangulation d'un objet
+
+1. Mode « Triangulation d'un objet » : un réticule rouge apparaît au centre de la visionneuse.
+2. Tourner la vue pour placer le réticule sur l'objet, puis « 🎯 Viser ».
+3. Passer à une autre photo, idéalement décalée sur le côté de l'objet, et viser à nouveau le même objet.
+4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement, la précision GPS des photos et une incertitude estimée (erreur de visée de ±1°, ±0,5° pour le matériel de relevé, et précision GPS des photos). Une troisième visée améliore et contrôle le résultat. Chaque visée est pondérée : une visée lointaine ou une photo mal positionnée compte moins.
+5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (couche temporaire à sauvegarder).
+
+La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
+
+![Triangulation d'un lampadaire : quatre visées, croisement de 83°, incertitude ±2,0 m](docs/images/triangulation.png)
+
+### Mesure libre 3D
+
+Mode « Mesure libre 3D » : chaque clic devient un point en 3D, à l'intersection de la visée avec la **surface** choisie, avec le même modèle de caméra que les autres modes (calages, hauteur de caméra, terrain). Un point est donc le même quel que soit le mode, et les mesures restent cohérentes entre elles.
+
+- **Sol** : comme les mesures de largeur.
+- **Façade (plan vertical)** : « Définir la façade », puis cliquer dans la photo le pied du mur à ses deux extrémités. On mesure ensuite n'importe quoi sur cette façade (largeur ou hauteur d'une fenêtre, d'une porte, d'un portail), y compris depuis d'autres photos. Ses deux extrémités s'affichent sur la carte : les glisser sur le bord du bâtiment (orthophoto, cadastre) la place dans le bon plan, et elle ne dépend plus alors ni du sol, ni du trottoir, ni de la hauteur de caméra.
+- **Plan vertical face à la caméra** : premier point au sol (pied), second dans le plan vertical qui passe par lui (sommet, angle) ; c'est la mesure de hauteur, généralisée.
+- **Plan horizontal** : points sur un plan horizontal à la hauteur indiquée au-dessus du sol (dessus d'un muret, d'un quai).
+- **Triangulation 3D (deux photos)** : chaque point est cliqué sur deux photos différentes ; la mesure ne dépend alors ni du sol, ni de la hauteur de caméra.
+
+Le résultat est la distance 3D, avec sa décomposition : horizontale, verticale, le long de la route et en travers. Un point qui n'est pas vraiment sur la surface choisie (balcon ou appui en saillie sur une façade) est faux de toute sa saillie, et une visée rasante sur un plan est signalée. Détails dans [docs/MESURES.md](docs/MESURES.md#45-mesure-libre-3d).
+
+### Calage des photos
+
+Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction s'applique ensuite à toutes les mesures (triangulation, largeur, hauteur) et est enregistrée dans le projet QGIS (le projet passe en « modifié » : l'enregistrer pour conserver le calage). Le calage en cours est rappelé sous les boutons de mesure, et « Effacer » le supprime.
+
+- **Calage : inclinaison (objets verticaux)**, pour la photo affichée : cliquer le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). Un objet corrige la pente vue dans sa direction ; un second objet, à environ 90° du premier, corrige toute l'inclinaison. C'est la principale source d'erreur des largeurs et des hauteurs.
+- **Calage : cap et position (repères sur la carte)** : cliquer dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), puis ce même repère sur la carte (glisser pour déplacer la carte, molette pour zoomer, Échap pour annuler). Les repères donnent, par relèvement, le décalage de cap et de position GPS de la séquence, chacun combiné à sa valeur d'origine selon les précisions : un repère seul corrige surtout le cap (le choisir lointain : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°) ; trois repères ou plus, bien répartis autour de la photo (devant, derrière, sur les côtés), recalent aussi sa position. Un repère incohérent avec les précédents est refusé. Le GPS dérivant au fil d'une séquence, le recalage ne vaut que pour les photos situées à moins de 300 m de celles qui l'ont servi ; la position recalée et sa précision remplacent alors celles du GPS dans les mesures.
+- **Calage : hauteur de caméra (longueur connue)**, pour toute la séquence : choisir « au sol » ou « en hauteur » et indiquer la longueur réelle, puis cliquer ses deux extrémités au sol (place de stationnement, bande de passage piéton, trait de marquage, longueur mesurée sur l'orthophoto avec l'outil de mesure de QGIS) ou le pied puis le sommet d'un objet de hauteur connue. Les largeurs et les hauteurs étant à peu près proportionnelles à la hauteur de la caméra, le plugin en déduit celle-ci ; elle remplace la valeur saisie pour les mesures de la séquence, et elle est reportée et enregistrée dans le réglage « Caméra à » du panneau. Choisir une référence proche (moins de 10–15 m) et, au sol, plutôt en travers de la vue. Plusieurs références se combinent.
 
 ## Installation
 

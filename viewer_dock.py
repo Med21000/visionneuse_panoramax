@@ -38,6 +38,9 @@ import os
 import re
 
 from . import api
+from . import calibration
+from .calibration import Calibration
+from .measure_tool import FREE_SURFACES
 from .pano_widget import PanoWidget
 
 
@@ -176,6 +179,44 @@ LIVE_VIEW_JS = r"""
 })()
 """
 
+# Filtrage anisotrope 4x des textures du panorama, contre le crénelage et le scintillement
+# des détails fins quand la photo est vue de loin. Photo Sphere Viewer crée ses textures sans
+# mipmaps (filtre linéaire, anisotropie 1) : on active les mipmaps (trilinéaire), sans
+# lesquels l'anisotropie n'a guère d'effet. Relancé régulièrement pour les tuiles chargées au
+# fil de la navigation ; chaque texture n'est traitée qu'une fois. __ON__ = false rétablit le
+# filtre d'origine quand on décoche l'option.
+ANISO_JS = r"""
+(function(){
+  var v = window.__pnxViewer;
+  var r = v && v.psv && v.psv.renderer;
+  if (!r || !r.scene || !r.scene.traverse) return;
+  var caps = r.renderer && r.renderer.capabilities;
+  var max = (caps && caps.getMaxAnisotropy && caps.getMaxAnisotropy()) || 1;
+  var on = __ON__;
+  var changed = false;
+  r.scene.traverse(function(o){
+    var mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    mats.forEach(function(m){
+      var texs = [m.map];  // matériau simple, ou textures passées au shader de l'adaptateur
+      if (m.uniforms) Object.keys(m.uniforms).forEach(function(k){
+        var u = m.uniforms[k] && m.uniforms[k].value;
+        if (u && u.isTexture) texs.push(u);
+      });
+      texs.forEach(function(t){
+        if (!t || !t.isTexture || !t.image || !!t.__qgisAniso === on) return;
+        t.__qgisAniso = on;
+        t.anisotropy = on ? Math.min(4, max) : 1;
+        t.generateMipmaps = on;
+        t.minFilter = on ? 1008 : 1006;  // THREE.LinearMipmapLinearFilter : THREE.LinearFilter
+        t.needsUpdate = true;
+        changed = true;
+      });
+    });
+  });
+  if (changed && v.psv.needsUpdate) v.psv.needsUpdate();
+})()
+"""
+
 # Réticule de visée (triangulation), centré sur la vue : c'est la direction lue
 # par getXYZ(). Ajouté au document, au-dessus de la visionneuse et sans capter la souris.
 CROSSHAIR_JS = r"""
@@ -275,34 +316,63 @@ MARKS_JS = r"""
   var M = v && v.psv && v.psv._myMarkers;
   if (!M || !M.addMarker) return;
   var pic = v.psv.getPictureId ? (v.psv.getPictureId() || '') : '';
-  var pts = (state.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; });
-  // Anciens identifiants (ext, h) gardés pour effacer les repères d'une version précédente
-  var ids = ['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line', 'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1',
-             'qgis-label'];
+  // Mesures de la photo affichée : celles prises sur d'autres photos restent en attente
+  var measures = (state.measures || []).map(function(m){
+    return {label: m.label, beside: m.beside,
+            pts: (m.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; })};
+  }).filter(function(m){ return m.pts.length; });
   // Étiquette à côté du trait (hauteur) : du côté du centre de la vue, recalculé quand
   // la vue tourne de l'autre côté du trait
-  var side = '';
-  if (state.beside && pts.length === 2 && v.psv.getPosition) {
-    var d = (pts[0].yaw + pts[1].yaw) / 2 - v.psv.getPosition().yaw;
-    if (Math.abs(pts[0].yaw - pts[1].yaw) > Math.PI) d += Math.PI;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    side = d > 0 ? 'left' : 'right';
-  }
-  var key = JSON.stringify(state) + '|' + pic + '|' + side;
-  var present = !pts.length || !!(M.markers && M.markers['qgis-p0']);
+  var view = v.psv.getPosition ? v.psv.getPosition().yaw : 0;
+  measures.forEach(function(m){
+    m.side = '';
+    if (m.beside && m.pts.length === 2) {
+      var d = (m.pts[0].yaw + m.pts[1].yaw) / 2 - view;
+      if (Math.abs(m.pts[0].yaw - m.pts[1].yaw) > Math.PI) d += Math.PI;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      m.side = d > 0 ? 'left' : 'right';
+    }
+  });
+  var key = JSON.stringify(measures) + '|' + pic;
+  var present = !measures.length || !!(M.markers && M.markers['qgis-m0-p0']);
   if (key === window.__qgisMarkKey && present) return;
   window.__qgisMarkKey = key;
-  ids.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
+  // Repères précédents, y compris ceux d'une version antérieure du plugin
+  var old = (window.__qgisMarkIds || []).concat(['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line',
+             'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1', 'qgis-label']);
+  old.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
+  var ids = [];
+  function add(marker){ ids.push(marker.id); M.addMarker(marker); }
   // Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
-  // Trait par-dessus les croix (même couche SVG : ordre d'ajout).
+  // Les traits passent devant toutes les croix : ajoutés après elles (même couche SVG,
+  // ordre d'ajout), avec un zIndex plus haut, et replacés en fin de leur conteneur.
   var cross = 'M0 9H18M9 0V18';
-  var line = pts.length === 2 ? [[pts[0].yaw, pts[0].pitch], [pts[1].yaw, pts[1].pitch]] : null;
-  pts.forEach(function(p, i){
-    M.addMarker({id: 'qgis-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross,
-                 anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+  measures.forEach(function(m, k){
+    m.pts.forEach(function(p, i){
+      add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
+           anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+      // Point sélectionné pour être visé à nouveau : cercle jaune autour de la croix
+      if (p.sel) add({id: 'qgis-m' + k + '-s' + i, position: {yaw: p.yaw, pitch: p.pitch}, zIndex: 3,
+                      path: 'M1 12a11 11 0 1 0 22 0a11 11 0 1 0 -22 0', anchor: 'center center',
+                      svgStyle: {stroke: '#ffd54f', strokeWidth: '2.5px', fill: 'none'}});
+    });
   });
-  if (line) M.addMarker({id: 'qgis-line', polyline: line, svgStyle: {stroke: '#ff8a80', strokeWidth: '1.5px', fill: 'none'}});
-  if (state.label && pts.length) {
+  var lines = [];
+  measures.forEach(function(m, k){
+    if (m.pts.length !== 2) return;
+    var id = 'qgis-m' + k + '-line';
+    add({id: id, polyline: [[m.pts[0].yaw, m.pts[0].pitch], [m.pts[1].yaw, m.pts[1].pitch]], zIndex: 2,
+         svgStyle: {stroke: '#ff5f52', strokeWidth: '2.5px', fill: 'none'}});
+    lines.push(id);
+  });
+  lines.forEach(function(id){
+    var mk = M.markers && M.markers[id];
+    var el = mk && (mk.domElement || mk.element || mk.$el);
+    if (el && el.parentNode) el.parentNode.appendChild(el);
+  });
+  measures.forEach(function(m, k){
+    var pts = m.pts, prefix = 'qgis-m' + k + '-';
+    if (!m.label) return;
     var at = pts[0];
     if (pts.length === 2) {  // milieu du trait (moyenne des directions)
       var x = 0, y = 0, z = 0;
@@ -311,7 +381,7 @@ MARKS_JS = r"""
       });
       at = {yaw: Math.atan2(x, z), pitch: Math.atan2(y, Math.sqrt(x * x + z * z))};
     }
-    var text = String(state.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
+    var text = String(m.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
     // Flèche de tête allongée au double dans son sens. ↔ (largeur) : la flèche cachée en double
     // réserve exactement la place, la visible est étirée depuis le bord gauche. ↕ (hauteur) :
     // une ligne de 2em lui fait la place, l'étiquette grandit d'autant.
@@ -320,13 +390,15 @@ MARKS_JS = r"""
       + 'transform:scaleX(2);transform-origin:0 50%">↔</span></span>');
     text = text.replace(/^↕/, '<span style="display:inline-block;line-height:2em;vertical-align:middle;'
       + 'transform:scaleY(2)">↕</span>');
+    var side = m.side;
     var anchor = side === 'left' ? 'center right' : side === 'right' ? 'center left' : 'bottom center';
     var margin = side === 'left' ? 'margin-right:14px;' : side === 'right' ? 'margin-left:14px;' : 'margin-bottom:10px;';
-    M.addMarker({id: 'qgis-label', position: {yaw: at.yaw, pitch: at.pitch}, anchor: anchor, zIndex: 101,
-                 html: '<div style="' + margin + 'padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.92);'
-                   + 'color:#b71c1c;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
-                   + text + '</div>'});
-  }
+    add({id: prefix + 'label', position: {yaw: at.yaw, pitch: at.pitch}, anchor: anchor, zIndex: 101,
+         html: '<div style="' + margin + 'padding:2px 7px;border-radius:4px;background:rgba(255,255,255,.92);'
+           + 'color:#b71c1c;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
+           + text + '</div>'});
+  });
+  window.__qgisMarkIds = ids;
 })(__STATE__)
 """
 
@@ -384,10 +456,17 @@ NAV_BLOCK_JS = r"""
 """
 
 MEASURE_MODES = (
-    ("Triangulation", "tri"),
-    ("Largeur (route…)", "width"),
+    ("Largeur perpendiculaire à la chaussée", "road"),
+    ("Largeur parallèle à la route", "width"),
     ("Hauteur d'un objet", "height"),
+    ("Triangulation d'un objet", "tri"),
+    ("Mesure libre 3D", "free"),
+    ("Calage : inclinaison (objets verticaux)", "tilt"),
+    ("Calage : cap et position (repères sur la carte)", "heading"),
+    ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
+
+GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
 
 NO_WEBENGINE_TEXT = (
     "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
@@ -415,9 +494,15 @@ class PanoramaxDock(QDockWidget):
     aimRequested = pyqtSignal(object)
     measureSaveRequested = pyqtSignal()
     measureClearRequested = pyqtSignal()
+    measureClearAllRequested = pyqtSignal()  # efface toutes les mesures conservées à l'écran
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
+    # Mesure libre 3D : surface choisie, façade à (re)définir, hauteur du plan horizontal
+    surfaceChanged = pyqtSignal(str)
+    facadeRequested = pyqtSignal()
+    planeHeightChanged = pyqtSignal(float)
+    referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
 
     def __init__(self, parent=None):
@@ -432,7 +517,8 @@ class PanoramaxDock(QDockWidget):
         self._last_xyz = None
         self._live_ok = False  # True dès que la lecture directe de la visionneuse fonctionne
         self._view = None  # dernière vue connue : cap, inclinaison, zoom, champ vertical
-        self._marks = {"points": [], "label": "", "beside": False}  # repères de mesure affichés dans la visionneuse
+        self._marks = []  # mesures affichées dans la visionneuse (voir set_measure_marks)
+        self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
 
         root = QWidget(self)
         layout = QVBoxLayout(root)
@@ -521,11 +607,35 @@ class PanoramaxDock(QDockWidget):
         self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 1.9)))
         self.spin_camera.valueChanged.connect(self._on_camera_height)
         mlay.addWidget(self.spin_camera)
+        self.cmb_reference = QComboBox()
+        self.cmb_reference.addItem("au sol", "ground")
+        self.cmb_reference.addItem("en hauteur", "height")
+        self.cmb_reference.setToolTip("Longueur connue au sol (deux clics) ou hauteur d'un objet (pied puis sommet)")
+        self.cmb_reference.setCurrentIndex(max(0, self.cmb_reference.findData(
+            QgsSettings().value("visionneuse_panoramax/reference_kind", "ground"))))
+        self.cmb_reference.currentIndexChanged.connect(self._on_reference)
+        mlay.addWidget(self.cmb_reference)
+        self.spin_reference = QDoubleSpinBox()
+        self.spin_reference.setRange(0.1, 50.0)
+        self.spin_reference.setSingleStep(0.1)
+        self.spin_reference.setDecimals(2)
+        self.spin_reference.setSuffix(" m")
+        self.spin_reference.setToolTip(
+            "Longueur réelle de la référence. Exemples : place de stationnement 2,30 à 2,50 m de large, "
+            "bande de passage piéton 0,50 m, trait de marquage 3 m. Une longueur visible sur l'orthophoto "
+            "peut aussi se mesurer avec l'outil de mesure de QGIS.")
+        self.spin_reference.setValue(float(QgsSettings().value("visionneuse_panoramax/reference_length", 2.5)))
+        self.spin_reference.valueChanged.connect(self._on_reference)
+        mlay.addWidget(self.spin_reference)
         mlay.addStretch(1)
         btn_clear = QPushButton("Effacer")
-        btn_clear.setToolTip("Effacer la mesure en cours")
+        btn_clear.setToolTip("Effacer la mesure en cours (ou le calage du mode choisi)")
         btn_clear.clicked.connect(self.measureClearRequested)
         mlay.addWidget(btn_clear)
+        btn_clear_all = QPushButton("Tout effacer")
+        btn_clear_all.setToolTip("Effacer toutes les mesures affichées dans la visionneuse et sur la carte")
+        btn_clear_all.clicked.connect(self.measureClearAllRequested)
+        mlay.addWidget(btn_clear_all)
         mbox.addLayout(mlay)
         self.terrain_row = QWidget(self.measure_box)
         tlay = QHBoxLayout(self.terrain_row)
@@ -541,6 +651,40 @@ class PanoramaxDock(QDockWidget):
         tlay.addWidget(self.chk_ign)
         tlay.addStretch(1)
         mbox.addWidget(self.terrain_row)
+        self.free_row = QWidget(self.measure_box)
+        flay = QHBoxLayout(self.free_row)
+        flay.setContentsMargins(0, 0, 0, 0)
+        flay.addWidget(QLabel("Surface :"))
+        self.cmb_surface = QComboBox()
+        for label, key in FREE_SURFACES:
+            self.cmb_surface.addItem(label, key)
+        self.cmb_surface.setToolTip(
+            "Surface sur laquelle se trouvent les points cliqués : le sol, une façade (plan vertical défini "
+            "par deux clics au pied du mur), le plan vertical face à la caméra passant par le premier point "
+            "(cliqué au sol), un plan horizontal à une hauteur donnée, ou aucune (triangulation depuis deux photos)")
+        self.cmb_surface.currentIndexChanged.connect(self._on_surface)
+        flay.addWidget(self.cmb_surface)
+        self.btn_facade = QPushButton("Définir la façade")
+        self.btn_facade.setToolTip("Cliquer ensuite dans la photo au pied du mur, à ses deux extrémités ; ses "
+                                   "extrémités se recalent ensuite en les glissant sur la carte")
+        self.btn_facade.clicked.connect(self.facadeRequested)
+        flay.addWidget(self.btn_facade)
+        self.lbl_plane = QLabel("à")
+        flay.addWidget(self.lbl_plane)
+        self.spin_plane = QDoubleSpinBox()
+        self.spin_plane.setRange(-20.0, 50.0)
+        self.spin_plane.setSingleStep(0.1)
+        self.spin_plane.setDecimals(2)
+        self.spin_plane.setSuffix(" m du sol")
+        self.spin_plane.setValue(1.0)
+        self.spin_plane.setToolTip("Hauteur du plan horizontal au-dessus du sol sous la caméra")
+        self.spin_plane.valueChanged.connect(lambda v: self.planeHeightChanged.emit(float(v)))
+        flay.addWidget(self.spin_plane)
+        flay.addStretch(1)
+        mbox.addWidget(self.free_row)
+        self.lbl_calibration = QLabel("")
+        self.lbl_calibration.setWordWrap(True)
+        mbox.addWidget(self.lbl_calibration)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
         mbox.addWidget(self.measure_status)
@@ -552,6 +696,13 @@ class PanoramaxDock(QDockWidget):
         self.chk_follow = QCheckBox("Centrer la carte QGIS sur la photo")
         self.chk_follow.setChecked(True)
         opts.addWidget(self.chk_follow)
+        self.chk_aniso = QCheckBox("Filtrage anisotrope")
+        self.chk_aniso.setToolTip("Filtrage anisotrope 4x des textures : atténue le crénelage et le scintillement "
+                                  "des détails fins vus de loin, en gardant l'image nette. "
+                                  "Peut rendre la navigation un peu moins fluide.")
+        self.chk_aniso.setChecked(QgsSettings().value("visionneuse_panoramax/anisotropic", False, type=bool))
+        self.chk_aniso.toggled.connect(self._on_aniso)
+        opts.addWidget(self.chk_aniso)
         opts.addStretch(1)
         layout.addLayout(opts)
 
@@ -676,6 +827,11 @@ class PanoramaxDock(QDockWidget):
         QgsSettings().setValue("visionneuse_panoramax/terrain_ign", bool(checked))
         self.terrainChanged.emit()
 
+    def _on_aniso(self, checked):
+        QgsSettings().setValue("visionneuse_panoramax/anisotropic", bool(checked))
+        if self.web is not None:
+            self.web.page().runJavaScript(ANISO_JS.replace("__ON__", "true" if checked else "false"))
+
     def _nav_js(self, active):
         """Navigation de la visionneuse pendant une mesure : clic et flèches bloqués pour les
         mesures par clics ; curseur au sol masqué dans tous les modes (il cache le réticule)."""
@@ -692,6 +848,25 @@ class PanoramaxDock(QDockWidget):
         self._update_measure_widgets()
         self.measureModeChanged.emit(self.measure_mode())
 
+    def reference(self):
+        """Référence du calage de la hauteur de caméra : ("ground" | "height", longueur en m)."""
+        return self.cmb_reference.currentData() or "ground", self.spin_reference.value()
+
+    def _on_reference(self, *args):
+        kind, length = self.reference()
+        settings = QgsSettings()
+        settings.setValue("visionneuse_panoramax/reference_kind", kind)
+        settings.setValue("visionneuse_panoramax/reference_length", float(length))
+        self.referenceChanged.emit()
+
+    def surface(self):
+        """Surface de la mesure libre 3D (voir measure.FREE_SURFACES)."""
+        return self.cmb_surface.currentData() or "ground"
+
+    def _on_surface(self, index):
+        self._update_measure_widgets()
+        self.surfaceChanged.emit(self.surface())
+
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
         self.cameraHeightChanged.emit(float(value))
@@ -702,11 +877,18 @@ class PanoramaxDock(QDockWidget):
         active = self.btn_measure.isChecked()
         for w in (self.btn_aim, self.btn_save):
             w.setVisible(mode == "tri")
-        for w in (self.lbl_camera, self.spin_camera, self.terrain_row):
-            w.setVisible(mode != "tri")
+        for w in (self.lbl_camera, self.spin_camera):
+            w.setVisible(mode in GROUND_MODES)
+        self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
+        for w in (self.cmb_reference, self.spin_reference):
+            w.setVisible(mode == "camera")
+        surface = self.surface()
+        self.free_row.setVisible(mode == "free")
+        self.btn_facade.setVisible(surface == "facade")
+        for w in (self.lbl_plane, self.spin_plane):
+            w.setVisible(surface == "horizontal")
+        self.update_calibration_label()
         crosshair = active and mode == "tri"
-        if not active or mode == "tri":
-            self.set_measure_marks(None)
         if self.web is not None:
             page = self.web.page()
             page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true" if crosshair else "false"))
@@ -717,18 +899,84 @@ class PanoramaxDock(QDockWidget):
             self.img.crosshair = crosshair
             self.img.set_measuring(active and mode != "tri")
 
+    def _marks_js(self):
+        return MARKS_JS.replace("__STATE__", json.dumps({"measures": self._marks}))
+
     def set_measure_marks(self, marks):
-        """Repères de mesure dans la visionneuse : {"points": [dicts pic, yaw, pitch
-        (position dans la photo, radians), abs_yaw, elev (degrés)], "label": texte}."""
-        self._marks = marks or {"points": [], "label": "", "beside": False}
+        """Mesures affichées dans la visionneuse, chacune sur la photo où elle a été prise :
+        liste de {"points": [dicts pic, yaw, pitch (position dans la photo, radians),
+        abs_yaw, elev (degrés)], "label": texte, "beside": étiquette à côté du trait}."""
+        self._marks = list(marks or [])
         if self.web is not None:
-            self.web.page().runJavaScript(MARKS_JS.replace("__STATE__", json.dumps(self._marks)))
+            self.web.page().runJavaScript(self._marks_js())
         elif hasattr(self, "img"):
-            pts = [(p["abs_yaw"], p["elev"]) for p in self._marks["points"] if p.get("pic") == self._current_pic]
-            self.img.set_marks(pts, self._marks.get("label", ""), self._marks.get("beside", False))
+            measures = []
+            for m in self._marks:
+                pts = [p for p in m.get("points", []) if p.get("pic") == self._current_pic]
+                measures.append({"pts": [(p["abs_yaw"], p["elev"]) for p in pts],
+                                 "sel": [i for i, p in enumerate(pts) if p.get("sel")],
+                                 "label": m.get("label", ""), "beside": m.get("beside", False)})
+            self.img.set_marks(measures)
+
+    def current_ids(self):
+        """(photo, séquence) affichées, ou (None, None)."""
+        item = self._current_item
+        if not item or item.get("id") != self._current_pic:
+            return None, None
+        return item.get("id"), item.get("collection")
+
+    def update_calibration_label(self):
+        """Calage de la photo et de la séquence affichées, rappelé sous les mesures."""
+        pic, sequence = self.current_ids()
+        parts = []
+        tilt = self.calibration.tilt(pic) if pic else None
+        if tilt:
+            parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
+                tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
+                "s" if tilt["count"] > 1 else "").replace(".", ","))
+        camera = self.calibration.camera(sequence) if sequence else None
+        if camera:
+            parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
+                camera["height"], camera["sigma"], camera["count"],
+                "s" if camera["count"] > 1 else "").replace(".", ","))
+        lon, lat = self._current_position()
+        pose = self.calibration.pose(sequence, lon, lat) if sequence else None
+        if pose:
+            text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])
+            if pose["positioned"]:
+                sx, sy = pose["shift"]
+                text += ", position décalée de {:.2f} m vers {:.0f}° (±{:.2f} m)".format(
+                    math.hypot(sx, sy), math.degrees(math.atan2(sx, sy)) % 360, pose["shift_sigma"])
+            text += " · {} repère{}".format(pose["count"], "s" if pose["count"] > 1 else "")
+            if pose["count"] > 3:
+                text += ", écart {:.2f}°".format(pose["residual"])
+            parts.append(text.replace(".", ","))
+        elif sequence and self.calibration.landmarks.get(sequence):
+            parts.append("recalage de la séquence hors de portée (photo à plus de {:.0f} m des repères)".format(
+                calibration.REACH))
+        self.lbl_calibration.setText("Calage : " + " · ".join(parts) if parts else "")
+        self.lbl_calibration.setVisible(bool(parts))
+
+    def _current_position(self):
+        """(lon, lat) GPS de la photo affichée, ou (None, None)."""
+        try:
+            lon, lat = self._current_item["geometry"]["coordinates"][:2]
+            return float(lon), float(lat)
+        except (KeyError, TypeError, ValueError, IndexError):
+            return None, None
+
+    def _recalibrated(self, sequence, lon, lat, item):
+        """Position de la photo (recalée si possible) et sa précision en m."""
+        fixed = self.calibration.position(sequence, lon, lat)
+        if fixed:
+            return fixed
+        return lon, lat, api.item_accuracy(item)
 
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
-        """Émet photoClicked si la photo cliquée est bien la photo courante."""
+        """Émet photoClicked si la photo cliquée est bien la photo courante.
+
+        yaw/elev : direction brute dans la photo ; le clic émis porte la direction
+        corrigée du calage (inclinaison, cap) et garde la brute dans "raw"."""
         item = self._current_item
         if not item or item.get("id") != self._current_pic or (pic and pic != self._current_pic):
             self.message.emit("Photo en cours de chargement : cliquez à nouveau.", 1, "")
@@ -740,8 +988,15 @@ class PanoramaxDock(QDockWidget):
         axis, axis_source = api.sequence_axis(item), "séquence"
         if axis is None:
             axis, axis_source = api.item_heading(item), "orientation de la photo"
-        self.photoClicked.emit({"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat),
-                                "yaw": float(yaw) % 360, "elev": float(elev),
+        pic_id, sequence = item.get("id", ""), item.get("collection")
+        lon, lat = float(lon), float(lat)
+        cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
+        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
+        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat,
+                                "gps": [lon, lat], "gps_accuracy": api.item_accuracy(item),
+                                "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
+                                "sequence": sequence, "accuracy": accuracy,
+                                "precise": api.precise_heading(item) is not None,
                                 "axis": axis, "axis_source": axis_source, "pos": pos})
 
     def _on_native_click(self, yaw, elev):
@@ -755,7 +1010,8 @@ class PanoramaxDock(QDockWidget):
             clicks = json.loads(value) if isinstance(value, str) and value else []
         except ValueError:
             return
-        azimuth = api.item_heading(self._current_item or {}) or 0.0
+        item = self._current_item or {}
+        azimuth = api.precise_heading(item) or api.item_heading(item) or 0.0
         for c in clicks:
             try:
                 vfov = float(c.get("vfov") or 0)
@@ -770,7 +1026,8 @@ class PanoramaxDock(QDockWidget):
             if c.get("pyaw") is not None and c.get("ppitch") is not None:
                 pos = [float(c["pyaw"]), float(c["ppitch"])]
                 # Direction exacte calculée par la visionneuse (lancer de rayon sur la sphère),
-                # dans le même repère que son cap : cap = angle dans la photo + view:azimuth
+                # dans le repère de la photo : cap = angle dans la photo + cap de la photo (EXIF
+                # précis si disponible, sinon view:azimuth)
                 calc_yaw, calc_elev = yaw, elev
                 yaw = (math.degrees(pos[0]) + azimuth) % 360
                 elev = math.degrees(pos[1])
@@ -794,17 +1051,28 @@ class PanoramaxDock(QDockWidget):
             lon, lat = item["geometry"]["coordinates"][:2]
         except (KeyError, TypeError, ValueError):
             return None
+        precise = api.precise_heading(item)
+        pitch = 0.0  # visionneuse de secours : centre de la vue sur l'horizon
         if self.web is None:
             if self.img.pixmap is None:
                 return None  # image pas encore affichée : cap inconnu
-            heading = self.img.current_view()[0]
+            heading = self.img.current_view()[0]  # image déjà orientée sur le cap précis
         elif self._view is not None:
-            heading = self._view["heading"]
+            heading, pitch = self._view["heading"], float(self._view.get("pitch") or 0.0)
+            rounded = api.item_heading(item)
+            if precise is not None and rounded is not None:
+                heading += precise - rounded  # la visionneuse web s'oriente sur view:azimuth (arrondi)
         else:
-            heading = api.item_heading(item)
+            heading = precise if precise is not None else api.item_heading(item)
         if heading is None:
             return None
-        return {"pic": item.get("id", ""), "lon": float(lon), "lat": float(lat), "heading": float(heading) % 360}
+        pic_id, sequence = item.get("id", ""), item.get("collection")
+        lon, lat = float(lon), float(lat)
+        heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch, lon, lat)
+        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
+        return {"pic": pic_id, "lon": clon, "lat": clat, "heading": heading,
+                "accuracy": accuracy, "precise": precise is not None,
+                "heading_error": self.calibration.heading_error(sequence, lon, lat)}
 
     def _aim(self):
         sighting = self.current_sighting()
@@ -1027,6 +1295,11 @@ class PanoramaxDock(QDockWidget):
         if self.isVisible() and self.web is not None:
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
+            # Filtrage anisotrope : une lecture sur dix (toutes les secondes) suffit. Décoché,
+            # rien à faire : les nouvelles tuiles gardent le filtre d'origine.
+            self._aniso_tick = (getattr(self, "_aniso_tick", 0) + 1) % 10
+            if self._aniso_tick == 0 and self.chk_aniso.isChecked():
+                page.runJavaScript(ANISO_JS.replace("__ON__", "true"))
             if self.btn_measure.isChecked():  # la page peut avoir été rechargée
                 # Triangulation : on change de photo pour viser sous un autre angle, la
                 # navigation reste libre. Mesures par clics : un clic ne doit pas changer de photo.
@@ -1035,7 +1308,8 @@ class PanoramaxDock(QDockWidget):
                     page.runJavaScript(CROSSHAIR_JS.replace("__SHOW__", "true"))
                 else:
                     page.runJavaScript(CLICKS_JS, self._on_viewer_clicks)
-                    page.runJavaScript(MARKS_JS.replace("__STATE__", json.dumps(self._marks)))
+            if self._marks:  # mesures conservées à l'écran, aussi hors mode mesure
+                page.runJavaScript(self._marks_js())
             page.runJavaScript("window.location.href", self._on_js_href)
 
     def _on_live_view(self, value):
@@ -1111,6 +1385,7 @@ class PanoramaxDock(QDockWidget):
         self._current_item = item
         self._current_pic = pic_id
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
+        self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):
             self.set_measure_marks(self._marks)
         item_fov = self._item_fov(item)
@@ -1121,6 +1396,7 @@ class PanoramaxDock(QDockWidget):
                 self.viewChanged.emit(heading % 360, item_fov if item_fov and item_fov < 360 else 90.0)
         else:
             self.current_url = api.explore_url(pic_id=pic_id, lat=lat, lon=lon)
+            heading = api.precise_heading(item) or heading  # clics et visées au cap précis
             props = item.get("properties", {}) or {}
             self.meta.setText("Photo {}<br>Date : {}<br>Cap : {}".format(
                 pic_id, props.get("datetime", "?"),

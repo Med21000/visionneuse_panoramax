@@ -1,16 +1,11 @@
 # Visionneuse Panoramax pour QGIS
 
-Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) et le filaire des prises de vue.
+Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec des mesures à l'écran : largeurs, hauteurs, distances 3D et position d'objets par triangulation, directement dans la photo.
 
 > **Prérequis : QGIS 4.0 ou plus récent.** L'extension ne fonctionne qu'avec QGIS 4 et les versions suivantes.
 
 ## Fonctionnalités
 
-- Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
-- Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
-- Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
-- Capture vignette (« 🖼 Capture vignette ») : la visionneuse telle qu'affichée, mesures comprises, enregistrée en PNG et copiée dans le presse-papiers.
-- Option « Filtrage anisotrope » (décochée par défaut, mémorisée) : atténue le crénelage et le scintillement des détails fins vus de loin en gardant l'image nette, au prix d'une navigation un peu moins fluide.
 - Mesures (bouton « 📐 Mesure ») :
   - largeur perpendiculaire à la chaussée, largeur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
   - triangulation d'un objet : le positionner (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
@@ -18,6 +13,11 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) et l
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
   - mesures affichées dans la visionneuse et sur la carte, conservées à l'écran jusqu'à « Tout effacer » ;
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
+- Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
+- Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
+- Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
+- Capture vignette (« 🖼 Capture vignette ») : la visionneuse telle qu'affichée, mesures comprises, enregistrée en PNG et copiée dans le presse-papiers.
+- Option « Filtrage anisotrope » (décochée par défaut, mémorisée) : atténue le crénelage et le scintillement des détails fins vus de loin en gardant l'image nette, au prix d'une navigation un peu moins fluide.
 - Sans QtWebEngine ou sans WebGL, une visionneuse native intégrée prend le relais, en **mode dégradé** (voir ci-dessous).
 
 ### Visionneuse intégrée (mode dégradé)

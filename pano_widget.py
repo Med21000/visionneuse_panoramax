@@ -13,17 +13,45 @@ et clicked(cap, élévation) pour un clic sans glisser (mesures).
 import math
 
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QColor, QFont, QPainter, QPen
+from qgis.PyQt.QtGui import QColor, QCursor, QFont, QPainter, QPen, QPixmap
 from qgis.PyQt.QtWidgets import QSizePolicy, QWidget
 
 MIN_FOV, MAX_FOV = 25.0, 120.0
 LIGHT_RED = QColor(255, 138, 128)  # réticule de visée (#ff8a80)
 MEASURE_RED = QColor(255, 95, 82)  # trait de mesure (#ff5f52)
+MARK_YELLOW = QColor(255, 235, 0)  # croix des points de mesure (#ffeb00)
 
 
 def _event_pos(event):
     """Position de la souris."""
     return event.position()
+
+
+_MEASURE_CURSOR = None
+
+
+def _measure_cursor():
+    """Curseur fin de mesure, comme dans la visionneuse web : cercle jaune vif, branches rouge
+    clair écartées du centre, point central blanc."""
+    global _MEASURE_CURSOR
+    if _MEASURE_CURSOR is None:
+        pix = QPixmap(33, 33)
+        pix.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        c = QPointF(16.5, 16.5)
+        p.setPen(QPen(MARK_YELLOW, 1.5))
+        p.drawEllipse(c, 15.5, 15.5)
+        p.setPen(QPen(LIGHT_RED, 1.5))
+        for a, b in ((2, 13), (20, 31)):
+            p.drawLine(QPointF(16.5, a), QPointF(16.5, b))
+            p.drawLine(QPointF(a, 16.5), QPointF(b, 16.5))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(255, 255, 255))
+        p.drawEllipse(c, 1.0, 1.0)
+        p.end()
+        _MEASURE_CURSOR = QCursor(pix, 16, 16)
+    return _MEASURE_CURSOR
 
 
 class PanoWidget(QWidget):
@@ -126,7 +154,7 @@ class PanoWidget(QWidget):
         self.update()
 
     def _base_cursor(self):
-        return Qt.CursorShape.CrossCursor if self._measuring else Qt.CursorShape.OpenHandCursor
+        return _measure_cursor() if self._measuring else Qt.CursorShape.OpenHandCursor
 
     def _emit(self):
         if self.pixmap is not None:
@@ -240,13 +268,13 @@ class PanoWidget(QWidget):
         if not pts:
             return
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        # Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre
+        # Points en croix jaune vif fines (visibles sur la peinture routière blanche) centrées sur le clic, le trait va d'un centre à l'autre
         # (couche "cross", "line" ou "label", voir _paint_marks).
         if layer == "cross":
             arm = 9.0
-            white = QPen(QColor(255, 255, 255), 1.5)
-            white.setCapStyle(Qt.PenCapStyle.FlatCap)
-            p.setPen(white)
+            yellow = QPen(MARK_YELLOW, 1.5)
+            yellow.setCapStyle(Qt.PenCapStyle.FlatCap)
+            p.setPen(yellow)
             for q in pts:
                 p.drawLine(QPointF(q.x() - arm, q.y()), QPointF(q.x() + arm, q.y()))
                 p.drawLine(QPointF(q.x(), q.y() - arm), QPointF(q.x(), q.y() + arm))
@@ -316,8 +344,8 @@ class PanoWidget(QWidget):
             # Repère central (axe de visée)
             c = QPointF(self.width() / 2.0, self.height() / 2.0)
             # Réticule de visée (triangulation) en rouge clair, sinon repère orange
-            if self.crosshair:  # cercle blanc autour du réticule, la croix entière à l'intérieur
-                p.setPen(QPen(QColor(255, 255, 255), 1.5))
+            if self.crosshair:  # cercle jaune vif autour du réticule, la croix entière à l'intérieur
+                p.setPen(QPen(MARK_YELLOW, 1.5))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawEllipse(c, 9.5, 9.5)
             p.setPen(QPen(LIGHT_RED if self.crosshair else QColor(255, 111, 0, 200), 1.5))

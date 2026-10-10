@@ -225,7 +225,7 @@ CROSSHAIR_JS = r"""
   if (!show) { if (e) e.remove(); return; }
   if (!document.body) return;
   var html = '<svg width="48" height="48" viewBox="0 0 48 48" fill="none">'
-    + '<circle cx="24" cy="24" r="21.5" stroke="#fff" stroke-width="1.5"/>'  // la croix entière à l'intérieur
+    + '<circle cx="24" cy="24" r="21.5" stroke="#ffeb00" stroke-width="1.5"/>'  // jaune vif, la croix entière à l'intérieur
     + '<path d="M24 4v16M24 28v16M4 24h16M28 24h16" stroke="#ff8a80" stroke-width="1.5"/>'
     + '<circle cx="24" cy="24" r="1.2" fill="#fff"/></svg>';
   if (e) { if (e.innerHTML !== html) e.innerHTML = html; return; }  // mis à jour si la page l'a déjà
@@ -277,7 +277,7 @@ CLICKS_JS = r"""
   if (root) {
     var css = '.psv-container, .psv-container * { cursor: url("data:image/svg+xml;utf8,'
       + "<svg xmlns='http://www.w3.org/2000/svg' width='33' height='33'>"
-      + "<circle cx='16.5' cy='16.5' r='15.5' fill='none' stroke='white' stroke-width='1.5'/>"
+      + "<circle cx='16.5' cy='16.5' r='15.5' fill='none' stroke='%23ffeb00' stroke-width='1.5'/>"
       + "<path d='M16.5 2v11M16.5 20v11M2 16.5h11M20 16.5h11' stroke='%23ff8a80' stroke-width='1.5'/>"
       + "<circle cx='16.5' cy='16.5' r='1' fill='white'/></svg>"
       + '") 16 16, crosshair !important; }';
@@ -343,14 +343,14 @@ MARKS_JS = r"""
   old.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
   var ids = [];
   function add(marker){ ids.push(marker.id); M.addMarker(marker); }
-  // Points en croix blanches fines centrées sur le clic, le trait va d'un centre à l'autre.
+  // Points en croix jaune vif fines (visibles sur la peinture routière blanche) centrées sur le clic, le trait va d'un centre à l'autre.
   // Les traits passent devant toutes les croix : ajoutés après elles (même couche SVG,
   // ordre d'ajout), avec un zIndex plus haut, et replacés en fin de leur conteneur.
   var cross = 'M0 9H18M9 0V18';
   measures.forEach(function(m, k){
     m.pts.forEach(function(p, i){
       add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
-           anchor: 'center center', svgStyle: {stroke: '#ffffff', strokeWidth: '1.5px', fill: 'none'}});
+           anchor: 'center center', svgStyle: {stroke: '#ffeb00', strokeWidth: '1.5px', fill: 'none'}});
       // Point sélectionné pour être visé à nouveau : cercle jaune autour de la croix
       if (p.sel) add({id: 'qgis-m' + k + '-s' + i, position: {yaw: p.yaw, pitch: p.pitch}, zIndex: 3,
                       path: 'M1 12a11 11 0 1 0 22 0a11 11 0 1 0 -22 0', anchor: 'center center',

@@ -18,7 +18,11 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) et l
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
   - mesures affichées dans la visionneuse et sur la carte, conservées à l'écran jusqu'à « Tout effacer » ;
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
-- Sans QtWebEngine, une visionneuse native intégrée prend le relais.
+- Sans QtWebEngine ou sans WebGL, une visionneuse native intégrée prend le relais, en **mode dégradé** (voir ci-dessous).
+
+### Visionneuse intégrée (mode dégradé)
+
+Si QtWebEngine n'est pas disponible dans votre installation de QGIS, ou si son moteur web ne prend pas en charge WebGL (pilote graphique), le plugin affiche les photos avec une visionneuse native de secours. C'est un **mode dégradé** : la photo est affichée en définition réduite, sans l'interface Panoramax (navigation par les boutons « ◀ Précédente », « Suivante ▶ » et « ⟲ 45° / 45° ⟳ » ; la visionneuse complète reste accessible par le bouton « Navigateur »), et **les fonctions de mesure peuvent ne pas fonctionner comme attendu** (visées moins précises, résultats à contrôler). Pour profiter de toutes les fonctions, utiliser une installation de QGIS qui fournit QtWebEngine avec WebGL.
 
 ## Mesures
 

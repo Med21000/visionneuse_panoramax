@@ -22,8 +22,8 @@ MEASURE_RED = QColor(255, 95, 82)  # trait de mesure (#ff5f52)
 
 
 def _event_pos(event):
-    """Position de la souris : position() en Qt6, localPos() en Qt5 (QGIS 3)."""
-    return event.position() if hasattr(event, "position") else event.localPos()
+    """Position de la souris."""
+    return event.position()
 
 
 class PanoWidget(QWidget):

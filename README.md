@@ -1,6 +1,8 @@
 # Visionneuse Panoramax pour QGIS
 
-Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://panoramax.fr) et le filaire des prises de vue.
+Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) et le filaire des prises de vue.
+
+> **Prérequis : QGIS 4.0 ou plus récent.** L'extension ne fonctionne qu'avec QGIS 4 et les versions suivantes.
 
 ## Fonctionnalités
 
@@ -16,7 +18,7 @@ Plugin QGIS (3.40 et plus, 4.x) qui intègre la visionneuse [Panoramax](https://
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
   - mesures affichées dans la visionneuse et sur la carte, conservées à l'écran jusqu'à « Tout effacer » ;
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
-- Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
+- Sans QtWebEngine, une visionneuse native intégrée prend le relais.
 
 ## Mesures
 
@@ -82,12 +84,14 @@ Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction 
 
 ## Installation
 
+Prérequis : **QGIS 4.0 ou plus récent**. L'extension ne fonctionne qu'avec QGIS 4 et les versions suivantes ; le gestionnaire d'extensions de QGIS refuse de l'installer sur une version antérieure.
+
 Copier le dossier `visionneuse_panoramax` dans le répertoire des plugins de votre profil QGIS, par exemple :
 
-- Linux : `~/.local/share/QGIS/QGIS3/profiles/default/python/plugins/`
-- Windows : `%APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\`
+- Linux : `~/.local/share/QGIS/QGIS4/profiles/default/python/plugins/`
+- Windows : `%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\`
 
-Remplacer `QGIS3` par `QGIS4` pour QGIS 4. Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
+Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
 ## Licence
 

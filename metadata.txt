@@ -1,10 +1,10 @@
 [general]
 name=Visionneuse Panoramax
-qgisMinimumVersion=3.40
+qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 supportsQt6=True
 description=Visionneuse Panoramax dans QGIS et filaire des prises de vue en couche QGIS.
-about=Visionneuse Panoramax dans QGIS (3.40 et plus, 4.x) : choix de l'instance, filaire des séquences en tuiles vectorielles, synchronisation carte-visionneuse avec curseur de vue, capture Full HD de la vue. Sans QtWebEngine (cas de QGIS 3 sous Windows), une visionneuse native intégrée prend le relais.
+about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement) : choix de l'instance, filaire des séquences en tuiles vectorielles, synchronisation carte-visionneuse avec curseur de vue, capture Full HD de la vue. Sans QtWebEngine, une visionneuse native intégrée prend le relais.
 version=1.0.0
 author=Cédric COCHART
 email=cedric.cochart@gmail.com

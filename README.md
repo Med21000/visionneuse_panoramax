@@ -86,6 +86,13 @@ Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction 
 
 Prérequis : **QGIS 4.0 ou plus récent**. L'extension ne fonctionne qu'avec QGIS 4 et les versions suivantes ; le gestionnaire d'extensions de QGIS refuse de l'installer sur une version antérieure.
 
+### Depuis la release (recommandé)
+
+1. Télécharger `visionneuse_panoramax-1.0.0.zip` sur la page de la release : [Visionneuse Panoramax 1.0.0](https://github.com/Med21000/visionneuse_panoramax/releases/tag/v1.0.0) (toutes les versions : [releases](https://github.com/Med21000/visionneuse_panoramax/releases)).
+2. Dans QGIS : *Extensions › Installer/Gérer les extensions › Installer depuis un ZIP*, choisir le fichier téléchargé, puis « Installer l'extension ».
+
+### Depuis les sources
+
 Copier le dossier `visionneuse_panoramax` dans le répertoire des plugins de votre profil QGIS, par exemple :
 
 - Linux : `~/.local/share/QGIS/QGIS4/profiles/default/python/plugins/`

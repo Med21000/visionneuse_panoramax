@@ -91,9 +91,16 @@ Sur les photos IMAJING imajbox 360 HD du Conseil départemental de la Côte-d'Or
 Le centre optique d'une photo est :
 
 - en plan, à la position de la photo (recalée si un calage de position existe, section 6.3) ;
-- en altitude, à l'**altitude du sol sous la photo** plus la **hauteur de caméra** (calée pour la séquence, sinon celle du panneau).
+- en altitude, à `z_caméra = z_sol + h`, somme de deux termes **indépendants**, chacun avec une seule source :
 
-L'altitude du sol sous la photo est celle du profil de terrain du **premier clic fait sur cette photo** dans la mesure, puis la même pour tous ses clics. Le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart d'une direction à l'autre à Commarin), chaque clic aurait sinon sa propre altitude de caméra, et les hauteurs mesurées sur un plan en seraient faussées.
+| Terme | Ce que c'est | Source |
+|---|---|---|
+| `z_sol` | altitude du sol sous la photo | profil de terrain (section 3.1) du **premier clic fait sur cette photo** dans la mesure |
+| `h` | hauteur de la caméra au-dessus de ce sol | hauteur **calée pour la séquence** (section 6.2) si elle existe, sinon la valeur « Caméra à » du panneau |
+
+Aucun calage ne modifie `z_sol`, et le terrain ne modifie pas `h` : le calage de hauteur de caméra n'est donc pas en concurrence avec le profil de terrain, il remplace seulement la valeur saisie de `h`.
+
+`z_sol` est figé au premier clic, puis le même pour tous les clics de la photo. Le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart d'une direction à l'autre à Commarin), chaque clic aurait sinon sa propre altitude de caméra, et les hauteurs mesurées sur un plan en seraient faussées.
 
 ### 2.6 Corrections appliquées à chaque clic
 
@@ -150,8 +157,10 @@ Plans utilisés :
 Sans surface : chaque point est visé depuis deux photos différentes, et le point retenu est le plus proche des deux visées 3D au sens des moindres carrés :
 
 ```
-Σ (I − u uᵀ) X = Σ (I − u uᵀ) C
+Σᵢ (I − uᵢ uᵢᵀ) X = Σᵢ (I − uᵢ uᵢᵀ) Cᵢ
 ```
+
+avec `uᵢ` la direction unitaire de la visée depuis la photo `i` et `Cᵢ` le centre optique de cette photo.
 
 Les deux visées doivent se croiser d'au moins 3°, et devant les photos. Le résultat ne dépend ni du sol ni de la hauteur de caméra (elle s'élimine dans les distances quand les deux photos sont de la même séquence) ; sa composante verticale dépend seulement de l'altitude du sol sous chaque photo.
 
@@ -391,7 +400,7 @@ Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont c
 
 **Conseils.** Référence proche (moins de 10–15 m) et, au sol, **en travers** de la vue : dans l'axe, une longueur est la différence de deux distances et elle est bien moins précise.
 
-**Effet.** La hauteur calée remplace la valeur saisie pour les mesures de la séquence, et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
+**Effet.** La hauteur calée remplace la valeur saisie de `h` pour les mesures de la séquence (l'altitude du sol `z_sol` reste celle du profil de terrain, section 2.5), et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
 
 ### 6.3 Cap et position (repères sur la carte), par séquence
 

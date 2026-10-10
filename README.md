@@ -28,7 +28,7 @@ Si QtWebEngine n'est pas disponible dans votre installation de QGIS, ou si son m
 
 Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage, les sources d'erreur et des pistes d'amélioration (calculs et prise de vues) sont détaillées dans [docs/MESURES.md](docs/MESURES.md).
 
-![Mesures dans la visionneuse : hauteur d'une porte (2,54 m), largeurs de bandes de passage piéton (1,43 m et 0,47 m)](docs/images/mesures.png)
+![Mesures dans la visionneuse : hauteur d'une porte (2,53 m), largeur du passage piéton (5,00 m) et d'une bande (0,47 m), points en croix jaunes](docs/images/mesures.png)
 
 ### Largeur et hauteur
 
@@ -64,7 +64,7 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 
 La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
-![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule dans la visionneuse, croisement de 83°, incertitude ±2,0 m](docs/images/triangulation.png)
+![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule jaune dans la visionneuse, croisement de 83°, incertitude ±1,8 m](docs/images/triangulation.png)
 
 ### Mesure libre 3D
 

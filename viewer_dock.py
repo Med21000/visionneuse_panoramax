@@ -14,11 +14,12 @@ from collections import OrderedDict
 from datetime import datetime
 
 from qgis.core import Qgis, QgsMessageLog, QgsSettings
-from qgis.PyQt.QtCore import QStandardPaths, QTimer, QUrl, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QDate, QStandardPaths, QTimer, QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QDesktopServices, QImage, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateEdit,
     QDockWidget,
     QDoubleSpinBox,
     QFileDialog,
@@ -39,6 +40,7 @@ import re
 
 from . import api
 from . import calibration
+from . import filters
 from .calibration import Calibration
 from .measure_tool import FREE_SURFACES
 from .pano_widget import PanoWidget
@@ -504,6 +506,7 @@ class PanoramaxDock(QDockWidget):
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
+    filterChanged = pyqtSignal(object)  # filtre des photos modifié (filters.PhotoFilter)
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -531,6 +534,12 @@ class PanoramaxDock(QDockWidget):
         self.btn_pick.setToolTip("Cliquez ensuite sur la carte QGIS pour ouvrir la photo la plus proche")
         self.btn_pick.clicked.connect(self.pickToolRequested)
         bar.addWidget(self.btn_pick)
+        self.btn_filter = QToolButton()
+        self.btn_filter.setCheckable(True)
+        self.btn_filter.setToolTip("Filtrer les photos du filaire et du clic sur la carte : date, type de caméra, "
+                                   "précision GPS, producteur")
+        self.btn_filter.toggled.connect(lambda on: self.filter_row.setVisible(on))
+        bar.addWidget(self.btn_filter)
         bar.addStretch(1)
         # Capture Full HD de la vue affichée (menu : dossier de destination)
         self.btn_capture = QToolButton()
@@ -577,6 +586,7 @@ class PanoramaxDock(QDockWidget):
         self._fill_instances([])
         self.cmb_instance.activated.connect(self._on_instance_activated)
         self.load_instances()
+        self._build_filter_row(layout)
 
         self.measure_box = QWidget(root)
         mbox = QVBoxLayout(self.measure_box)
@@ -858,6 +868,109 @@ class PanoramaxDock(QDockWidget):
         settings.setValue("visionneuse_panoramax/reference_kind", kind)
         settings.setValue("visionneuse_panoramax/reference_length", float(length))
         self.referenceChanged.emit()
+
+    # Filtre des photos ---------------------------------------------------------
+    def _build_filter_row(self, layout):
+        """Ligne des critères du filtre (voir filters.PhotoFilter), masquée par défaut."""
+        flt = filters.PhotoFilter.load()
+        self._producers = dict([flt.producer]) if flt.producer else {}  # identifiant -> nom
+        self.filter_row = QWidget(self._root)
+        row = QHBoxLayout(self.filter_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.chk_since = QCheckBox("Depuis le")
+        self.chk_since.setToolTip("Seulement les photos prises depuis cette date")
+        self.chk_since.setChecked(bool(flt.since))
+        row.addWidget(self.chk_since)
+        self.date_since = QDateEdit()
+        self.date_since.setCalendarPopup(True)
+        self.date_since.setDisplayFormat("dd/MM/yyyy")
+        since = QDate.fromString(flt.since or "", "yyyy-MM-dd")
+        self.date_since.setDate(since if since.isValid() else QDate.currentDate().addYears(-2))
+        self.date_since.setEnabled(bool(flt.since))
+        row.addWidget(self.date_since)
+        self.cmb_kind = QComboBox()
+        for label, kind in filters.KINDS:
+            self.cmb_kind.addItem(label, kind)
+        self.cmb_kind.setCurrentIndex(max(0, self.cmb_kind.findData(flt.kind)))
+        self.cmb_kind.setToolTip("Photos 360° (équirectangulaires) ou classiques")
+        row.addWidget(self.cmb_kind)
+        self.cmb_gps = QComboBox()
+        for label, limit in filters.GPS_LIMITS:
+            self.cmb_gps.addItem(label, limit)
+        self.cmb_gps.setCurrentIndex(max(0, self.cmb_gps.findData(flt.max_gps)))
+        self.cmb_gps.setToolTip("Précision GPS annoncée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m "
+                                "pour les caméras grand public et les téléphones")
+        row.addWidget(self.cmb_gps)
+        self.cmb_producer = QComboBox()
+        self.cmb_producer.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.cmb_producer.setToolTip("Seulement les photos de ce producteur ; la liste propose celui de la photo "
+                                     "affichée")
+        row.addWidget(self.cmb_producer)
+        self._fill_producers()
+        row.addStretch(1)
+        btn_reset = QPushButton("Aucun filtre")
+        btn_reset.setToolTip("Afficher toutes les photos")
+        btn_reset.clicked.connect(self._reset_filter)
+        row.addWidget(btn_reset)
+        layout.addWidget(self.filter_row)
+        self.filter_row.setVisible(False)
+        self.chk_since.toggled.connect(self.date_since.setEnabled)
+        for signal in (self.chk_since.toggled, self.date_since.dateChanged, self.cmb_kind.currentIndexChanged,
+                       self.cmb_gps.currentIndexChanged, self.cmb_producer.activated):
+            signal.connect(self._on_filter_edited)
+        self._update_filter_widgets()
+
+    def photo_filter(self):
+        """Filtre des photos réglé dans le panneau (filters.PhotoFilter)."""
+        return filters.PhotoFilter(
+            since=self.date_since.date().toString("yyyy-MM-dd") if self.chk_since.isChecked() else None,
+            kind=self.cmb_kind.currentData(),
+            max_gps=self.cmb_gps.currentData(),
+            producer=self._selected_producer())
+
+    def _update_filter_widgets(self):
+        active = self.photo_filter().active()
+        self.btn_filter.setText("Filtre ●" if active else "Filtre")
+        self.btn_filter.setToolTip(("Filtre actif : {}.".format(self.photo_filter().describe()) if active else
+                                    "Filtrer les photos du filaire et du clic sur la carte : date, type de caméra, "
+                                    "précision GPS, producteur"))
+
+    def _selected_producer(self):
+        pid = self.cmb_producer.currentData()
+        return (pid, self._producers.get(pid, pid)) if pid else None
+
+    def _fill_producers(self):
+        """Liste des producteurs : tous, celui choisi, et celui de la photo affichée."""
+        selected = self.cmb_producer.currentData() if self.cmb_producer.count() else next(iter(self._producers), None)
+        shown = filters.item_producer(self._current_item)
+        if shown:
+            self._producers[shown[0]] = shown[1]
+        self.cmb_producer.blockSignals(True)
+        self.cmb_producer.clear()
+        self.cmb_producer.addItem("Tous producteurs", "")
+        for pid in dict.fromkeys(p for p in (selected, shown and shown[0]) if p):
+            self.cmb_producer.addItem(self._producers.get(pid, pid), pid)
+        self.cmb_producer.setCurrentIndex(max(0, self.cmb_producer.findData(selected or "")))
+        self.cmb_producer.blockSignals(False)
+
+    def _on_filter_edited(self, *args):
+        flt = self.photo_filter()
+        flt.save()
+        self._update_filter_widgets()
+        self.filterChanged.emit(flt)
+
+    def _reset_filter(self):
+        widgets = (self.chk_since, self.date_since, self.cmb_kind, self.cmb_gps, self.cmb_producer)
+        for w in widgets:
+            w.blockSignals(True)
+        self.chk_since.setChecked(False)
+        self.date_since.setEnabled(False)
+        self.cmb_kind.setCurrentIndex(0)
+        self.cmb_gps.setCurrentIndex(0)
+        self.cmb_producer.setCurrentIndex(0)
+        for w in widgets:
+            w.blockSignals(False)
+        self._on_filter_edited()
 
     def surface(self):
         """Surface de la mesure libre 3D (voir measure.FREE_SURFACES)."""
@@ -1391,6 +1504,7 @@ class PanoramaxDock(QDockWidget):
         heading = api.item_heading(item)
         self._current_item = item
         self._current_pic = pic_id
+        self._fill_producers()
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
         self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):

@@ -390,6 +390,7 @@ class PanoramaxDock(QDockWidget):
             "__CURSOR__", "true" if active else "false")
 
     def _on_measure_toggled(self, checked):
+        self.measure_box.reset_status_height()
         self.measure_box.setVisible(checked)
         self._update_measure_widgets()
         self.measureToggled.emit(checked)

@@ -12,7 +12,7 @@ réglages sont enregistrés et chaque modification est signalée au panneau.
 import math
 
 from qgis.core import QgsSettings
-from qgis.PyQt.QtCore import pyqtSignal
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -39,6 +39,7 @@ MEASURE_MODES = (
 )
 
 GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
+STATUS_LINES = 3  # hauteur réservée à la ligne d'aide (voir set_status)
 
 
 def calibration_text(cal, pic, sequence, lon, lat):
@@ -196,6 +197,8 @@ class MeasurePanel(QWidget):
         mbox.addWidget(self.lbl_calibration)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
+        self.measure_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.reset_status_height()
         mbox.addWidget(self.measure_status)
         self.update_widgets()
 
@@ -269,8 +272,20 @@ class MeasurePanel(QWidget):
         self.lbl_calibration.setVisible(bool(text))
 
     def set_status(self, text):
-        """Ligne d'aide : consigne de clic ou résultat de la mesure."""
-        self.measure_status.setText(text)
+        """Ligne d'aide : consigne de clic ou résultat de la mesure.
+
+        Sa hauteur ne diminue pas au fil des mesures (voir reset_status_height) : sinon la
+        visionneuse, en dessous, change de taille et l'image saute sous le curseur au
+        moment où le résultat, plus long que la consigne, s'affiche."""
+        label = self.measure_status
+        label.setText(text)
+        if label.width() > 0:
+            label.setMinimumHeight(max(label.minimumHeight(), label.heightForWidth(label.width())))
+
+    def reset_status_height(self):
+        """Hauteur de la ligne d'aide ramenée à trois lignes, celle d'un résultat à la largeur
+        habituelle du panneau (début d'une séance de mesure)."""
+        self.measure_status.setMinimumHeight(STATUS_LINES * self.measure_status.fontMetrics().lineSpacing())
 
     def status(self):
         return self.measure_status.text()

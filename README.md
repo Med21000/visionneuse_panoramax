@@ -110,6 +110,14 @@ Copier le dossier `visionneuse_panoramax` dans le répertoire des plugins de vot
 
 Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
+## Tests
+
+Les calculs (triangulation, points 3D, mesures au sol, calage) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire ; depuis le dossier du plugin :
+
+```
+python3 -m unittest discover -s tests
+```
+
 ## Licence
 
 GNU General Public License, version 2 ou ultérieure (voir [LICENSE](LICENSE)).

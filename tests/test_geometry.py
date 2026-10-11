@@ -67,6 +67,12 @@ class Surfaces(Basics):
         self.assertPoint(p, (10, 0, 0))
         self.assertEqual(incidence, 90.0)
 
+    def test_on_ground_common_camera(self):
+        c = click(90, math.degrees(math.atan2(-2, 10)))
+        c["profile"] = [(0.0, 0.5), (60.0, 0.5)]
+        self.assertPoint(geometry.on_ground(c, 2.0, ORIGIN)[0], (10, 0, 0.5))  # caméra sur son profil
+        self.assertPoint(geometry.on_ground(c, 2.0, ORIGIN, ground_z=0.0)[0], (10, 0, 0.0))  # caméra commune
+
     def test_camera(self):
         c, u = geometry.camera(click(90, 0, at=(5, -3)), 1.9, ORIGIN, ground_z=210.0)
         self.assertPoint(c, (5, -3, 211.9))

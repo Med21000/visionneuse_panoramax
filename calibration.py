@@ -145,7 +145,8 @@ def _reference_length(kind, camera_height, clicks):
     points au sol ("ground") ou hauteur d'un objet, pied puis sommet ("height")."""
     if kind == "height":
         return ground.measure_height(camera_height, *clicks)["value"]
-    (_, p, z1), (_, q, z2) = (ground._ground_point(camera_height, c) for c in clicks)
+    ground_z = (clicks[0].get("profile") or ground.flat_profile())[0][1]  # même caméra pour les deux clics
+    (_, p, z1), (_, q, z2) = (ground._ground_point(camera_height, c, ground_z) for c in clicks)
     x, y = _local(q[0], q[1], p[0], p[1])
     return math.sqrt(x * x + y * y + (z2 - z1) ** 2)
 

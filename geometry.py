@@ -60,9 +60,11 @@ def camera(click, camera_height, origin, ground_z=None):
     return (x, y, ground_z + camera_height), direction(click["yaw"], click["elev"])
 
 
-def on_ground(click, camera_height, origin):
-    """Point au sol (rayon ∩ terrain), comme ground._ground_point."""
-    s, z = ground.intersect(click.get("profile") or ground.flat_profile(), camera_height, click["elev"])
+def on_ground(click, camera_height, origin, ground_z=None):
+    """Point au sol (rayon ∩ terrain), comme ground._ground_point. ground_z : altitude du sol
+    sous la photo, la même pour tous ses clics (voir ground.anchored et camera)."""
+    profile = ground.anchored(click.get("profile") or ground.flat_profile(), ground_z)
+    s, z = ground.intersect(profile, camera_height, click["elev"])
     x, y = _local(click["lon"], click["lat"], origin[0], origin[1])
     a = math.radians(click["yaw"])
     return (x + s * math.sin(a), y + s * math.cos(a), z), 90.0

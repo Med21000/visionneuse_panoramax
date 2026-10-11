@@ -84,6 +84,19 @@ class Presets(Base):
         foot = (p1[0] + 6.0 * across[0], p1[1] + 6.0 * across[1])
         self.assertLess(distance(m.result["points"][1], point(*foot)), 1e-6)
 
+    def test_profiles_with_different_ground_under_camera(self):
+        # Droite de pente du terrain ajustée dans chaque direction visée : son altitude sous la
+        # caméra varie (ici de 0,6 m). Les deux clics doivent partir de la même caméra.
+        targets = ((-3.0, 8.0, 0.0), (4.0, 12.0, 0.0))
+        clicks = [click(targets[0], profile=[(0.0, 0.0), (60.0, 0.0)]),
+                  click(targets[1], profile=[(0.0, 0.6), (60.0, 0.6)])]
+        m = self.measure("width", clicks)
+        self.assertValue(m, math.hypot(7.0, 4.0))
+        self.assertAlmostEqual(m.result["decomposition"]["vertical"], 0.0, places=6)
+        for dyaw, delev in m.result["shifts"]:  # repères à l'endroit cliqué
+            self.assertAlmostEqual(dyaw, 0.0, places=6)
+            self.assertAlmostEqual(delev, 0.0, places=6)
+
     def test_road_without_axis(self):
         m = self.measure("road", [click((-3.0, 8.0, 0.0), axis=None), click((4.0, 12.0, 0.0), axis=None)])
         self.assertIsNotNone(m.error)

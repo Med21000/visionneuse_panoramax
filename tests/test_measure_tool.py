@@ -135,6 +135,41 @@ class Presets(Base):
         self.assertEqual(len(self.tool.measures()), 2)
 
 
+class CameraFromAltitude(Base):
+    """Caméra de relevé : hauteur de caméra = altitude NGF de la caméra − sol sous la photo."""
+
+    def clicks(self, camera, ground=100.0, **extra):
+        """Largeur de 7 m au sol vue depuis une caméra réellement à `camera` m, sol à `ground` m."""
+        extra.setdefault("camera_alt", ground + camera)
+        extra.setdefault("precise_ground", True)
+        profile = [(0.0, ground), (60.0, ground)]
+        return [click((-3.0, 8.0, 0.0), camera=camera, profile=profile, **extra),
+                click((4.0, 12.0, 0.0), camera=camera, profile=profile, **extra)]
+
+    def test_height_from_altitude(self):
+        m = self.measure("road", self.clicks(2.4))  # réglage du panneau : 1,90 m, faux
+        self.assertValue(m, 7.0)
+        self.assertIn("caméra à 2,40 m (altitude GPS)", m.status())
+
+    def test_before_calibration(self):
+        cal = calibration.Calibration()
+        cal.heights["s1"] = [(1.5, 0.01)]
+        self.tool.calibration = cal
+        self.assertValue(self.measure("road", self.clicks(2.4)), 7.0)
+
+    def test_ignored(self):
+        # Sol des services de secours (mailles de 25 à 90 m) : trop imprécis sous la caméra,
+        # même avec une altitude plausible (2,40 m au-dessus du sol)
+        m = self.measure("road", self.clicks(CAMERA, precise_ground=False, camera_alt=102.4))
+        self.assertValue(m, 7.0)
+        self.assertIn("caméra à 1,90 m.", m.status())
+        # Hauteur invraisemblable (altitude ou géoïde faux) : réglage du panneau
+        self.tool.finish()
+        self.tool.current = None
+        m = self.measure("road", self.clicks(CAMERA, camera_alt=150.0))
+        self.assertValue(m, 7.0)
+
+
 class Free(Base):
     def test_ground(self):
         m = self.measure("free", [click((1.0, 6.0, 0.0)), click((-2.0, 10.0, 0.0))], surface="ground")

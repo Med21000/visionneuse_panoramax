@@ -53,6 +53,8 @@ FREE_SURFACES = (
 )
 SURFACE_NAMES = {key: label.lower() for label, key in FREE_SURFACES}
 PRESET_SURFACES = {"road": "ground", "width": "ground", "height": "vertical"}  # surface des préréglages
+CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m) déduite de l'altitude GPS
+CAMERA_SOURCES = {None: 0, "calée": 1, "altitude GPS": 2}  # champ camera_calee de la couche des mesures
 PLANE_HEIGHT_ERROR = 0.05  # incertitude de la hauteur saisie du plan horizontal (m)
 SELECT_ANGLE = 1.0  # écart maximal (degrés) entre un clic et le repère d'un point pour le sélectionner
 ERRORS = (geometry.GeometryError, ground.GroundError)
@@ -211,11 +213,13 @@ class Measure:
         if not clicks:
             return [], None, None, []
         origin = (clicks[0]["lon"], clicks[0]["lat"])
-        h = self.tool.camera_for
         ground_z = _ground_z(clicks)
 
         def zof(click):
             return ground_z[click.get("pic")]
+
+        def h(click):
+            return self.tool.camera_for(click, zof(click))
 
         # Plan calé de la mesure, défini par les points glissés sur la carte : vertical, passant
         # par les deux premiers (le mur tracé sur la carte), ou par le seul glissé, face à la
@@ -380,7 +384,8 @@ class Measure:
         out = []
         for i, c in enumerate(self.clicks):
             p = pts[i // 2] if self.surface == "tri3d" else pts[i]
-            cam, _ = geometry.camera(c, self.tool.camera_for(c), origin, ground_z[c.get("pic")])
+            z = ground_z[c.get("pic")]
+            cam, _ = geometry.camera(c, self.tool.camera_for(c, z), origin, z)
             vx, vy, vz = p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]
             yaw = math.degrees(math.atan2(vx, vy))
             elev = math.degrees(math.atan2(vz, math.hypot(vx, vy)))
@@ -418,7 +423,7 @@ class Measure:
         ends = r["points"] if len(r["points"]) >= 2 else r["picks"]
         geom = QgsGeometry.fromPolylineXY([QgsPointXY(lon, lat) for lon, lat in ends])
         geom.transform(QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance()))
-        height, calibrated = self.tool.camera_info(self.clicks[0])
+        height, source = self.tool.camera_info(self.clicks[0], _ground_z(self.clicks)[self.clicks[0].get("pic")])
 
         def num(value, digits=2):
             return None if value is None else round(value, digits)
@@ -434,7 +439,7 @@ class Measure:
             "travers_m": num(d["across"], 3),
             "dist_photo_m": num(max(r["ranges"]), 1),
             "camera_m": num(height),
-            "camera_calee": int(calibrated),
+            "camera_calee": CAMERA_SOURCES.get(source, 0),
             "terrain": " + ".join(sorted({c.get("terrain") for c in self.clicks if c.get("terrain")})) or ground.FLAT,
             "recales": len(self.overrides),
             "photos": ",".join(dict.fromkeys(c.get("pic") or "" for c in self.clicks)),
@@ -532,14 +537,15 @@ class Measure:
                     len(self.aimed), "s" if len(self.aimed) > 1 else "")
         if self.surface == "horizontal":
             text += " · plan à {} m sous la caméra, incidence {}°".format(
-                _num(self.tool.camera_for(self.clicks[0]) - self.plane_height, 2), _num(self.incidence or 0, 0))
+                _num(self.tool.camera_for(self.clicks[0], _ground_z(self.clicks)[self.clicks[0].get("pic")])
+                     - self.plane_height, 2), _num(self.incidence or 0, 0))
         if self.incidence is not None and self.incidence < geometry.GRAZING:
             text += ". Visée rasante sur le plan ({}°) : mesure imprécise, prenez une photo plus en face".format(
                 _num(self.incidence, 0))
         labels = {c.get("terrain") for c in self.clicks if c.get("terrain")}
-        height, calibrated = self.tool.camera_info(self.clicks[0])
+        height, source = self.tool.camera_info(self.clicks[0], _ground_z(self.clicks)[self.clicks[0].get("pic")])
         text += ". Terrain : {}, caméra à {} m{}.".format(" + ".join(sorted(labels)) or ground.FLAT,
-                                                        _num(height, 2), " (calée)" if calibrated else "")
+                                                        _num(height, 2), " ({})".format(source) if source else "")
         if len(labels) > 1:
             text += " Altitudes de sources différentes : la composante verticale peut être faussée."
         if self.notice:
@@ -595,14 +601,23 @@ class MeasureTool:
             self.current.plane_height = self.plane_height
             self.current.compute()
 
-    def camera_info(self, click):
-        """(hauteur de caméra du clic, calée ?) : calée pour sa séquence, sinon celle du panneau."""
+    def camera_info(self, click, ground_z=None):
+        """(hauteur de caméra du clic, source) ; source "altitude GPS", "calée" ou None.
+
+        Dans l'ordre : altitude NGF de la caméra (position vérifiée précise, voir precision.py)
+        moins l'altitude du sol sous la photo (ground_z, si elle vient de l'IGN), la plus
+        précise et propre à chaque photo ; hauteur calée pour la séquence ; réglage du panneau."""
+        camera_alt = click.get("camera_alt")
+        if camera_alt is not None and ground_z is not None and click.get("precise_ground"):
+            height = camera_alt - ground_z
+            if CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]:
+                return height, "altitude GPS"
         sequence = click.get("sequence")
         cam = self.calibration.camera(sequence) if self.calibration and sequence else None
-        return (cam["height"], True) if cam else (self.camera_height, False)
+        return (cam["height"], "calée") if cam else (self.camera_height, None)
 
-    def camera_for(self, click):
-        return self.camera_info(click)[0]
+    def camera_for(self, click, ground_z=None):
+        return self.camera_info(click, ground_z)[0]
 
     def needs_profile(self):
         return True  # altitude du sol sous la caméra, et du sol visé
@@ -617,7 +632,8 @@ class MeasureTool:
         """Façade (deux points lon, lat, altitude) à partir de deux clics au pied du mur."""
         origin = (clicks[0]["lon"], clicks[0]["lat"])
         ground_z = _ground_z(clicks)
-        a, b = (geometry.on_ground(c, self.camera_for(c), origin, ground_z[c.get("pic")])[0] for c in clicks)
+        a, b = (geometry.on_ground(c, self.camera_for(c, ground_z[c.get("pic")]), origin, ground_z[c.get("pic")])[0]
+                for c in clicks)
         geometry.vertical_plane(a, b)  # contrôle
         return [geometry.to_geographic(a, origin), geometry.to_geographic(b, origin)]
 

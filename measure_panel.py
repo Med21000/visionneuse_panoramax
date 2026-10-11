@@ -194,6 +194,10 @@ class MeasurePanel(QWidget):
         self.lbl_calibration = QLabel("")
         self.lbl_calibration.setWordWrap(True)
         mbox.addWidget(self.lbl_calibration)
+        self.lbl_quality = QLabel("")  # avertissement du mode dégradé (voir precision.py)
+        self.lbl_quality.setWordWrap(True)
+        self.lbl_quality.setStyleSheet("font-weight: bold")
+        mbox.addWidget(self.lbl_quality)
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
         self.measure_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
@@ -273,6 +277,15 @@ class MeasurePanel(QWidget):
             label.setVisible(True)
             self._keep_height(label)
 
+    def set_quality_text(self, text):
+        """Avertissement du mode dégradé de la photo affichée ; comme le rappel du calage, une
+        fois apparu pendant une séance de mesure, il reste (vide au besoin)."""
+        label = self.lbl_quality
+        label.setText(text)
+        if text:
+            label.setVisible(True)
+            self._keep_height(label)
+
     def set_status(self, text):
         """Ligne d'aide : consigne de clic ou résultat de la mesure.
 
@@ -292,8 +305,9 @@ class MeasurePanel(QWidget):
         """Début d'une séance de mesure : ligne d'aide ramenée à trois lignes, celle d'un résultat
         à la largeur habituelle du panneau ; rappel du calage affiché seulement s'il y en a un."""
         self.measure_status.setMinimumHeight(STATUS_LINES * self.measure_status.fontMetrics().lineSpacing())
-        self.lbl_calibration.setMinimumHeight(0)
-        self.lbl_calibration.setVisible(bool(self.lbl_calibration.text()))
+        for label in (self.lbl_calibration, self.lbl_quality):
+            label.setMinimumHeight(0)
+            label.setVisible(bool(label.text()))
 
     def status(self):
         return self.measure_status.text()

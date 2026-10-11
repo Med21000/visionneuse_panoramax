@@ -40,7 +40,7 @@ import math
 import os
 import re
 
-from . import api
+from . import altitude, api, precision
 from .calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
@@ -150,6 +150,9 @@ class PanoramaxDock(QDockWidget):
         self._view = None  # dernière vue connue : cap, inclinaison, zoom, champ vertical
         self._marks = []  # mesures affichées dans la visionneuse (voir set_measure_marks)
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
+        self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
+        self._quality = None  # résultat de la vérification pour la photo affichée
+        self._warned = set()  # séquences déjà signalées en mode dégradé
 
         root = QWidget(self)
         layout = QVBoxLayout(root)
@@ -393,6 +396,7 @@ class PanoramaxDock(QDockWidget):
     def _on_measure_toggled(self, checked):
         self.measure_box.reset_heights()
         self.measure_box.setVisible(checked)
+        self._update_quality()
         self._update_measure_widgets()
         self.measureToggled.emit(checked)
 
@@ -483,7 +487,31 @@ class PanoramaxDock(QDockWidget):
         fixed = self.calibration.position(sequence, lon, lat)
         if fixed:
             return fixed
-        return lon, lat, api.item_accuracy(item)
+        return lon, lat, self._accuracy(item)
+
+    # Précision GPS des photos (voir precision.py) --------------------------------
+    def _accuracy(self, item):
+        """Précision de la position de la photo affichée : vérifiée, sinon celle des métadonnées."""
+        q = self._quality
+        if q and q["precise"] and q["accuracy"] is not None and item is self._current_item:
+            return q["accuracy"]
+        return api.item_accuracy(item)
+
+    def _on_precision(self, pic, res):
+        if pic != self._current_pic:
+            return  # photo déjà dépassée
+        self._quality = res
+        self._update_quality()
+
+    def _update_quality(self):
+        """Mode dégradé (position imprécise et pas de LiDAR HD) : signalé sous les mesures, et une
+        fois par séquence dans la barre de messages de QGIS pendant les mesures."""
+        degraded = precision.degraded(self._quality)
+        self.measure_box.set_quality_text("⚠ " + precision.DEGRADED if degraded else "")
+        sequence = (self._current_item or {}).get("collection")
+        if degraded and self.btn_measure.isChecked() and sequence not in self._warned:
+            self._warned.add(sequence)
+            self.message.emit(precision.DEGRADED, 1, "")
 
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
         """Émet photoClicked si la photo cliquée est bien la photo courante.
@@ -505,8 +533,12 @@ class PanoramaxDock(QDockWidget):
         lon, lat = float(lon), float(lat)
         cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
         clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat,
-                                "gps": [lon, lat], "gps_accuracy": api.item_accuracy(item),
+        # Position vérifiée précise : altitude NGF de la caméra (hauteur de caméra sans calage,
+        # voir measure_tool.MeasureTool.camera_info)
+        precise = bool(self._quality and self._quality["precise"])
+        camera_alt = altitude.ngf_altitude(lon, lat, api.item_altitude(item)) if precise else None
+        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat, "camera_alt": camera_alt,
+                                "gps": [lon, lat], "gps_accuracy": self._accuracy(item),
                                 "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
                                 "sequence": sequence, "accuracy": accuracy,
                                 "precise": api.precise_heading(item) is not None,
@@ -903,6 +935,9 @@ class PanoramaxDock(QDockWidget):
         self._current_item = item
         self._current_pic = pic_id
         self.filter_row.show_item(item)
+        self._quality = self.precision.known(item)
+        self._update_quality()
+        self.precision.check(item, lambda res, pid=pic_id: self._on_precision(pid, res))
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
         self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):

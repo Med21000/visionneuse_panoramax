@@ -96,7 +96,7 @@ Le centre optique d'une photo est :
 | Terme | Ce que c'est | Source |
 |---|---|---|
 | `z_sol` | altitude du sol sous la photo | profil de terrain (section 3.1) du **premier clic fait sur cette photo** dans la mesure |
-| `h` | hauteur de la caméra au-dessus de ce sol | hauteur **calée pour la séquence** (section 6.2) si elle existe, sinon la valeur « Caméra à » du panneau |
+| `h` | hauteur de la caméra au-dessus de ce sol | pour une photo à **position vérifiée précise** (section 2.7), altitude NGF de la caméra moins `z_sol` ; sinon hauteur **calée pour la séquence** (section 6.2) si elle existe ; sinon la valeur « Caméra à » du panneau |
 
 Aucun calage ne modifie `z_sol`, et le terrain ne modifie pas `h` : le calage de hauteur de caméra n'est donc pas en concurrence avec le profil de terrain, il remplace seulement la valeur saisie de `h`.
 
@@ -113,6 +113,24 @@ Dans cet ordre :
 
 ---
 
+### 2.7 Précision GPS vérifiée et mode dégradé
+
+Panoramax annonce souvent une précision générique (2 m pour le matériel de relevé), alors que certaines photos ont une position recalée en post-traitement (GNSS RTK et centrale inertielle), comme celles de l'imajbox 360 HD du conseil départemental de la Côte-d'Or. Le plugin vérifie la précision de chaque séquence d'après les **métadonnées des photos** (`precision.py`) :
+
+- si l'EXIF déclare une précision (`GPSHPositioningError`) d'au plus 0,20 m, elle est retenue telle quelle ;
+- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 10 cm près (écart-type) sur au moins 8 photos, et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence CD21 de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m.
+
+La vérification se fait une fois par séquence, en arrière-plan à l'affichage de la photo (deux requêtes : fiches des photos voisines, environ 100 Ko ; altitudes LiDAR, moins de 1 Ko), et son résultat est gardé pour la session.
+
+Pour une photo vérifiée précise :
+
+- **Précision de position** : 0,10 m (ou celle déclarée) au lieu de celle annoncée par Panoramax, dans la triangulation (poids des visées, incertitude) et le calage par repères.
+- **Hauteur de caméra sans calage** : `h` = altitude NGF de la caméra − `z_sol`, propre à chaque photo, à environ ±5 cm. Elle n'est retenue que si le sol vient du service IGN (LiDAR HD ou RGE ALTI : les services de secours sont trop grossiers sous la caméra) et si elle est plausible ; sinon, la hauteur calée ou la valeur du panneau s'applique. Le résultat l'indique : « caméra à 1,87 m (altitude GPS) ». Elle passe avant une hauteur calée pour la séquence, moins précise (±0,10 m environ avec plusieurs références).
+
+**Mode dégradé.** Une photo dont la position n'est pas vérifiée précise, là où le LiDAR HD n'est pas publié, rend les mesures dépendantes de la hauteur de caméra (à caler), de l'inclinaison et d'un sol approximatif (RGE ALTI). Le panneau l'indique sous les boutons de mesure (« ⚠ Mode dégradé… »), et la barre de messages de QGIS le signale une fois par séquence pendant les mesures. Une panne des services ne déclenche pas l'avertissement.
+
+L'**inclinaison** (roulis et tangage), mesurée par la centrale, n'est pas transmise dans les métadonnées des photos : le calage d'inclinaison (section 6.1) reste nécessaire, et devient la principale source d'erreur.
+
 ## 3. Le moteur de mesure
 
 ### 3.1 Point au sol
@@ -121,7 +139,7 @@ Dans cet ordre :
 
 **Profil du terrain.** Le plugin demande l'altitude du terrain le long de la visée, de 10 m derrière la photo à 25 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
 
-1. **service d'altimétrie de l'IGN** (RGE ALTI 1 m, France), 71 points tous les 0,5 m ;
+1. **service d'altimétrie de l'IGN**, 71 points tous les 0,5 m : MNT du **LiDAR HD** (50 cm) là où il est publié, sinon **RGE ALTI** (1 m, France). Le LiDAR HD décrit la chaussée elle-même (bordures, caniveaux) ; tant qu'il n'est pas publié à un endroit, le repli sur le RGE ALTI est silencieux ;
 2. **OpenTopoData EU-DEM 25 m** (Europe), puis **Open-Meteo Copernicus 90 m** (monde), dont seule la pente générale a un sens ;
 3. à défaut, **sol plat**.
 
@@ -402,7 +420,7 @@ Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont c
 
 **Conseils.** Référence proche (moins de 10–15 m) et, au sol, **en travers** de la vue : dans l'axe, une longueur est la différence de deux distances et elle est bien moins précise.
 
-**Effet.** La hauteur calée remplace la valeur saisie de `h` pour les mesures de la séquence (l'altitude du sol `z_sol` reste celle du profil de terrain, section 2.5), et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
+**Effet.** La hauteur calée remplace la valeur saisie de `h` pour les mesures de la séquence, sauf pour les photos à position vérifiée précise, dont la hauteur vient de l'altitude GPS (section 2.7) (l'altitude du sol `z_sol` reste celle du profil de terrain, section 2.5), et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
 
 ### 6.3 Cap et position (repères sur la carte), par séquence
 

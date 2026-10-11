@@ -53,13 +53,15 @@ Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus
 
 Altitude du terrain : sources essayées dans l'ordre jusqu'à la première qui répond (délai de 5 secondes chacune) :
 
-1. le service d'altimétrie de l'IGN (RGE ALTI 1 m, France) ;
+1. le service d'altimétrie de l'IGN : MNT du LiDAR HD (50 cm) là où il est publié, sinon RGE ALTI (1 m, France) ;
 2. s'il ne répond pas ou ne couvre pas la zone : des services en ligne de secours, OpenTopoData EU-DEM 25 m (Europe), puis Open-Meteo Copernicus 90 m (monde). Leurs mailles sont grossières : seule la pente générale de la rue est retenue (droite ajustée sur 180 m autour de la photo). Ce sont des modèles de surface, qui incluent les bâtiments : une pente supérieure à 12 % est jugée invraisemblable et la source est écartée ;
 3. à défaut, un sol plat et horizontal.
 
 Google Elevation n'est pas proposé : il exige une clé API et un compte de facturation, et ses conditions interdisent d'utiliser les données hors d'une carte Google.
 
 La source utilisée, et la raison d'un éventuel repli, sont indiquées avec le résultat.
+
+**Précision GPS vérifiée** : le plugin vérifie la précision des photos d'après leurs métadonnées (précision déclarée, ou correction différentielle contrôlée sur les photos voisines : altitude GPS moins sol LiDAR HD constante). Pour une position recalée par RTK, comme celles de l'imajbox du CD21, la hauteur de caméra est déduite de l'altitude GPS, convertie en altitude NGF par la grille du géoïde de l'IGN, à environ ±5 cm et sans calage ; le résultat indique « (altitude GPS) ». L'inclinaison reste à caler. **Mode dégradé** : pour une photo à position imprécise là où le LiDAR HD n'est pas publié, un avertissement invite à caler la hauteur de caméra et l'inclinaison. Détails dans [docs/MESURES.md](docs/MESURES.md#27-précision-gps-vérifiée-et-mode-dégradé).
 
 **Mesure sur un pont** : le modèle de terrain nu donne, sous un pont, le fond du cours d'eau. Pour une photo prise sur un pont, cocher « Mesure sur un pont » (ligne « Terrain ») : le sol est alors pris plat et horizontal sous la caméra, sans interroger les services. L'option n'est pas mémorisée d'une session à l'autre.
 
@@ -73,7 +75,7 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement, la précision GPS des photos et une incertitude estimée (erreur de visée de ±1°, ±0,5° pour le matériel de relevé, et précision GPS des photos). Une troisième visée améliore et contrôle le résultat. Chaque visée est pondérée : une visée lointaine ou une photo mal positionnée compte moins.
 5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés », dans un fichier GeoPackage ou en couche temporaire (voir « Où sont enregistrées les couches » ci-dessus).
 
-La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
+La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones ; 0,10 m retenu pour une position vérifiée recalée par RTK, comme celles de l'imajbox du CD21) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
 ![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule jaune dans la visionneuse, croisement de 83°, incertitude ±1,8 m](docs/images/triangulation.png)
 

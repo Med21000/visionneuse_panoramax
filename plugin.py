@@ -27,7 +27,7 @@ from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
-from .terrain import TerrainProvider
+from .terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -606,7 +606,7 @@ class PanoramaxPlugin:
         def done(profile, label, warning):
             if self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
-            click.update(profile=profile, terrain=label)
+            click.update(profile=profile, terrain=label, precise_ground=label in PRECISE_LABELS)
             self._show_measure(tool.add_click(click, warning))
             self._report_camera_height(tool)
 

@@ -4,20 +4,25 @@
 """Profils d'altitude du terrain le long d'une visée (pour ground.intersect).
 
 Sources, essayées dans l'ordre jusqu'à la première qui répond :
-1. le service d'altimétrie de la Géoplateforme IGN (RGE ALTI 1 m, France),
-   activé par défaut (seule option proposée dans le panneau) ;
+1. le service d'altimétrie de la Géoplateforme IGN (RGE ALTI 1 m, France) ;
 2. des services en ligne de secours, plus grossiers : OpenTopoData EU-DEM 25 m
    (Europe) puis Open-Meteo Copernicus 90 m (monde) ;
 3. à défaut, un sol plat et horizontal.
 Un profil est une liste [(distance horizontale en m, altitude)], depuis la photo.
 
 Pente de la route plutôt que profil brut : la caméra roule sur la chaussée et les
-points mesurés sont à moins de 20 m. Un MNT de terrain nu (RGE ALTI) ignore les
-ponts (il donne le fond du cours d'eau sous le tablier), et contient fossés,
-talus et bruit : un creux d'un mètre sous la visée allonge les distances de
-moitié. On retient donc la droite de pente du terrain autour de la photo, ajustée
-de façon robuste (Theil-Sen : pente médiane, insensible aux creux et bosses
-locaux), qui garde la vraie pente d'une rue.
+points mesurés sont à moins de 20 m. Un MNT de terrain nu (RGE ALTI) contient fossés,
+talus et bruit : un creux d'un mètre sous la visée allonge les distances de moitié.
+On retient donc la droite de pente du terrain autour de la photo, ajustée de façon
+robuste (Theil-Sen : pente médiane, insensible aux creux et bosses locaux), qui garde
+la vraie pente d'une rue. La fenêtre (10 m derrière la photo à 25 m devant) reste
+proche des points mesurés : sur 120 m, la droite suivait le relief lointain, et le sol
+modélisé à 6 m pouvait être 0,3 m trop haut (mesures 15 % trop courtes, Pouilly-en-
+Auxois). Un fossé ou une bosse de moins de 10 m environ reste ignoré.
+
+Sur un pont, le MNT de terrain nu donne le fond du cours d'eau sous le tablier :
+l'option « Mesure sur un pont » du panneau prend alors un sol plat et horizontal
+(bridge), sans interroger les services.
 
 Les services de secours ont des mailles de 25 à 90 m : seule leur pente générale
 a un sens. Ce sont aussi des modèles de surface (bâtiments compris) : une pente
@@ -31,9 +36,9 @@ from urllib.parse import urlencode
 
 from . import api, ground, triangulation
 
-# Fenêtre de la droite de pente : 30 m derrière la photo à 90 m devant, le long de la visée
-LINE_FROM, LINE_TO = -30.0, 90.0
-SAMPLES = 241  # tous les 0,5 m ; maximum accepté en une requête par le service IGN
+# Fenêtre de la droite de pente : 10 m derrière la photo à 25 m devant, le long de la visée
+LINE_FROM, LINE_TO = -10.0, 25.0
+SAMPLES = 71  # tous les 0,5 m (241 au plus en une requête pour le service IGN)
 IGN_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevationLine.json"
 IGN_RESOURCE = "ign_rge_alti_wld"
 IGN_LABEL = "RGE ALTI (IGN), pente de la route"
@@ -52,20 +57,22 @@ OPENMETEO_LABEL = "Copernicus 90 m (Open-Meteo), pente générale"
 # pente peut être faussée. Au-delà de cette pente, jugée invraisemblable pour une
 # rue, la source est écartée.
 MAX_COARSE_SLOPE = 0.12
+BRIDGE_LABEL = "sol plat (mesure sur un pont)"
 
 
 class TerrainProvider:
     def __init__(self):
-        self.use_ign = True  # service IGN en premier
+        self.bridge = False  # mesure sur un pont : sol plat, sans interroger les services
 
     def profile(self, lon, lat, yaw, callback):
         """Profil le long de la visée. callback(profil, libellé de la source, avertissement | None).
 
         L'avertissement liste les sources écartées et pourquoi.
         """
-        steps = [self._opentopodata_step, self._openmeteo_step]
-        if self.use_ign:
-            steps.insert(0, self._ign_step)
+        if self.bridge:
+            callback(ground.flat_profile(), BRIDGE_LABEL, None)
+            return
+        steps = [self._ign_step, self._opentopodata_step, self._openmeteo_step]
         reasons = []
 
         def next_step():

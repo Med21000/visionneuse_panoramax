@@ -238,7 +238,7 @@ class PanoramaxPlugin:
             self.dock.facadeRequested.connect(self._on_facade_requested)
             self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
-            self.terrain.use_ign = self.dock.use_ign()
+            self.terrain.bridge = self.dock.on_bridge()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -621,7 +621,7 @@ class PanoramaxPlugin:
             spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
 
     def _on_terrain_changed(self):
-        self.terrain.use_ign = self.dock.use_ign()
+        self.terrain.bridge = self.dock.on_bridge()
         if self.measures is not None:
             self.measures.clear()  # les profils des clics viennent de l'ancienne source
         if self.calibrator is not None:

@@ -53,14 +53,16 @@ class RobustProfile(unittest.TestCase):
 class FakeServices:
     """Remplace api.fetch_json : réponses synthétiques des services, terrain de pente `slope`."""
 
-    def __init__(self, slope=0.05, z0=200.0, down=(), coarse_slope=None):
-        self.slope, self.z0, self.down = slope, z0, set(down)
+    def __init__(self, slope=0.05, z0=200.0, down=(), coarse_slope=None, relief=None):
+        self.slope, self.z0, self.down, self.relief = slope, z0, set(down), relief
         self.coarse_slope = slope if coarse_slope is None else coarse_slope
         self.calls = []
 
     def z(self, lon, lat, slope):
-        """Altitude d'un point : pente le long de l'axe nord (visées vers le nord dans les tests)."""
-        return self.z0 + slope * triangulation._local(lon, lat, LON0, LAT0)[1]
+        """Altitude d'un point : pente le long de l'axe nord (visées vers le nord dans les tests),
+        ou relief(distance au nord) s'il est donné."""
+        north = triangulation._local(lon, lat, LON0, LAT0)[1]
+        return self.relief(north) if self.relief else self.z0 + slope * north
 
     def __call__(self, url, callback, timeout_ms=None, prefer_cache=False):
         parts = urlsplit(url)
@@ -92,9 +94,9 @@ class FakeServices:
 
 
 class Provider(unittest.TestCase):
-    def run_profile(self, services, use_ign=True):
+    def run_profile(self, services, bridge=False):
         provider = terrain.TerrainProvider()
-        provider.use_ign = use_ign
+        provider.bridge = bridge
         results = []
         with mock.patch.object(terrain.api, "fetch_json", services):
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
@@ -120,8 +122,21 @@ class Provider(unittest.TestCase):
         self.assertSlope(prof, 0.05)
         prof, label, _ = self.run_profile(FakeServices(down={"data.geopf.fr", "api.opentopodata.org"}))
         self.assertEqual(label, terrain.OPENMETEO_LABEL)
-        prof, label, _ = self.run_profile(FakeServices(), use_ign=False)
-        self.assertEqual(label, terrain.OPENTOPODATA_LABEL)
+
+    def test_window_close_to_the_photo(self):
+        # Rue plate sur 15 m devant la photo, puis relief qui monte de 8 % (colline derrière les
+        # maisons) : la droite de pente doit suivre la rue près des points mesurés.
+        services = FakeServices(relief=lambda s: 200.0 + 0.08 * max(0.0, s - 15.0))
+        prof, label, _ = self.run_profile(services)
+        self.assertEqual(label, terrain.IGN_LABEL)
+        at6 = prof[0][1] + (prof[1][1] - prof[0][1]) / prof[1][0] * 6.0
+        self.assertAlmostEqual(at6, 200.0, delta=0.06)  # sol à 6 m : 0,3 m trop haut sur 120 m
+
+    def test_bridge(self):
+        services = FakeServices()
+        prof, label, warning = self.run_profile(services, bridge=True)
+        self.assertEqual((prof, label, warning), (ground.flat_profile(), terrain.BRIDGE_LABEL, None))
+        self.assertEqual(services.calls, [])  # aucun service interrogé
 
     def test_flat_when_everything_fails(self):
         services = FakeServices(down={"data.geopf.fr"}, coarse_slope=0.3)  # pente invraisemblable

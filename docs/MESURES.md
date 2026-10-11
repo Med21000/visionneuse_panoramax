@@ -119,13 +119,15 @@ Dans cet ordre :
 
 **Principe.** On suit le rayon de visée jusqu'à ce qu'il passe sous le terrain. Sur sol plat, la distance horizontale du point vaut `d = h / tan(−e)`, avec `h` la hauteur de caméra et `e` l'élévation du clic.
 
-**Profil du terrain.** Le plugin demande l'altitude du terrain le long de la visée, de 30 m derrière la photo à 90 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
+**Profil du terrain.** Le plugin demande l'altitude du terrain le long de la visée, de 10 m derrière la photo à 25 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
 
-1. **service d'altimétrie de l'IGN** (RGE ALTI 1 m, France), 241 points tous les 0,5 m, si la case « Service d'altimétrie IGN » est cochée ;
+1. **service d'altimétrie de l'IGN** (RGE ALTI 1 m, France), 71 points tous les 0,5 m ;
 2. **OpenTopoData EU-DEM 25 m** (Europe), puis **Open-Meteo Copernicus 90 m** (monde), dont seule la pente générale a un sens ;
 3. à défaut, **sol plat**.
 
-**Pente de la route plutôt que profil brut.** Le plugin retient la **droite de pente** du terrain ajustée par la méthode de **Theil-Sen** (pente médiane des paires de points, ordonnée médiane des résidus). Un modèle de terrain nu ignore les ponts et contient fossés, talus et bruit ; un creux d'un mètre sous la visée allongerait les distances de moitié. La médiane ignore ces accidents tant qu'ils couvrent moins d'un tiers de la fenêtre. Les sources de secours, qui sont des modèles de surface (bâtiments compris), sont écartées si leur pente dépasse 12 %. Sur la photo de Commarin étudiée, le terrain réel reste à moins de 10 cm de la droite retenue jusqu'à 15 m, devant comme sur le côté.
+Avec l'option « **Mesure sur un pont** », le sol est pris plat et horizontal sous la caméra, sans interroger les services : sous un pont, le modèle de terrain nu donne le fond du cours d'eau.
+
+**Pente de la route plutôt que profil brut.** Le plugin retient la **droite de pente** du terrain ajustée par la méthode de **Theil-Sen** (pente médiane des paires de points, ordonnée médiane des résidus). Un modèle de terrain nu contient fossés, talus et bruit ; un creux d'un mètre sous la visée allongerait les distances de moitié. La médiane ignore ces accidents tant qu'ils couvrent moins d'un tiers de la fenêtre, soit une dizaine de mètres. La fenêtre reste courte pour suivre le sol de la rue près des points mesurés : ajustée auparavant sur 120 m (de 30 m derrière à 90 m devant), la droite suivait le relief lointain ; à Pouilly-en-Auxois, le sol modélisé à 6 m était jusqu'à 0,3 m trop haut vers une colline, et les mesures de ce côté 15 % trop courtes. Sur 35 m, l'écart y reste sous 0,1 m dans l'axe de la rue et sous 0,2 m de côté. Les sources de secours, qui sont des modèles de surface (bâtiments compris), sont écartées si leur pente dépasse 12 %. Sur la photo de Commarin étudiée, le terrain réel reste à moins de 10 cm de la droite retenue jusqu'à 15 m, devant comme sur le côté.
 
 **Intersection.** Le terrain étant linéaire entre deux échantillons, l'intersection est exacte. Un point qui ne touche pas le sol dans les 60 m est refusé.
 

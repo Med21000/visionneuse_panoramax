@@ -44,7 +44,6 @@ from . import api
 from .calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
-from . import webengine
 from .native_viewer import NativeViewer
 from .viewer_js import (
     ANISO_JS,
@@ -55,7 +54,6 @@ from .viewer_js import (
     MARKS_JS,
     NAV_BLOCK_JS,
     WEBGL_ERROR_JS,
-    WEBGL_RENDERER_JS,
     WEBGL_TEST_JS,
 )
 
@@ -263,23 +261,12 @@ class PanoramaxDock(QDockWidget):
         self.chk_aniso.setChecked(QgsSettings().value("visionneuse_panoramax/anisotropic", False, type=bool))
         self.chk_aniso.toggled.connect(self._on_aniso)
         opts.addWidget(self.chk_aniso)
-        self.chk_hardware = QCheckBox("Accélération matérielle (expérimental)")
-        self.chk_hardware.setChecked(QgsSettings().value(webengine.HARDWARE_SETTING, False, type=bool))
-        self.chk_hardware.toggled.connect(self._on_hardware)
-        self.chk_hardware.setVisible(HAS_WEBENGINE)  # options du moteur web
-        self._renderer = None  # moteur WebGL de la visionneuse, lu après chargement
-        self._update_hardware_tooltip()
-        opts.addWidget(self.chk_hardware)
         opts.addStretch(1)
         layout.addWidget(self.options_row)
         self.btn_compact.setChecked(QgsSettings().value("visionneuse_panoramax/compact", False, type=bool))
         self._set_compact(self.btn_compact.isChecked())
 
         if HAS_WEBENGINE and WEBGL_OK is not False:
-            # Rendu logiciel : demandé aussi au pilote le temps que le moteur web lance son
-            # processus graphique (rétabli par _on_renderer, ou au bout de 30 s)
-            webengine.begin_software()
-            QTimer.singleShot(30000, webengine.end_software)
             self.web = QWebEngineView(root)
             if QWebEngineSettings is not None:
                 try:
@@ -313,34 +300,9 @@ class PanoramaxDock(QDockWidget):
             return
         if WEBGL_OK is None:
             self.web.page().runJavaScript(WEBGL_TEST_JS, self._on_webgl_result)
-        if self._renderer is None:
-            self.web.page().runJavaScript(WEBGL_RENDERER_JS, self._on_renderer)
         # La visionneuse s'initialise après le chargement : on relit la page un peu plus tard
         for delay in (2500, 6000):
             QTimer.singleShot(delay, self._check_viewer_error)
-
-    def _on_renderer(self, renderer):
-        """Diagnostic : moteur WebGL de la visionneuse, dans le journal et la bulle de l'option."""
-        if self._renderer is not None or not isinstance(renderer, str):
-            return
-        webengine.end_software()  # processus graphique du moteur web lancé
-        self._renderer = renderer
-        QgsMessageLog.logMessage(webengine.describe(renderer), "Panoramax", Qgis.MessageLevel.Info)
-        self._update_hardware_tooltip()
-
-    def _on_hardware(self, checked):
-        QgsSettings().setValue(webengine.HARDWARE_SETTING, bool(checked))
-        self._update_hardware_tooltip()
-        self.message.emit("Option « Accélération matérielle » {} : prise en compte au prochain démarrage de "
-                          "QGIS.".format("activée" if checked else "désactivée"), 0, "")
-
-    def _update_hardware_tooltip(self):
-        tip = ("Calcul de la visionneuse (WebGL) par la carte graphique plutôt qu'en logiciel par le processeur : "
-               "navigation nettement plus fluide, mais écran noir ou plantage possibles avec certains pilotes. "
-               "Pris en compte au prochain démarrage de QGIS.")
-        if self._renderer is not None:
-            tip += "\n\nActuellement : " + webengine.describe(self._renderer)
-        self.chk_hardware.setToolTip(tip)
 
     def _check_viewer_error(self):
         if self.web is not None:

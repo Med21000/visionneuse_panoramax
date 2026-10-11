@@ -17,6 +17,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
   - enregistrement des mesures et des points triangulés dans des couches QGIS, dans un fichier GeoPackage ou en couche temporaire ;
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
+- Mode compact du panneau : le chevron à droite de la barre réduit les boutons à leur icône et masque les lignes Instance, options et aide de la mesure (l'aide passe dans la bulle du bouton « 📐 Mesure »). Le choix est mémorisé.
 - Filtre des photos (bouton « Filtre ») : n'afficher dans le filaire, et n'ouvrir par un clic sur la carte, que les photos prises depuis une date, en 360° ou classiques, de précision GPS donnée (≤ 2 m pour le matériel de relevé, ≤ 4 m), ou d'un producteur (liste déroulante qui propose celui de la photo affichée). Le filtre est mémorisé ; « Filtre ● » signale qu'il est actif. Aux petites échelles (grille de densité), seul le type de caméra est filtré.
 - Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
 - Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
@@ -114,7 +115,7 @@ Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
 ## Tests
 
-Les calculs (triangulation, points 3D, mesures au sol, calage, profil du terrain, mesures et leur recalage sur la carte) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire (QGIS, l'affichage et les services d'altitude y sont simulés) ; depuis le dossier du plugin :
+Les calculs (triangulation, points 3D, mesures au sol, calage, profil du terrain, mesures et leur recalage sur la carte, filtre des photos) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire (QGIS, l'affichage et les services d'altitude y sont simulés) ; depuis le dossier du plugin :
 
 ```
 python3 -m unittest discover -s tests
@@ -122,7 +123,7 @@ python3 -m unittest discover -s tests
 
 Ils sont lancés automatiquement sur GitHub à chaque push et pull request (Python 3.12 à 3.14), avec une analyse statique du code (pyflakes).
 
-L'enregistrement dans les couches et le GeoPackage est vérifié par une seconde série, avec QGIS, à lancer sur son poste : `python3 -m unittest discover -s tests/qgis`.
+L'enregistrement dans les couches et le GeoPackage, ainsi que la conservation du calage, sont vérifiés par une seconde série, avec QGIS, à lancer sur son poste : `python3 -m unittest discover -s tests/qgis`.
 
 Principe, contenu et ajout de tests : voir [tests/README.md](tests/README.md).
 

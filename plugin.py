@@ -26,8 +26,9 @@ from .cursor import ViewCursor
 from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
+from .measure_panel import GROUND_MODES
 from .terrain import TerrainProvider
-from .viewer_dock import GROUND_MODES, PanoramaxDock
+from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"

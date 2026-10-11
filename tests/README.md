@@ -59,7 +59,7 @@ message destiné à l'utilisateur, et ne pas renvoyer un résultat faux.
   son nom sur le disque, pour que les imports relatifs des modules (`from . import
   ground`) fonctionnent ;
 - fournit `install_qgis_stub()`, un faux paquet `qgis` pour les modules qui importent
-  QGIS (`terrain.py`, `measure_tool.py`). Toute classe Qt ou QGIS y est une coquille
+  QGIS (`terrain.py`, `measure_tool.py`, `measure_panel.py`). Toute classe Qt ou QGIS y est une coquille
   vide (`Stub`) : on peut l'instancier, l'appeler, lire n'importe quel attribut ou en
   hériter. Les calculs s'exécutent donc réellement, et ce qui touche à l'affichage ou
   au réseau est remplacé dans les tests eux-mêmes ;
@@ -79,6 +79,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_calibration.py` | 17 | Inclinaison retrouvée à partir d'un ou deux objets verticaux, correction des directions ; hauteur de caméra à partir d'une longueur au sol ou d'une hauteur connue ; recalage du cap et de la position par des repères, portée de 300 m ; refus des repères trop proches, invraisemblables ou contredits par les précédents ; enregistrement et relecture du calage, données abîmées. |
 | `test_terrain.py` | 6 | Droite de pente robuste (insensible à un fossé ou à une rivière sous un pont), altitudes manquantes ; enchaînement des sources : IGN, puis OpenTopoData, puis Open-Meteo, puis sol plat, avec la raison de chaque source écartée. Les services sont simulés par un faux `api.fetch_json` (`FakeServices`) qui renvoie les altitudes d'un terrain de pente connue. |
 | `test_measure_tool.py` | 17 | Préréglages (largeur perpendiculaire à la chaussée, sur une route droite ou en biais, largeur parallèle, hauteur), hauteur de caméra calée, mesures gardées à l'écran ; mesure libre sur le sol, une façade, le plan vertical, un plan horizontal, par triangulation 3D ; recalage d'un point sur la carte et nouvelle visée. Le dessin sur la carte est remplacé par `FakeItem`. |
+| `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
 
 ## Ajouter un test
 

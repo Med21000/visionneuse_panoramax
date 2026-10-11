@@ -1,0 +1,49 @@
+# -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Tests de measure_panel.py : texte du calage rappelé sous les mesures."""
+
+import unittest
+
+from support import LAT0, LON0, bearing, install_qgis_stub, module, point
+
+install_qgis_stub()
+measure_panel = module("measure_panel")
+calibration = module("calibration")
+
+
+class CalibrationText(unittest.TestCase):
+    def setUp(self):
+        self.cal = calibration.Calibration()
+
+    def text(self, pic="p1", sequence="s1", at=(LON0, LAT0)):
+        return measure_panel.calibration_text(self.cal, pic, sequence, *at)
+
+    def test_empty(self):
+        self.assertEqual(self.text(), "")
+        self.assertEqual(self.text(pic=None, sequence=None), "")
+
+    def test_tilt_and_camera(self):
+        self.cal._tilts["p1"] = {"up": (0, 0, 1), "tilt": 1.84, "toward": 0, "residual": None, "partial": True,
+                                 "count": 1}
+        self.cal.heights["s1"] = [(2.1, 0.05), (2.1, 0.05)]
+        self.assertEqual(self.text(), "Calage : inclinaison 1,8° corrigée en partie (1 objet) · "
+                                      "caméra à 2,10 m (±0,04 m, 2 références)")
+
+    def test_heading(self):
+        mark = point(0, 80)
+        self.cal.add_landmark("s1", "p1", LON0, LAT0, bearing((LON0, LAT0), mark) - 2.0, -2.0, *mark, 3.0, False)
+        text = self.text()
+        self.assertTrue(text.startswith("Calage : cap +"), text)
+        self.assertIn("1 repère", text)
+        self.assertNotIn("position", text)  # un seul repère : cap seulement
+
+    def test_out_of_reach(self):
+        mark = point(0, 80)
+        self.cal.add_landmark("s1", "p1", LON0, LAT0, bearing((LON0, LAT0), mark), -2.0, *mark, 3.0, False)
+        far = point(0, calibration.REACH + 100)
+        self.assertIn("hors de portée", self.text(at=far))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,279 @@
+# -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 Cédric COCHART
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Zone des mesures du panneau : choix du mode et réglages de la mesure en cours.
+
+Mode (mesures, triangulation, calages), hauteur de caméra, référence du calage de la
+hauteur, service d'altimétrie, surface de la mesure libre 3D, rappel du calage de la
+photo affichée et ligne d'aide. Les widgets affichés suivent le mode choisi ; les
+réglages sont enregistrés et chaque modification est signalée au panneau.
+"""
+
+import math
+
+from qgis.core import QgsSettings
+from qgis.PyQt.QtCore import pyqtSignal
+from qgis.PyQt.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from . import calibration
+from .measure_tool import FREE_SURFACES
+
+MEASURE_MODES = (
+    ("Largeur perpendiculaire à la chaussée", "road"),
+    ("Largeur parallèle à la route", "width"),
+    ("Hauteur d'un objet", "height"),
+    ("Triangulation d'un objet", "tri"),
+    ("Mesure libre 3D", "free"),
+    ("Calage : inclinaison (objets verticaux)", "tilt"),
+    ("Calage : cap et position (repères sur la carte)", "heading"),
+    ("Calage : hauteur de caméra (longueur connue)", "camera"),
+)
+
+GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
+
+
+def calibration_text(cal, pic, sequence, lon, lat):
+    """Calage de la photo et de la séquence affichées (texte, vide sans calage)."""
+    parts = []
+    tilt = cal.tilt(pic) if pic else None
+    if tilt:
+        parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
+            tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
+            "s" if tilt["count"] > 1 else "").replace(".", ","))
+    camera = cal.camera(sequence) if sequence else None
+    if camera:
+        parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
+            camera["height"], camera["sigma"], camera["count"],
+            "s" if camera["count"] > 1 else "").replace(".", ","))
+    pose = cal.pose(sequence, lon, lat) if sequence else None
+    if pose:
+        text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])
+        if pose["positioned"]:
+            sx, sy = pose["shift"]
+            text += ", position décalée de {:.2f} m vers {:.0f}° (±{:.2f} m)".format(
+                math.hypot(sx, sy), math.degrees(math.atan2(sx, sy)) % 360, pose["shift_sigma"])
+        text += " · {} repère{}".format(pose["count"], "s" if pose["count"] > 1 else "")
+        if pose["count"] > 3:
+            text += ", écart {:.2f}°".format(pose["residual"])
+        parts.append(text.replace(".", ","))
+    elif sequence and cal.landmarks.get(sequence):
+        parts.append("recalage de la séquence hors de portée (photo à plus de {:.0f} m des repères)".format(
+            calibration.REACH))
+    return "Calage : " + " · ".join(parts) if parts else ""
+
+
+class MeasurePanel(QWidget):
+    # Boutons
+    aimClicked = pyqtSignal()
+    saveClicked = pyqtSignal()
+    clearClicked = pyqtSignal()
+    clearAllClicked = pyqtSignal()  # efface toutes les mesures conservées à l'écran
+    # Réglages modifiés (déjà enregistrés)
+    modeChanged = pyqtSignal(str)
+    cameraHeightChanged = pyqtSignal(float)
+    surfaceChanged = pyqtSignal(str)
+    facadeRequested = pyqtSignal()
+    planeHeightChanged = pyqtSignal(float)
+    referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
+    terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        mbox = QVBoxLayout(self)
+        mbox.setContentsMargins(0, 0, 0, 0)
+        mlay = QHBoxLayout()
+        self.cmb_measure = QComboBox()
+        for label, mode in MEASURE_MODES:
+            self.cmb_measure.addItem(label, mode)
+        self.cmb_measure.currentIndexChanged.connect(self._on_mode)
+        mlay.addWidget(self.cmb_measure)
+        self.btn_aim = QPushButton("🎯 Viser")
+        self.btn_aim.setToolTip("Enregistrer la direction du réticule (centre de la vue) depuis la photo affichée")
+        self.btn_aim.clicked.connect(self.aimClicked)
+        mlay.addWidget(self.btn_aim)
+        self.btn_save = QPushButton("Enregistrer le point")
+        self.btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
+        self.btn_save.clicked.connect(self.saveClicked)
+        mlay.addWidget(self.btn_save)
+        self.lbl_camera = QLabel("Caméra à")
+        mlay.addWidget(self.lbl_camera)
+        self.spin_camera = QDoubleSpinBox()
+        self.spin_camera.setRange(0.3, 6.0)
+        self.spin_camera.setSingleStep(0.1)
+        self.spin_camera.setDecimals(2)
+        self.spin_camera.setSuffix(" m")
+        self.spin_camera.setToolTip("Hauteur de la caméra au-dessus du sol (1,90 m par défaut) : environ "
+                                    "2,2 m sur le toit d'une voiture, 1,7 à 2 m à pied ou à vélo")
+        self.spin_camera.setValue(float(QgsSettings().value("visionneuse_panoramax/camera_height", 1.9)))
+        self.spin_camera.valueChanged.connect(self._on_camera_height)
+        mlay.addWidget(self.spin_camera)
+        self.cmb_reference = QComboBox()
+        self.cmb_reference.addItem("au sol", "ground")
+        self.cmb_reference.addItem("en hauteur", "height")
+        self.cmb_reference.setToolTip("Longueur connue au sol (deux clics) ou hauteur d'un objet (pied puis sommet)")
+        self.cmb_reference.setCurrentIndex(max(0, self.cmb_reference.findData(
+            QgsSettings().value("visionneuse_panoramax/reference_kind", "ground"))))
+        self.cmb_reference.currentIndexChanged.connect(self._on_reference)
+        mlay.addWidget(self.cmb_reference)
+        self.spin_reference = QDoubleSpinBox()
+        self.spin_reference.setRange(0.1, 50.0)
+        self.spin_reference.setSingleStep(0.1)
+        self.spin_reference.setDecimals(2)
+        self.spin_reference.setSuffix(" m")
+        self.spin_reference.setToolTip(
+            "Longueur réelle de la référence. Exemples : place de stationnement 2,30 à 2,50 m de large, "
+            "bande de passage piéton 0,50 m, trait de marquage 3 m. Une longueur visible sur l'orthophoto "
+            "peut aussi se mesurer avec l'outil de mesure de QGIS.")
+        self.spin_reference.setValue(float(QgsSettings().value("visionneuse_panoramax/reference_length", 2.5)))
+        self.spin_reference.valueChanged.connect(self._on_reference)
+        mlay.addWidget(self.spin_reference)
+        mlay.addStretch(1)
+        btn_clear = QPushButton("Effacer")
+        btn_clear.setToolTip("Effacer la mesure en cours (ou le calage du mode choisi)")
+        btn_clear.clicked.connect(self.clearClicked)
+        mlay.addWidget(btn_clear)
+        btn_clear_all = QPushButton("Tout effacer")
+        btn_clear_all.setToolTip("Effacer toutes les mesures affichées dans la visionneuse et sur la carte")
+        btn_clear_all.clicked.connect(self.clearAllClicked)
+        mlay.addWidget(btn_clear_all)
+        mbox.addLayout(mlay)
+        self.terrain_row = QWidget(self)
+        tlay = QHBoxLayout(self.terrain_row)
+        tlay.setContentsMargins(0, 0, 0, 0)
+        tlay.addWidget(QLabel("Terrain :"))
+        self.chk_ign = QCheckBox("Service d'altimétrie IGN")
+        self.chk_ign.setToolTip("Altitudes du RGE ALTI (IGN, 1 m, France), interrogées à chaque clic. Désactivé, "
+                                "sans réponse en 5 s ou hors couverture : services en ligne de secours "
+                                "(OpenTopoData EU-DEM 25 m, puis Open-Meteo Copernicus 90 m, pente générale "
+                                "seulement), puis sol plat.")
+        self.chk_ign.setChecked(QgsSettings().value("visionneuse_panoramax/terrain_ign", True, type=bool))
+        self.chk_ign.toggled.connect(self._on_terrain_ign)
+        tlay.addWidget(self.chk_ign)
+        tlay.addStretch(1)
+        mbox.addWidget(self.terrain_row)
+        self.free_row = QWidget(self)
+        flay = QHBoxLayout(self.free_row)
+        flay.setContentsMargins(0, 0, 0, 0)
+        flay.addWidget(QLabel("Surface :"))
+        self.cmb_surface = QComboBox()
+        for label, key in FREE_SURFACES:
+            self.cmb_surface.addItem(label, key)
+        self.cmb_surface.setToolTip(
+            "Surface sur laquelle se trouvent les points cliqués : le sol, une façade (plan vertical défini "
+            "par deux clics au pied du mur), le plan vertical face à la caméra passant par le premier point "
+            "(cliqué au sol), un plan horizontal à une hauteur donnée, ou aucune (triangulation depuis deux photos)")
+        self.cmb_surface.currentIndexChanged.connect(self._on_surface)
+        flay.addWidget(self.cmb_surface)
+        self.btn_facade = QPushButton("Définir la façade")
+        self.btn_facade.setToolTip("Cliquer ensuite dans la photo au pied du mur, à ses deux extrémités ; ses "
+                                   "extrémités se recalent ensuite en les glissant sur la carte")
+        self.btn_facade.clicked.connect(self.facadeRequested)
+        flay.addWidget(self.btn_facade)
+        self.lbl_plane = QLabel("à")
+        flay.addWidget(self.lbl_plane)
+        self.spin_plane = QDoubleSpinBox()
+        self.spin_plane.setRange(-20.0, 50.0)
+        self.spin_plane.setSingleStep(0.1)
+        self.spin_plane.setDecimals(2)
+        self.spin_plane.setSuffix(" m du sol")
+        self.spin_plane.setValue(1.0)
+        self.spin_plane.setToolTip("Hauteur du plan horizontal au-dessus du sol sous la caméra")
+        self.spin_plane.valueChanged.connect(lambda v: self.planeHeightChanged.emit(float(v)))
+        flay.addWidget(self.spin_plane)
+        flay.addStretch(1)
+        mbox.addWidget(self.free_row)
+        self.lbl_calibration = QLabel("")
+        self.lbl_calibration.setWordWrap(True)
+        mbox.addWidget(self.lbl_calibration)
+        self.measure_status = QLabel("")
+        self.measure_status.setWordWrap(True)
+        mbox.addWidget(self.measure_status)
+        self.update_widgets()
+
+    # Réglages ------------------------------------------------------------------
+    def measure_mode(self):
+        return self.cmb_measure.currentData() or "tri"
+
+    def camera_height(self):
+        return self.spin_camera.value()
+
+    def use_ign(self):
+        return self.chk_ign.isChecked()
+
+    def surface(self):
+        """Surface de la mesure libre 3D (voir measure_tool.FREE_SURFACES)."""
+        return self.cmb_surface.currentData() or "ground"
+
+    def reference(self):
+        """Référence du calage de la hauteur de caméra : ("ground" | "height", longueur en m)."""
+        return self.cmb_reference.currentData() or "ground", self.spin_reference.value()
+
+    def _on_mode(self, index):
+        self.update_widgets()
+        self.modeChanged.emit(self.measure_mode())
+
+    def _on_surface(self, index):
+        self.update_widgets()
+        self.surfaceChanged.emit(self.surface())
+
+    def _on_camera_height(self, value):
+        QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
+        self.cameraHeightChanged.emit(float(value))
+
+    def _on_reference(self, *args):
+        kind, length = self.reference()
+        settings = QgsSettings()
+        settings.setValue("visionneuse_panoramax/reference_kind", kind)
+        settings.setValue("visionneuse_panoramax/reference_length", float(length))
+        self.referenceChanged.emit()
+
+    def _on_terrain_ign(self, checked):
+        QgsSettings().setValue("visionneuse_panoramax/terrain_ign", bool(checked))
+        self.terrainChanged.emit()
+
+    # Affichage ------------------------------------------------------------------
+    def update_widgets(self):
+        """Boutons et réglages du mode choisi."""
+        mode = self.measure_mode()
+        self.btn_aim.setVisible(mode == "tri")
+        self.btn_save.setVisible(mode in ("tri",) + GROUND_MODES)
+        if mode == "tri":
+            self.btn_save.setText("Enregistrer le point")
+            self.btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
+        else:
+            self.btn_save.setText("Enregistrer les mesures")
+            self.btn_save.setToolTip("Ajouter les mesures terminées affichées à la couche « Panoramax – mesures » "
+                                     "(une mesure déjà enregistrée puis recalée y est mise à jour)")
+        for w in (self.lbl_camera, self.spin_camera):
+            w.setVisible(mode in GROUND_MODES)
+        self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
+        for w in (self.cmb_reference, self.spin_reference):
+            w.setVisible(mode == "camera")
+        surface = self.surface()
+        self.free_row.setVisible(mode == "free")
+        self.btn_facade.setVisible(surface == "facade")
+        for w in (self.lbl_plane, self.spin_plane):
+            w.setVisible(surface == "horizontal")
+
+    def set_calibration_text(self, text):
+        self.lbl_calibration.setText(text)
+        self.lbl_calibration.setVisible(bool(text))
+
+    def set_status(self, text):
+        """Ligne d'aide : consigne de clic ou résultat de la mesure."""
+        self.measure_status.setText(text)
+
+    def status(self):
+        return self.measure_status.text()
+
+    def show_status(self, visible):
+        self.measure_status.setVisible(visible)

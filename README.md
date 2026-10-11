@@ -114,13 +114,15 @@ Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
 ## Tests
 
-Les calculs (triangulation, points 3D, mesures au sol, calage) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire ; depuis le dossier du plugin :
+Les calculs (triangulation, points 3D, mesures au sol, calage, profil du terrain, mesures et leur recalage sur la carte) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire (QGIS, l'affichage et les services d'altitude y sont simulés) ; depuis le dossier du plugin :
 
 ```
 python3 -m unittest discover -s tests
 ```
 
 Ils sont lancés automatiquement sur GitHub à chaque push et pull request (Python 3.12 à 3.14), avec une analyse statique du code (pyflakes).
+
+Principe, contenu et ajout de tests : voir [tests/README.md](tests/README.md).
 
 ## Licence
 

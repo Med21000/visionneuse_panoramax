@@ -1,0 +1,96 @@
+# Tests automatiques
+
+Ces tests vérifient les calculs du plugin : triangulation, points 3D, mesures au sol,
+calage des photos, profil du terrain, mesures et leur recalage sur la carte. Ils ne
+testent pas l'interface (panneau, visionneuse web, dessin sur la carte).
+
+Ils ne sont pas livrés avec le plugin : le dossier `tests/` est exclu du zip de release
+(`.gitattributes`).
+
+## Lancer les tests
+
+Depuis le dossier du plugin, avec Python 3.12 ou plus récent, sans QGIS ni bibliothèque
+supplémentaire :
+
+```
+python3 -m unittest discover -s tests
+```
+
+Options utiles :
+
+```
+python3 -m unittest discover -s tests -v                      # détail de chaque test
+python3 -m unittest discover -s tests -p "test_terrain.py"     # un seul fichier
+python3 -m unittest discover -s tests -k test_oblique_road     # tests dont le nom contient ce motif
+```
+
+Les tests se lancent avec `discover -s tests` (et pas `python3 -m unittest tests/…`) :
+les fichiers importent `support.py` comme un module voisin.
+
+Sur GitHub, le workflow `.github/workflows/tests.yml` les lance à chaque push sur `main`
+ou `dev` et à chaque pull request, sous Python 3.12, 3.13 et 3.14. Il vérifie aussi que
+tout le code se compile et passe pyflakes (noms inconnus, imports inutilisés).
+
+## Principe : des scènes à réponse connue
+
+Chaque test construit une scène synthétique dont on connaît la vérité, en déduit ce
+que l'utilisateur aurait cliqué, puis vérifie que le plugin retrouve la vérité. Par
+exemple, pour une largeur de chaussée :
+
+1. on place deux bords de route au sol, à 7 m l'un de l'autre en travers de l'axe ;
+2. on calcule le cap et l'élévation sous lesquels la caméra (à 1,90 m) voit chacun
+   d'eux : ce sont les clics ;
+3. on donne ces clics à l'outil de mesure et on vérifie qu'il trouve 7 m.
+
+Les scènes sont placées à Dijon (`support.LON0`, `support.LAT0`), sur un sol plat à
+l'altitude 0, sauf quand le terrain est l'objet du test. Les positions s'écrivent en
+mètres (est, nord) autour de ce point, et `support.point(est, nord)` les convertit en
+longitude et latitude.
+
+Les tests contrôlent aussi les refus : clics incohérents, visées parallèles, point
+trop loin, repère aberrant… Le plugin doit alors lever l'erreur prévue, avec un
+message destiné à l'utilisateur, et ne pas renvoyer un résultat faux.
+
+## Fonctionnement sans QGIS
+
+`support.py` est importé en premier par chaque fichier de test. Il :
+
+- enregistre le dossier du dépôt comme paquet `visionneuse_panoramax`, quel que soit
+  son nom sur le disque, pour que les imports relatifs des modules (`from . import
+  ground`) fonctionnent ;
+- fournit `install_qgis_stub()`, un faux paquet `qgis` pour les modules qui importent
+  QGIS (`terrain.py`, `measure_tool.py`). Toute classe Qt ou QGIS y est une coquille
+  vide (`Stub`) : on peut l'instancier, l'appeler, lire n'importe quel attribut ou en
+  hériter. Les calculs s'exécutent donc réellement, et ce qui touche à l'affichage ou
+  au réseau est remplacé dans les tests eux-mêmes ;
+- fournit les outils des scènes : `point`, `bearing` (cap d'un point vers un autre),
+  `distance`.
+
+Les modules `triangulation.py`, `geometry.py`, `ground.py` et `calibration.py` ne
+dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
+
+## Contenu
+
+| Fichier | Tests | Ce qui est vérifié |
+|---|---|---|
+| `test_triangulation.py` | 9 | Conversions de coordonnées, intersection de deux ou trois visées, visées bruitées, incertitude qui augmente avec l'erreur GPS, erreur de visée selon le matériel. Refus : une seule visée, visées parallèles, croisement derrière les photos, point à plus de 500 m. |
+| `test_ground.py` | 9 | Direction d'un pixel de la vue, intersection du rayon avec un sol plat, en pente ou avec un talus, hauteur d'un poteau ou d'un mur cliqué de côté. Refus : visée qui ne touche pas le sol, pied et sommet sur deux photos, sommet sous le pied. |
+| `test_geometry.py` | 11 | Points sur une façade, sur le plan vertical face à la caméra, sur un plan horizontal ; triangulation 3D ; décomposition d'une distance (horizontale, verticale, le long de la route, en travers) ; résolution d'un système 3 × 3. Refus : visée parallèle au plan, plan derrière la caméra ou trop loin. |
+| `test_calibration.py` | 17 | Inclinaison retrouvée à partir d'un ou deux objets verticaux, correction des directions ; hauteur de caméra à partir d'une longueur au sol ou d'une hauteur connue ; recalage du cap et de la position par des repères, portée de 300 m ; refus des repères trop proches, invraisemblables ou contredits par les précédents ; enregistrement et relecture du calage, données abîmées. |
+| `test_terrain.py` | 6 | Droite de pente robuste (insensible à un fossé ou à une rivière sous un pont), altitudes manquantes ; enchaînement des sources : IGN, puis OpenTopoData, puis Open-Meteo, puis sol plat, avec la raison de chaque source écartée. Les services sont simulés par un faux `api.fetch_json` (`FakeServices`) qui renvoie les altitudes d'un terrain de pente connue. |
+| `test_measure_tool.py` | 17 | Préréglages (largeur perpendiculaire à la chaussée, sur une route droite ou en biais, largeur parallèle, hauteur), hauteur de caméra calée, mesures gardées à l'écran ; mesure libre sur le sol, une façade, le plan vertical, un plan horizontal, par triangulation 3D ; recalage d'un point sur la carte et nouvelle visée. Le dessin sur la carte est remplacé par `FakeItem`. |
+
+## Ajouter un test
+
+1. Choisir le fichier du module concerné, ou créer `test_<module>.py` en commençant
+   par `from support import …` (et `install_qgis_stub()` si le module importe QGIS).
+2. Construire la scène à partir de la vérité : placer les objets, puis calculer les
+   clics avec les outils du fichier (`click` dans `test_measure_tool.py`, `sighting`
+   dans `test_triangulation.py`, `vertical_object` dans `test_calibration.py`…).
+3. Comparer au résultat attendu avec une tolérance adaptée : `places=6` (au micromètre)
+   pour un calcul exact, plus large quand le calcul est volontairement approché
+   (l'inclinaison est légèrement amortie, l'a priori freine le recalage du cap).
+4. Vérifier que le test détecte bien une erreur : modifier temporairement le calcul
+   testé (changer un signe, inverser sin et cos) et s'assurer que le test échoue.
+   Une scène trop symétrique peut masquer une erreur : une route orientée plein nord
+   ne détecte pas une erreur sur la composante est, d'où le test de la route en biais.

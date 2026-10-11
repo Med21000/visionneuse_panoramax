@@ -5,6 +5,9 @@
 
 Le dossier du dépôt est enregistré comme paquet « visionneuse_panoramax », quel que
 soit son nom sur le disque, pour que les imports relatifs des modules fonctionnent.
+Les modules qui importent QGIS (terrain.py, measure_tool.py) se chargent avec un faux
+paquet qgis (voir install_qgis_stub) : leurs calculs s'exécutent, l'affichage et le
+réseau sont remplacés dans les tests.
 """
 
 import importlib
@@ -12,9 +15,46 @@ import importlib.util
 import math
 import os
 import sys
+import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PACKAGE = "visionneuse_panoramax"
+
+
+
+class _StubMeta(type):
+    def __getattr__(cls, name):
+        return Stub()
+
+
+class Stub(metaclass=_StubMeta):
+    """Objet Qt ou QGIS factice : tout attribut, appel ou sous-classe est accepté."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        return Stub()
+
+    def __getattr__(self, name):
+        return Stub()
+
+
+def _stub_module(name):
+    module = types.ModuleType(name)
+    module.__path__ = []
+    module.__getattr__ = lambda attr: type(attr, (Stub,), {})  # une classe par nom
+    return module
+
+
+def install_qgis_stub():
+    """Faux paquet qgis, si QGIS n'est pas déjà chargé."""
+    if "qgis" in sys.modules:
+        return
+    for name in ("qgis", "qgis.core", "qgis.gui", "qgis.PyQt", "qgis.PyQt.QtCore", "qgis.PyQt.QtGui",
+                 "qgis.PyQt.QtWidgets", "qgis.PyQt.QtNetwork"):
+        sys.modules[name] = _stub_module(name)
+
 
 if PACKAGE not in sys.modules:
     _spec = importlib.util.spec_from_file_location(PACKAGE, os.path.join(ROOT, "__init__.py"),

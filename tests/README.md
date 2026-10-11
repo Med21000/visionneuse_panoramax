@@ -100,7 +100,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
 | `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
-| `qgis/test_calibration_storage.py` | 3 | Avec QGIS : calage conservé dans le profil d'une session et d'un projet à l'autre, effacement, réglage abîmé ; reprise du calage d'un vrai projet `.qgz` enregistré par la version 1.1.0, sans écraser le calage plus récent, puis retrait du projet. |
+| `qgis/test_calibration_storage.py` | 3 | Avec QGIS : calage conservé dans le profil d'une session et d'un projet à l'autre, effacement, réglage abîmé ; reprise du calage d'un vrai projet `.qgz` enregistré par une version précédente, sans écraser le calage plus récent, puis retrait du projet. |
 
 ## Ajouter un test
 

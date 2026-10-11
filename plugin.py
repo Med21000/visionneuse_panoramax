@@ -33,7 +33,7 @@ from .viewer_dock import PanoramaxDock
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
 PROJECT_SCOPE = "visionneuse_panoramax"  # section du plugin dans le projet QGIS
-CALIBRATION_KEY = "calibration"  # calage enregistré dans les projets par la version 1.1.0
+CALIBRATION_KEY = "calibration"  # calage enregistré dans les projets par les versions précédentes
 CALIBRATION_SETTING = "visionneuse_panoramax/calibration"  # calage conservé dans le profil QGIS
 
 
@@ -171,7 +171,7 @@ class PanoramaxPlugin:
         self.edit_tool.clicked.connect(lambda point: self._on_canvas_clicked(point, Qt.MouseButton.LeftButton))
 
         # Calage conservé dans le profil d'une session et d'un projet à l'autre ; celui d'un
-        # projet enregistré par la version 1.1.0 y est ajouté à l'ouverture du projet
+        # projet enregistré par une version précédente y est ajouté à l'ouverture du projet
         QgsProject.instance().readProject.connect(self._import_project_calibration)
         self._load_calibration()
 
@@ -263,7 +263,7 @@ class PanoramaxPlugin:
         self._calibration_updated()
 
     def _import_project_calibration(self, *args):
-        """Projet enregistré par la version 1.1.0 : son calage complète celui en mémoire (pour
+        """Projet enregistré par une version précédente : son calage complète celui en mémoire (pour
         les photos et séquences qui n'en ont pas encore), puis il est retiré du projet."""
         project = QgsProject.instance()
         text, found = project.readEntry(PROJECT_SCOPE, CALIBRATION_KEY, "")

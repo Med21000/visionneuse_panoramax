@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Calage conservé dans le profil QGIS, d'une session et d'un projet à l'autre, et reprise
-du calage d'un projet enregistré par la version 1.1.0 (plugin.py), avec le vrai QGIS."""
+du calage d'un projet enregistré par une version précédente (plugin.py), avec le vrai QGIS."""
 
 import json
 import os
@@ -47,7 +47,7 @@ class Storage(unittest.TestCase):
         second.calibration.clear_camera("s1")  # effacé : plus retrouvé ensuite
         self.assertIsNone(new_plugin().calibration.camera("s1"))
 
-    def test_project_of_version_1_1_0(self):
+    def test_project_of_previous_version(self):
         old = calibration.Calibration()
         old.heights["s1"], old.heights["s2"] = [(1.5, 0.05)], [(2.5, 0.05)]
         project = QgsProject.instance()

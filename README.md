@@ -1,5 +1,7 @@
 # Visionneuse Panoramax pour QGIS
 
+[![Tests](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml/badge.svg)](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml)
+
 Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec des mesures à l'écran : largeurs, hauteurs, distances 3D et position d'objets par triangulation, directement dans la photo.
 
 > **Prérequis : QGIS 4.0 ou plus récent.** L'extension ne fonctionne qu'avec QGIS 4 et les versions suivantes.
@@ -117,6 +119,8 @@ Les calculs (triangulation, points 3D, mesures au sol, calage) sont vérifiés p
 ```
 python3 -m unittest discover -s tests
 ```
+
+Ils sont lancés automatiquement sur GitHub à chaque push et pull request (Python 3.12 à 3.14), avec une analyse statique du code (pyflakes).
 
 ## Licence
 

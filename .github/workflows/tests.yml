@@ -1,0 +1,42 @@
+# Tests des calculs et analyse statique du code, à chaque push et pull request.
+name: Tests
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests des calculs
+        run: python -m unittest discover -s tests -v
+
+  lint:
+    name: Analyse statique
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntaxe
+        run: python -m compileall -q .
+      - name: Pyflakes (noms inconnus, imports inutilisés…)
+        run: |
+          pip install pyflakes
+          pyflakes .

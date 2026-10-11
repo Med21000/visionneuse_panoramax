@@ -47,7 +47,7 @@ La mesure est ensuite un simple calcul sur deux points 3D : distance, composante
 | Mode | Surface des points | Grandeur affichée |
 |---|---|---|
 | Largeur perpendiculaire à la chaussée | sol | composante en travers de l'axe de la route |
-| Largeur parallèle à la route | sol | distance 3D entre les deux points |
+| Longueur parallèle à la route | sol | distance 3D entre les deux points |
 | Hauteur d'un objet | pied au sol, sommet dans le plan vertical face à la caméra | composante verticale |
 | Triangulation d'un objet | aucune : visées depuis plusieurs photos | position sur la carte |
 | Mesure libre 3D | au choix : sol, façade, plan vertical face à la caméra, plan horizontal, triangulation 3D | distance 3D décomposée (hauteur sur le plan vertical) |
@@ -96,7 +96,7 @@ Le centre optique d'une photo est :
 | Terme | Ce que c'est | Source |
 |---|---|---|
 | `z_sol` | altitude du sol sous la photo | profil de terrain (section 3.1) du **premier clic fait sur cette photo** dans la mesure |
-| `h` | hauteur de la caméra au-dessus de ce sol | hauteur **calée pour la séquence** (section 6.2) si elle existe, sinon la valeur « Caméra à » du panneau |
+| `h` | hauteur de la caméra au-dessus de ce sol | pour une photo à **position vérifiée précise** (section 2.7), altitude NGF de la caméra moins `z_sol` ; sinon hauteur **calée pour la séquence** (section 6.2) si elle existe ; sinon la valeur « Caméra à » du panneau |
 
 Aucun calage ne modifie `z_sol`, et le terrain ne modifie pas `h` : le calage de hauteur de caméra n'est donc pas en concurrence avec le profil de terrain, il remplace seulement la valeur saisie de `h`.
 
@@ -113,6 +113,24 @@ Dans cet ordre :
 
 ---
 
+### 2.7 Précision GPS vérifiée et mode dégradé
+
+Panoramax annonce souvent une précision générique (2 m pour le matériel de relevé), alors que certaines photos ont une position recalée en post-traitement (GNSS RTK et centrale inertielle), comme celles de l'imajbox 360 HD du conseil départemental de la Côte-d'Or. Le plugin vérifie la précision de chaque séquence d'après les **métadonnées des photos** (`precision.py`) :
+
+- si l'EXIF déclare une précision (`GPSHPositioningError`) d'au plus 0,20 m, elle est retenue telle quelle ;
+- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 10 cm près (écart-type) sur au moins 8 photos, et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence CD21 de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m.
+
+La vérification se fait une fois par séquence, en arrière-plan à l'affichage de la photo (deux requêtes : fiches des photos voisines, environ 100 Ko ; altitudes LiDAR, moins de 1 Ko), et son résultat est gardé pour la session.
+
+Pour une photo vérifiée précise :
+
+- **Précision de position** : 0,10 m (ou celle déclarée) au lieu de celle annoncée par Panoramax, dans la triangulation (poids des visées, incertitude) et le calage par repères.
+- **Hauteur de caméra sans calage** : `h` = altitude NGF de la caméra − `z_sol`, propre à chaque photo, à environ ±5 cm. Elle n'est retenue que si le sol vient du service IGN (LiDAR HD ou RGE ALTI : les services de secours sont trop grossiers sous la caméra) et si elle est plausible ; sinon, la hauteur calée ou la valeur du panneau s'applique. Le résultat l'indique : « caméra à 1,87 m (altitude GPS) ». Elle passe avant une hauteur calée pour la séquence, moins précise (±0,10 m environ avec plusieurs références).
+
+**Mode dégradé.** Les mesures ne sont pleinement fiables qu'avec **à la fois** une position vérifiée précise et le **LiDAR HD** sous la photo. S'il manque l'un ou l'autre, les mesures dépendent de la hauteur de caméra (à caler), de l'inclinaison et, sans LiDAR, d'un sol approximatif (RGE ALTI) : l'outil est en mode dégradé. Une **fenêtre** l'annonce quand on active la mesure (« 📐 Mesure ») sur une telle photo, avec ce qui manque et les calages à faire ; une case permet de ne plus l'afficher pendant la session. Si la vérification de la photo n'est pas encore terminée, la fenêtre s'ouvre dès qu'elle l'est. Une **ligne d'état** sous les boutons de mesure rappelle en permanence la précision de la position et la présence du LiDAR HD (par exemple « Position GPS vérifiée (±0,10 m) · LiDAR HD », ou « ⚠ Position GPS non vérifiée (±4 m annoncés) · LiDAR HD : mode de mesure dégradé »). La présence du LiDAR HD est contrôlée pour toute photo, y compris quand sa précision est déclarée dans l'EXIF.
+
+L'**inclinaison** (roulis et tangage), mesurée par la centrale, n'est pas transmise dans les métadonnées des photos : le calage d'inclinaison (section 6.1) reste nécessaire, et devient la principale source d'erreur.
+
 ## 3. Le moteur de mesure
 
 ### 3.1 Point au sol
@@ -121,7 +139,7 @@ Dans cet ordre :
 
 **Profil du terrain.** Le plugin demande l'altitude du terrain le long de la visée, de 10 m derrière la photo à 25 m devant, à l'une des sources suivantes, essayées dans l'ordre (5 s maximum chacune) :
 
-1. **service d'altimétrie de l'IGN** (RGE ALTI 1 m, France), 71 points tous les 0,5 m ;
+1. **service d'altimétrie de l'IGN**, 71 points tous les 0,5 m : MNT du **LiDAR HD** (50 cm) là où il est publié, sinon **RGE ALTI** (1 m, France). Le LiDAR HD décrit la chaussée elle-même (bordures, caniveaux) ; tant qu'il n'est pas publié à un endroit, le repli sur le RGE ALTI est silencieux ;
 2. **OpenTopoData EU-DEM 25 m** (Europe), puis **Open-Meteo Copernicus 90 m** (monde), dont seule la pente générale a un sens ;
 3. à défaut, **sol plat**.
 
@@ -189,10 +207,10 @@ Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplace
 ### 4.1 Largeur perpendiculaire à la chaussée
 
 - **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé.
-- **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le second bord cliqué est relié en pointillés au pied de la perpendiculaire. La distance en biais est aussi indiquée.
-- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la largeur parallèle.
+- **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le trait est tracé perpendiculairement à l'axe, à mi-chemin des deux bords cliqués le long de la route, et chaque bout est relié en pointillés à son bord cliqué (point déplaçable). La distance en biais est aussi indiquée.
+- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la longueur parallèle à la route.
 
-### 4.2 Largeur parallèle à la route
+### 4.2 Longueur parallèle à la route
 
 - **Clics.** Les deux extrémités de l'objet, au sol, typiquement le long de la route sur le côté du véhicule : façade, portail, place de stationnement.
 - **Calcul.** Distance 3D entre les deux points au sol (elle suit la pente) ; le dénivelé est indiqué à partir de 5 cm. Le calcul étant une distance directe, il reste juste dans n'importe quelle direction.
@@ -245,7 +263,7 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 - Le **plan horizontal** est vu d'autant plus en rasant qu'il est proche de la hauteur de la caméra : à 1 m sous une caméra à 2 m, les visées y sont deux fois plus rasantes qu'au sol (±0,15 m contre ±0,04 m pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
 - Des altitudes de sources différentes entre les clics (service IGN et sol plat) sont signalées : la composante verticale peut en être faussée.
 
-**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la largeur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
+**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la longueur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
 
 ---
 
@@ -348,7 +366,7 @@ Sur scène simulée (porte de 2,10 m dans un mur à 6 m, hauteur de caméra faus
 
 **Largeur d'une fenêtre ou d'un portail le long d'un mur.**
 
-1. Mode « Largeur parallèle à la route » : cliquer les deux coins au pied.
+1. Mode « Longueur parallèle à la route » : cliquer les deux coins au pied.
 2. Sur la carte, glisser **les deux** points sur le bord du bâtiment : le plan calé est le mur.
 3. Viser à nouveau chaque coin dans la photo.
 
@@ -402,7 +420,7 @@ Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont c
 
 **Conseils.** Référence proche (moins de 10–15 m) et, au sol, **en travers** de la vue : dans l'axe, une longueur est la différence de deux distances et elle est bien moins précise.
 
-**Effet.** La hauteur calée remplace la valeur saisie de `h` pour les mesures de la séquence (l'altitude du sol `z_sol` reste celle du profil de terrain, section 2.5), et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
+**Effet.** La hauteur calée remplace la valeur saisie de `h` pour les mesures de la séquence, sauf pour les photos à position vérifiée précise, dont la hauteur vient de l'altitude GPS (section 2.7) (l'altitude du sol `z_sol` reste celle du profil de terrain, section 2.5), et elle est reportée et enregistrée dans le réglage « Caméra à ». Sur scène simulée (caméra à 2,30 m, panneau à 1,90 m) : 2,30 m retrouvés, et une voie de 3,50 m mesurée 3,50 m au lieu de 2,89 m.
 
 ### 6.3 Cap et position (repères sur la carte), par séquence
 
@@ -442,7 +460,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 - **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
 - **Enregistrer les mesures.** Ajoute les mesures terminées affichées à la couche « Panoramax – mesures » (segment mesuré et attributs du résultat, dont la décomposition et l'incertitude) ; une mesure déjà enregistrée puis recalée y est mise à jour. Effacer une mesure de l'écran ne la retire pas de la couche.
 - **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
-- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
+- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers les deux bords cliqués pour la largeur perpendiculaire ; trait « façade » au pied du mur.
 - **Couches.** Mesures et points triangulés s'enregistrent dans « Panoramax – mesures » et « Panoramax – points triangulés » : au premier enregistrement, dans un fichier GeoPackage choisi (tables `mesures` et `points_triangules`, conservé à la fermeture de QGIS) ou en couche temporaire (à sauvegarder).
 
 ---

@@ -26,6 +26,7 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QInputDialog,
+    QMessageBox,
     QMenu,
     QToolButton,
     QHBoxLayout,
@@ -40,7 +41,7 @@ import math
 import os
 import re
 
-from . import api
+from . import altitude, api, precision
 from .calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
@@ -150,6 +151,10 @@ class PanoramaxDock(QDockWidget):
         self._view = None  # dernière vue connue : cap, inclinaison, zoom, champ vertical
         self._marks = []  # mesures affichées dans la visionneuse (voir set_measure_marks)
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
+        self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
+        self._quality = None  # résultat de la vérification pour la photo affichée
+        self._warn_pending = False  # mesure activée : avertir du mode dégradé dès que la photo est vérifiée
+        self._no_degraded_popup = False  # « Ne plus afficher pendant cette session »
 
         root = QWidget(self)
         layout = QVBoxLayout(root)
@@ -393,6 +398,8 @@ class PanoramaxDock(QDockWidget):
     def _on_measure_toggled(self, checked):
         self.measure_box.reset_heights()
         self.measure_box.setVisible(checked)
+        self._warn_pending = checked
+        self._update_quality()
         self._update_measure_widgets()
         self.measureToggled.emit(checked)
 
@@ -483,7 +490,50 @@ class PanoramaxDock(QDockWidget):
         fixed = self.calibration.position(sequence, lon, lat)
         if fixed:
             return fixed
-        return lon, lat, api.item_accuracy(item)
+        return lon, lat, self._accuracy(item)
+
+    # Précision GPS des photos (voir precision.py) --------------------------------
+    def _accuracy(self, item):
+        """Précision de la position de la photo affichée : vérifiée, sinon celle des métadonnées."""
+        q = self._quality
+        if q and q["precise"] and q["accuracy"] is not None and item is self._current_item:
+            return q["accuracy"]
+        return api.item_accuracy(item)
+
+    def _on_precision(self, pic, res):
+        if pic != self._current_pic:
+            return  # photo déjà dépassée
+        self._quality = res
+        self._update_quality()
+
+    def _update_quality(self):
+        """Ligne d'état sous les mesures (précision de la position, LiDAR HD), et avertissement du
+        mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
+        item = self._current_item
+        self.measure_box.set_quality_text(precision.state_text(self._quality, api.item_accuracy(item)) if item else "")
+        self._warn_if_degraded()
+
+    def _warn_if_degraded(self):
+        """À l'activation de la mesure, sur une photo en mode dégradé : fenêtre d'avertissement,
+        dès que la vérification de la photo est connue."""
+        if not self._warn_pending or not self.btn_measure.isChecked() or self._quality is None:
+            return
+        self._warn_pending = False
+        if precision.degraded(self._quality) and not self._no_degraded_popup:
+            self._no_degraded_popup = self._show_degraded_popup(precision.degraded_reasons(self._quality))
+
+    def _show_degraded_popup(self, reasons):
+        """Fenêtre du mode dégradé. Retourne True si l'utilisateur ne veut plus la voir de la session."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Panoramax – mode de mesure dégradé")
+        box.setText("Pour cette photo, les mesures fonctionnent en mode dégradé :\n\n" +
+                    "\n".join("• " + r for r in reasons))
+        box.setInformativeText(precision.DEGRADED_ADVICE)
+        check = QCheckBox("Ne plus afficher pendant cette session")
+        box.setCheckBox(check)
+        box.exec()
+        return check.isChecked()
 
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
         """Émet photoClicked si la photo cliquée est bien la photo courante.
@@ -505,8 +555,12 @@ class PanoramaxDock(QDockWidget):
         lon, lat = float(lon), float(lat)
         cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
         clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat,
-                                "gps": [lon, lat], "gps_accuracy": api.item_accuracy(item),
+        # Position vérifiée précise : altitude NGF de la caméra (hauteur de caméra sans calage,
+        # voir measure_tool.MeasureTool.camera_info)
+        precise = bool(self._quality and self._quality["precise"])
+        camera_alt = altitude.ngf_altitude(lon, lat, api.item_altitude(item)) if precise else None
+        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat, "camera_alt": camera_alt,
+                                "gps": [lon, lat], "gps_accuracy": self._accuracy(item),
                                 "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
                                 "sequence": sequence, "accuracy": accuracy,
                                 "precise": api.precise_heading(item) is not None,
@@ -903,6 +957,9 @@ class PanoramaxDock(QDockWidget):
         self._current_item = item
         self._current_pic = pic_id
         self.filter_row.show_item(item)
+        self._quality = self.precision.known(item)
+        self._update_quality()
+        self.precision.check(item, lambda res, pid=pic_id: self._on_precision(pid, res))
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
         self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):

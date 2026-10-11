@@ -152,12 +152,16 @@ def fetch_json(url, callback, prefer_cache=False, timeout_ms=None):
     return fetch(url, done, prefer_cache, timeout_ms)
 
 
-def search_url(lon, lat, radius_m=25, limit=20):
-    """URL de recherche STAC des photos autour d'un point (bbox carrée)."""
+def search_url(lon, lat, radius_m=25, limit=20, collection=None):
+    """URL de recherche STAC des photos autour d'un point (bbox carrée), éventuellement d'une
+    seule séquence."""
     dlat = radius_m / 111320.0
     dlon = radius_m / (111320.0 * max(math.cos(math.radians(lat)), 0.01))
     bbox = "{:.7f},{:.7f},{:.7f},{:.7f}".format(lon - dlon, lat - dlat, lon + dlon, lat + dlat)
-    return "{}/search?{}".format(API_URL, urlencode({"bbox": bbox, "limit": limit}))
+    params = {"bbox": bbox, "limit": limit}
+    if collection:
+        params["collections"] = collection
+    return "{}/search?{}".format(API_URL, urlencode(params))
 
 
 def picture_url(pic_id):
@@ -209,14 +213,50 @@ def precise_heading(item):
     return value % 360 if abs((value - rounded + 540) % 360 - 180) < 1.0 else None
 
 
+def _exif_number(item, key):
+    """Valeur numérique d'une balise EXIF de la fiche (rationnel « a/b » ou nombre), ou None."""
+    value = ((item.get("properties", {}) or {}).get("exif") or {}).get(key)
+    try:
+        num, _, den = str(value).partition("/")
+        return float(num) / float(den or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def exif_accuracy(item):
+    """Précision horizontale de la position (m) déclarée dans l'EXIF de la photo
+    (GPSHPositioningError), ou None si la photo ne la déclare pas."""
+    value = _exif_number(item, "Exif.GPSInfo.GPSHPositioningError")
+    return value if value is not None and value > 0 else None
+
+
+def gps_differential(item):
+    """La position de la photo a-t-elle reçu une correction différentielle (EXIF GPSDifferential) ?
+    DGPS ou RTK : la précision réelle reste à vérifier (voir precision.py)."""
+    return _exif_number(item, "Exif.GPSInfo.GPSDifferential") == 1
+
+
 def item_accuracy(item):
-    """Précision horizontale de la position GPS de la photo (m), ou None si inconnue."""
+    """Précision horizontale de la position GPS de la photo (m), ou None si inconnue : celle
+    déclarée dans l'EXIF, sinon celle annoncée par Panoramax (souvent générique)."""
+    value = exif_accuracy(item)
+    if value is not None:
+        return value
     value = (item.get("properties", {}) or {}).get("quality:horizontal_accuracy")
     try:
         value = float(value)
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def item_altitude(item):
+    """Altitude GPS ellipsoïdale de la caméra (m, EXIF GPSAltitude), ou None. Souvent imprécise :
+    à n'utiliser que pour une position vérifiée (voir precision.py)."""
+    altitude = _exif_number(item, "Exif.GPSInfo.GPSAltitude")
+    if altitude is None:
+        return None
+    return -altitude if _exif_number(item, "Exif.GPSInfo.GPSAltitudeRef") == 1 else altitude
 
 
 def item_image_url(item):

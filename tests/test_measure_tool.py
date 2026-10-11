@@ -70,8 +70,11 @@ class Presets(Base):
         m = self.measure("road", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         self.assertValue(m, 7.0)
         self.assertGreater(m.result["uncertainty"], 0.0)
-        foot = m.result["points"][1]  # pied de la perpendiculaire, en face du premier bord
-        self.assertLess(distance(foot, point(4.0, 8.0)), 1e-6)
+        # Trait à mi-chemin des deux bords le long de la route (nord), relié en pointillés à chacun
+        start, end = m.result["points"]
+        self.assertLess(distance(start, point(-3.0, 10.0)), 1e-6)
+        self.assertLess(distance(end, point(4.0, 10.0)), 1e-6)
+        self.assertEqual(m.result["extra"], m.result["picks"])
         self.assertIn("Largeur perpendiculaire", m.status())
 
     def test_oblique_road(self):
@@ -81,8 +84,11 @@ class Presets(Base):
         p2 = (p1[0] + 6.0 * across[0] + 3.0 * along[0], p1[1] + 6.0 * across[1] + 3.0 * along[1])
         m = self.measure("road", [click(p1 + (0.0,), axis=30.0), click(p2 + (0.0,), axis=30.0)])
         self.assertValue(m, 6.0)
-        foot = (p1[0] + 6.0 * across[0], p1[1] + 6.0 * across[1])
-        self.assertLess(distance(m.result["points"][1], point(*foot)), 1e-6)
+        # Bords décalés de 3 m le long de la route : trait à mi-chemin (1,5 m de chacun)
+        start = (p1[0] + 1.5 * along[0], p1[1] + 1.5 * along[1])
+        end = (start[0] + 6.0 * across[0], start[1] + 6.0 * across[1])
+        for got, expected in zip(m.result["points"], (start, end)):
+            self.assertLess(distance(got, point(*expected)), 1e-6)
 
     def test_profiles_with_different_ground_under_camera(self):
         # Droite de pente du terrain ajustée dans chaque direction visée : son altitude sous la
@@ -133,6 +139,41 @@ class Presets(Base):
         self.tool.add_click(click((0.0, 6.0, 0.0)))  # nouvelle mesure : la précédente est gardée
         self.assertEqual(len(self.tool.done), 1)
         self.assertEqual(len(self.tool.measures()), 2)
+
+
+class CameraFromAltitude(Base):
+    """Caméra de relevé : hauteur de caméra = altitude NGF de la caméra − sol sous la photo."""
+
+    def clicks(self, camera, ground=100.0, **extra):
+        """Largeur de 7 m au sol vue depuis une caméra réellement à `camera` m, sol à `ground` m."""
+        extra.setdefault("camera_alt", ground + camera)
+        extra.setdefault("precise_ground", True)
+        profile = [(0.0, ground), (60.0, ground)]
+        return [click((-3.0, 8.0, 0.0), camera=camera, profile=profile, **extra),
+                click((4.0, 12.0, 0.0), camera=camera, profile=profile, **extra)]
+
+    def test_height_from_altitude(self):
+        m = self.measure("road", self.clicks(2.4))  # réglage du panneau : 1,90 m, faux
+        self.assertValue(m, 7.0)
+        self.assertIn("caméra à 2,40 m (altitude GPS)", m.status())
+
+    def test_before_calibration(self):
+        cal = calibration.Calibration()
+        cal.heights["s1"] = [(1.5, 0.01)]
+        self.tool.calibration = cal
+        self.assertValue(self.measure("road", self.clicks(2.4)), 7.0)
+
+    def test_ignored(self):
+        # Sol des services de secours (mailles de 25 à 90 m) : trop imprécis sous la caméra,
+        # même avec une altitude plausible (2,40 m au-dessus du sol)
+        m = self.measure("road", self.clicks(CAMERA, precise_ground=False, camera_alt=102.4))
+        self.assertValue(m, 7.0)
+        self.assertIn("caméra à 1,90 m.", m.status())
+        # Hauteur invraisemblable (altitude ou géoïde faux) : réglage du panneau
+        self.tool.finish()
+        self.tool.current = None
+        m = self.measure("road", self.clicks(CAMERA, camera_alt=150.0))
+        self.assertValue(m, 7.0)
 
 
 class Free(Base):

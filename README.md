@@ -9,7 +9,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 ## Fonctionnalités
 
 - Mesures (bouton « 📐 Mesure ») :
-  - largeur perpendiculaire à la chaussée, largeur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
+  - largeur perpendiculaire à la chaussée, longueur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
   - triangulation d'un objet : le positionner (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
   - mesure libre 3D : distance entre deux points pris au sol, sur une façade, dans un plan vertical ou horizontal, ou par triangulation depuis deux photos ;
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
@@ -18,6 +18,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
 - Mode compact du panneau : le chevron à droite de la barre réduit les boutons à leur icône et masque les lignes Instance, options et aide de la mesure (l'aide passe dans la bulle du bouton « 📐 Mesure »). Le choix est mémorisé.
+- Filaire Panoramax (séquences et photos) en couche de tuiles vectorielles, semi-transparent à la création (opacité de 60 %) pour laisser voir le fond de carte ; l'opacité qu'on lui donne ensuite (*Propriétés › Symbologie › Rendu de la couche*) est mémorisée pour les filaires créés plus tard.
 - Filtre des photos (bouton « Filtre ») : n'afficher dans le filaire, et n'ouvrir par un clic sur la carte, que les photos prises depuis une date, en 360° ou classiques, de précision GPS donnée (≤ 2 m pour le matériel de relevé, ≤ 4 m), ou d'un producteur (liste déroulante qui propose celui de la photo affichée). Le filtre est mémorisé ; « Filtre ● » signale qu'il est actif. Aux petites échelles (grille de densité), seul le type de caméra est filtré.
 - Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
 - Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
@@ -37,13 +38,13 @@ Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le 
 
 ### Largeur et hauteur
 
-- **Largeur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
+- **Longueur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
 - **Largeur perpendiculaire à la chaussée** : cliquer au pied d'un bord (bordure, marquage, limite de chaussée), puis au pied du bord opposé. Les deux clics n'ont pas besoin d'être exactement en face : la largeur est prise perpendiculairement à l'axe de la route, donné par la direction de la séquence (photos précédente et suivante) ou, à défaut, par l'orientation de la photo. La distance en biais est aussi indiquée. À réserver aux mesures en travers de la route : le long de la route, la composante perpendiculaire est presque nulle.
 - **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
 
 Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus de photo. Les points cliqués, le trait qui les relie et la valeur mesurée s'affichent directement dans la visionneuse (accrochés à la photo, ils suivent la vue), ainsi que dans le panneau et sur la carte. Une mesure terminée reste affichée quand on en commence une autre, quand on change de mode ou quand on arrête de mesurer : plusieurs mesures peuvent ainsi coexister à l'écran, chacune sur la photo où elle a été prise. « Effacer » supprime la mesure en cours, « Tout effacer » toutes les mesures affichées.
 
-**Enregistrer les mesures** : le bouton « Enregistrer les mesures » ajoute les mesures terminées affichées à la couche « Panoramax – mesures ». Chaque mesure y est un segment (pour une largeur perpendiculaire, du premier bord au pied de la perpendiculaire ; pour une hauteur, un point, pied et sommet étant à la verticale l'un de l'autre), étiqueté de sa valeur, avec ses attributs : type et surface, valeur et incertitude, décomposition (horizontale, verticale, le long de la route, en travers), distance à la photo, hauteur de caméra (et si elle est calée), source du terrain, nombre de points recalés, identifiants des photos, date et un champ `commentaire` libre. Une mesure déjà enregistrée n'est pas ajoutée deux fois ; recalée ou visée à nouveau ensuite, elle est mise à jour au prochain enregistrement.
+**Enregistrer les mesures** : le bouton « Enregistrer les mesures » ajoute les mesures terminées affichées à la couche « Panoramax – mesures ». Chaque mesure y est un segment (pour une largeur perpendiculaire, perpendiculaire à la route, à mi-chemin des deux bords cliqués ; pour une hauteur, un point, pied et sommet étant à la verticale l'un de l'autre), étiqueté de sa valeur, avec ses attributs : type et surface, valeur et incertitude, décomposition (horizontale, verticale, le long de la route, en travers), distance à la photo, hauteur de caméra (et si elle est calée), source du terrain, nombre de points recalés, identifiants des photos, date et un champ `commentaire` libre. Une mesure déjà enregistrée n'est pas ajoutée deux fois ; recalée ou visée à nouveau ensuite, elle est mise à jour au prochain enregistrement.
 
 **Où sont enregistrées les couches** : au premier enregistrement, le plugin demande de choisir entre un **fichier GeoPackage**, conservé à la fermeture de QGIS, et une **couche temporaire**, perdue si on ne la sauvegarde pas avant. Le GeoPackage choisi est proposé à nouveau les fois suivantes ; mesures et points triangulés y sont deux tables (`mesures` et `points_triangules`). Choisir un GeoPackage qui contient déjà ces tables y ajoute les nouvelles entités.
 
@@ -53,13 +54,15 @@ Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus
 
 Altitude du terrain : sources essayées dans l'ordre jusqu'à la première qui répond (délai de 5 secondes chacune) :
 
-1. le service d'altimétrie de l'IGN (RGE ALTI 1 m, France) ;
+1. le service d'altimétrie de l'IGN : MNT du LiDAR HD (50 cm) là où il est publié, sinon RGE ALTI (1 m, France) ;
 2. s'il ne répond pas ou ne couvre pas la zone : des services en ligne de secours, OpenTopoData EU-DEM 25 m (Europe), puis Open-Meteo Copernicus 90 m (monde). Leurs mailles sont grossières : seule la pente générale de la rue est retenue (droite ajustée sur 180 m autour de la photo). Ce sont des modèles de surface, qui incluent les bâtiments : une pente supérieure à 12 % est jugée invraisemblable et la source est écartée ;
 3. à défaut, un sol plat et horizontal.
 
 Google Elevation n'est pas proposé : il exige une clé API et un compte de facturation, et ses conditions interdisent d'utiliser les données hors d'une carte Google.
 
 La source utilisée, et la raison d'un éventuel repli, sont indiquées avec le résultat.
+
+**Précision GPS vérifiée** : le plugin vérifie la précision des photos d'après leurs métadonnées (précision déclarée, ou correction différentielle contrôlée sur les photos voisines : altitude GPS moins sol LiDAR HD constante). Pour une position recalée par RTK, comme celles de l'imajbox du CD21, la hauteur de caméra est déduite de l'altitude GPS, convertie en altitude NGF par la grille du géoïde de l'IGN, à environ ±5 cm et sans calage ; le résultat indique « (altitude GPS) ». L'inclinaison reste à caler. **Mode dégradé** : s'il manque la position vérifiée précise ou le LiDAR HD, une fenêtre l'annonce à l'activation de la mesure et invite à caler la hauteur de caméra et l'inclinaison ; une ligne d'état sous les boutons de mesure rappelle la précision de la position et la présence du LiDAR HD. Détails dans [docs/MESURES.md](docs/MESURES.md#27-précision-gps-vérifiée-et-mode-dégradé).
 
 **Mesure sur un pont** : le modèle de terrain nu donne, sous un pont, le fond du cours d'eau. Pour une photo prise sur un pont, cocher « Mesure sur un pont » (ligne « Terrain ») : le sol est alors pris plat et horizontal sous la caméra, sans interroger les services. L'option n'est pas mémorisée d'une session à l'autre.
 
@@ -73,7 +76,7 @@ Le plugin retient la pente de la route autour de la photo (droite ajustée de fa
 4. Le point d'intersection s'affiche sur la carte avec l'angle de croisement, la précision GPS des photos et une incertitude estimée (erreur de visée de ±1°, ±0,5° pour le matériel de relevé, et précision GPS des photos). Une troisième visée améliore et contrôle le résultat. Chaque visée est pondérée : une visée lointaine ou une photo mal positionnée compte moins.
 5. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés », dans un fichier GeoPackage ou en couche temporaire (voir « Où sont enregistrées les couches » ci-dessus).
 
-La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
+La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones ; 0,10 m retenu pour une position vérifiée recalée par RTK, comme celles de l'imajbox du CD21) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
 ![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule jaune dans la visionneuse, croisement de 83°, incertitude ±1,8 m](docs/images/triangulation.png)
 

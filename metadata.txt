@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Visionneuse Panoramax dans QGIS avec mesures à l'écran : largeurs, hauteurs, distances 3D et position d'objets par triangulation.
 about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement). Mesures directement dans la photo : largeurs, hauteur d'un objet, mesure libre 3D (sol, façade, plans), triangulation d'un objet visé depuis plusieurs photos et placé sur la carte. Mesures et points triangulés enregistrés dans des couches (GeoPackage ou couche temporaire). Points recalables en les glissant sur la carte QGIS, calage des photos (inclinaison, cap et position, hauteur de caméra). Filtre des photos (date, 360° ou classiques, précision GPS, producteur). Synchronisation carte-visionneuse avec curseur de vue, choix de l'instance, captures Full HD et vignette. Sans QtWebEngine, une visionneuse native intégrée prend le relais en mode dégradé : les fonctions de mesure peuvent alors ne pas fonctionner comme attendu.
-version=1.1.2
+version=1.2.0
 author=Cédric COCHART
 email=cedric.cochart@gmail.com
 homepage=https://github.com/medlab-code/visionneuse_panoramax
@@ -16,7 +16,15 @@ category=Web
 icon=icon.png
 experimental=False
 deprecated=False
-changelog=1.1.2
+changelog=1.2.0
+    - Précision GPS des photos vérifiée d'après leurs métadonnées (précision déclarée, ou correction différentielle contrôlée sur la séquence) ; position recalée par RTK reconnue (photos imajbox du CD21)
+    - Hauteur de caméra déduite de l'altitude GPS pour une position vérifiée, sans calage
+    - Altitudes du terrain par le MNT LiDAR HD de l'IGN là où il est publié
+    - Mode de mesure dégradé annoncé à l'activation de la mesure quand il manque la position vérifiée ou le LiDAR HD ; ligne d'état sous les boutons de mesure
+    - Filaire semi-transparent (60 %), opacité choisie mémorisée
+    - Largeur perpendiculaire : trait à mi-chemin des deux bords, reliés en pointillés
+    - « Largeur parallèle à la route » renommée « Longueur parallèle à la route »
+    1.1.2
     - Correction : mesures au sol trop courtes d'un côté de la rue quand le relief au loin monte ou descend (pente du terrain prise près de la photo)
     - Option « Mesure sur un pont » (sol plat) à la place de la case « Service d'altimétrie IGN »
     1.1.1

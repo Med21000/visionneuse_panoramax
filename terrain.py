@@ -4,7 +4,8 @@
 """Profils d'altitude du terrain le long d'une visée (pour ground.intersect).
 
 Sources, essayées dans l'ordre jusqu'à la première qui répond :
-1. le service d'altimétrie de la Géoplateforme IGN (RGE ALTI 1 m, France) ;
+1. le service d'altimétrie de la Géoplateforme IGN : MNT du LiDAR HD (50 cm) là où il
+   est publié, sinon RGE ALTI (1 m, France) ;
 2. des services en ligne de secours, plus grossiers : OpenTopoData EU-DEM 25 m
    (Europe) puis Open-Meteo Copernicus 90 m (monde) ;
 3. à défaut, un sol plat et horizontal.
@@ -42,6 +43,9 @@ SAMPLES = 71  # tous les 0,5 m (241 au plus en une requête pour le service IGN)
 IGN_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevationLine.json"
 IGN_RESOURCE = "ign_rge_alti_wld"
 IGN_LABEL = "RGE ALTI (IGN), pente de la route"
+LIDAR_RESOURCE = "ign_lidar_hd_mnt_mono_wld"  # MNT LiDAR HD 50 cm, publié département par département
+LIDAR_LABEL = "LiDAR HD (IGN), pente de la route"
+PRECISE_LABELS = (LIDAR_LABEL, IGN_LABEL)  # sol au décimètre près sous la caméra (voir measure_tool.camera_info)
 NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
 TIMEOUT_MS = 5000  # au-delà, on passe à la source suivante
 
@@ -72,7 +76,7 @@ class TerrainProvider:
         if self.bridge:
             callback(ground.flat_profile(), BRIDGE_LABEL, None)
             return
-        steps = [self._ign_step, self._opentopodata_step, self._openmeteo_step]
+        steps = [self._lidar_step, self._ign_step, self._opentopodata_step, self._openmeteo_step]
         reasons = []
 
         def next_step():
@@ -84,8 +88,9 @@ class TerrainProvider:
             def ok(prof, label):
                 callback(prof, label, "; ".join(reasons) or None)
 
-            def failed(reason):
-                reasons.append(reason)
+            def failed(reason=None):
+                if reason:  # LiDAR HD pas encore publié ici : repli silencieux sur le RGE ALTI
+                    reasons.append(reason)
                 next_step()
 
             step(lon, lat, yaw, ok, failed)
@@ -95,13 +100,24 @@ class TerrainProvider:
     # ------------------------------------------------------------------
     # Service d'altimétrie IGN
     # ------------------------------------------------------------------
+    def _lidar_step(self, lon, lat, yaw, ok, failed):
+        self._ign_line(lon, lat, yaw, ok, lambda error: failed(), LIDAR_RESOURCE, LIDAR_LABEL)
+
     def _ign_step(self, lon, lat, yaw, ok, failed):
+        def no_data(error):
+            failed("service d'altimétrie IGN indisponible ({})".format(error) if error else
+                   "pas d'altitude IGN à cet endroit (hors de France ?)")
+
+        self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, IGN_LABEL)
+
+    def _ign_line(self, lon, lat, yaw, ok, no_data, resource, label):
+        """Profil d'une ressource du service IGN ; no_data(erreur ou None) si rien d'exploitable."""
         start = triangulation.offset(lon, lat, yaw, LINE_FROM)
         end = triangulation.offset(lon, lat, yaw, LINE_TO)
         params = {
             "lon": "{:.8f}|{:.8f}".format(start[0], end[0]),
             "lat": "{:.8f}|{:.8f}".format(start[1], end[1]),
-            "resource": IGN_RESOURCE,
+            "resource": resource,
             "sampling": SAMPLES,
             "profile_mode": "simple",
         }
@@ -110,10 +126,9 @@ class TerrainProvider:
         def done(data, error):
             prof = self._parse_ign(data, lon, lat, yaw) if not error and isinstance(data, dict) else None
             if prof is not None:
-                ok(prof, IGN_LABEL)
+                ok(prof, label)
             else:
-                failed("service d'altimétrie IGN indisponible ({})".format(error) if error else
-                       "pas d'altitude IGN à cet endroit (hors de France ?)")
+                no_data(error)
 
         api.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
 

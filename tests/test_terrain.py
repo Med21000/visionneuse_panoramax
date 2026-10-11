@@ -51,10 +51,11 @@ class RobustProfile(unittest.TestCase):
 
 
 class FakeServices:
-    """Remplace api.fetch_json : réponses synthétiques des services, terrain de pente `slope`."""
+    """Remplace api.fetch_json : réponses synthétiques des services, terrain de pente `slope`.
+    Le LiDAR HD n'est publié que si `lidar` est vrai (sinon le service renvoie -99999)."""
 
-    def __init__(self, slope=0.05, z0=200.0, down=(), coarse_slope=None, relief=None):
-        self.slope, self.z0, self.down, self.relief = slope, z0, set(down), relief
+    def __init__(self, slope=0.05, z0=200.0, down=(), coarse_slope=None, relief=None, lidar=False):
+        self.slope, self.z0, self.down, self.relief, self.lidar = slope, z0, set(down), relief, lidar
         self.coarse_slope = slope if coarse_slope is None else coarse_slope
         self.calls = []
 
@@ -68,7 +69,8 @@ class FakeServices:
         parts = urlsplit(url)
         query = {k: v[0] for k, v in parse_qs(parts.query).items()}
         host = parts.netloc
-        self.calls.append(host)
+        lidar = query.get("resource") == terrain.LIDAR_RESOURCE
+        self.calls.append("lidar" if lidar else host)
         if host in self.down:
             callback(None, "délai dépassé")
         elif host == "data.geopf.fr":
@@ -79,7 +81,8 @@ class FakeServices:
             for i in range(n):
                 k = i / (n - 1)
                 lon, lat = lons[0] + k * (lons[1] - lons[0]), lats[0] + k * (lats[1] - lats[0])
-                pts.append({"lon": lon, "lat": lat, "z": self.z(lon, lat, self.slope)})
+                z = self.z(lon, lat, self.slope) if self.lidar or not lidar else -99999.0
+                pts.append({"lon": lon, "lat": lat, "z": z})
             callback({"elevations": pts}, None)
         elif host == "api.opentopodata.org":
             locs = [tuple(map(float, p.split(","))) for p in query["locations"].split("|")]
@@ -111,9 +114,16 @@ class Provider(unittest.TestCase):
         services = FakeServices()
         prof, label, warning = self.run_profile(services)
         self.assertEqual(label, terrain.IGN_LABEL)
-        self.assertIsNone(warning)
+        self.assertIsNone(warning)  # LiDAR HD pas encore publié : repli silencieux sur le RGE ALTI
         self.assertSlope(prof, 0.05)
-        self.assertEqual(services.calls, ["data.geopf.fr"])
+        self.assertEqual(services.calls, ["lidar", "data.geopf.fr"])
+
+    def test_lidar(self):
+        services = FakeServices(lidar=True)
+        prof, label, warning = self.run_profile(services)
+        self.assertEqual((label, warning), (terrain.LIDAR_LABEL, None))
+        self.assertSlope(prof, 0.05)
+        self.assertEqual(services.calls, ["lidar"])
 
     def test_fallbacks(self):
         prof, label, warning = self.run_profile(FakeServices(down={"data.geopf.fr"}))
@@ -144,7 +154,7 @@ class Provider(unittest.TestCase):
         self.assertEqual(label, ground.FLAT)
         self.assertEqual(prof, ground.flat_profile())
         self.assertIn("invraisemblable", warning)
-        self.assertEqual(services.calls, ["data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"])
+        self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"])
 
 
 if __name__ == "__main__":

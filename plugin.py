@@ -27,7 +27,7 @@ from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
-from .terrain import TerrainProvider
+from .terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -175,11 +175,17 @@ class PanoramaxPlugin:
         QgsProject.instance().readProject.connect(self._import_project_calibration)
         self._load_calibration()
 
+        # Opacité du filaire mémorisée quand l'utilisateur la change (voir layers.watch_opacity)
+        QgsProject.instance().layersAdded.connect(layers.watch_opacity)
+        layers.watch_opacity(QgsProject.instance().mapLayers().values())
+
     def unload(self):
-        try:
-            QgsProject.instance().readProject.disconnect(self._import_project_calibration)
-        except (TypeError, RuntimeError):
-            pass
+        for signal, slot in ((QgsProject.instance().readProject, self._import_project_calibration),
+                             (QgsProject.instance().layersAdded, layers.watch_opacity)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
         self.calibration.changed = None
         for action in self.actions:
             self.iface.removePluginWebMenu(MENU, action)
@@ -606,7 +612,7 @@ class PanoramaxPlugin:
         def done(profile, label, warning):
             if self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
-            click.update(profile=profile, terrain=label)
+            click.update(profile=profile, terrain=label, precise_ground=label in PRECISE_LABELS)
             self._show_measure(tool.add_click(click, warning))
             self._report_camera_height(tool)
 

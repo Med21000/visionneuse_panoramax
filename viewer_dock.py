@@ -26,6 +26,7 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QFileDialog,
     QInputDialog,
+    QMessageBox,
     QMenu,
     QToolButton,
     QHBoxLayout,
@@ -152,7 +153,8 @@ class PanoramaxDock(QDockWidget):
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
         self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
         self._quality = None  # résultat de la vérification pour la photo affichée
-        self._warned = set()  # séquences déjà signalées en mode dégradé
+        self._warn_pending = False  # mesure activée : avertir du mode dégradé dès que la photo est vérifiée
+        self._no_degraded_popup = False  # « Ne plus afficher pendant cette session »
 
         root = QWidget(self)
         layout = QVBoxLayout(root)
@@ -396,6 +398,7 @@ class PanoramaxDock(QDockWidget):
     def _on_measure_toggled(self, checked):
         self.measure_box.reset_heights()
         self.measure_box.setVisible(checked)
+        self._warn_pending = checked
         self._update_quality()
         self._update_measure_widgets()
         self.measureToggled.emit(checked)
@@ -504,14 +507,33 @@ class PanoramaxDock(QDockWidget):
         self._update_quality()
 
     def _update_quality(self):
-        """Mode dégradé (position imprécise et pas de LiDAR HD) : signalé sous les mesures, et une
-        fois par séquence dans la barre de messages de QGIS pendant les mesures."""
-        degraded = precision.degraded(self._quality)
-        self.measure_box.set_quality_text("⚠ " + precision.DEGRADED if degraded else "")
-        sequence = (self._current_item or {}).get("collection")
-        if degraded and self.btn_measure.isChecked() and sequence not in self._warned:
-            self._warned.add(sequence)
-            self.message.emit(precision.DEGRADED, 1, "")
+        """Ligne d'état sous les mesures (précision de la position, LiDAR HD), et avertissement du
+        mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
+        item = self._current_item
+        self.measure_box.set_quality_text(precision.state_text(self._quality, api.item_accuracy(item)) if item else "")
+        self._warn_if_degraded()
+
+    def _warn_if_degraded(self):
+        """À l'activation de la mesure, sur une photo en mode dégradé : fenêtre d'avertissement,
+        dès que la vérification de la photo est connue."""
+        if not self._warn_pending or not self.btn_measure.isChecked() or self._quality is None:
+            return
+        self._warn_pending = False
+        if precision.degraded(self._quality) and not self._no_degraded_popup:
+            self._no_degraded_popup = self._show_degraded_popup(precision.degraded_reasons(self._quality))
+
+    def _show_degraded_popup(self, reasons):
+        """Fenêtre du mode dégradé. Retourne True si l'utilisateur ne veut plus la voir de la session."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Panoramax – mode de mesure dégradé")
+        box.setText("Pour cette photo, les mesures fonctionnent en mode dégradé :\n\n" +
+                    "\n".join("• " + r for r in reasons))
+        box.setInformativeText(precision.DEGRADED_ADVICE)
+        check = QCheckBox("Ne plus afficher pendant cette session")
+        box.setCheckBox(check)
+        box.exec()
+        return check.isChecked()
 
     def _clicked_direction(self, yaw, elev, pic=None, pos=None):
         """Émet photoClicked si la photo cliquée est bien la photo courante.

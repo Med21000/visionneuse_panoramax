@@ -14,9 +14,10 @@ photo est jugée précise (au décimètre) :
   photos à Pouilly-en-Auxois).
 
 Une photo précise donne la hauteur de caméra par son altitude (voir
-measure_tool.MeasureTool.camera_info). Une photo imprécise là où le LiDAR HD n'est pas
-publié met l'outil en mode dégradé (hauteur de caméra à caler, sol approximatif) : le
-panneau le signale.
+measure_tool.MeasureTool.camera_info). Les mesures ne sont pleinement fiables qu'avec à la
+fois une position vérifiée précise et le LiDAR HD sous la photo ; sinon l'outil est en
+mode dégradé (hauteur de caméra et inclinaison à caler, sol approximatif sans LiDAR) :
+une fenêtre l'annonce à l'activation de la mesure (voir viewer_dock).
 
 Une vérification par séquence (deux requêtes : fiches des photos voisines, altitudes
 LiDAR), en arrière-plan ; le résultat est gardé pour la session.
@@ -35,8 +36,9 @@ MIN_PHOTOS = 8
 MAX_SPREAD = 0.10  # m : écart-type maximal de la hauteur de caméra entre photos voisines
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m)
 ELEVATION_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
-DEGRADED = ("Mode dégradé : position GPS de la photo imprécise et pas de LiDAR HD à cet endroit. Les mesures "
-            "dépendent de la hauteur de caméra et de l'inclinaison : calez-les, et contrôlez les résultats.")
+DEGRADED_ADVICE = ("Les mesures dépendent alors de la hauteur de caméra, de l'inclinaison de la caméra et, sans "
+                   "LiDAR HD, d'un sol approximatif : calez la hauteur de caméra sur une longueur connue et "
+                   "l'inclinaison sur deux objets verticaux, puis contrôlez les résultats.")
 
 
 def lidar_url(points):
@@ -68,8 +70,36 @@ def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, 
 
 
 def degraded(res):
-    """La photo met-elle l'outil en mode dégradé (position imprécise et pas de LiDAR HD) ?"""
-    return bool(res) and not res["precise"] and res["lidar"] is False
+    """Mode dégradé : il manque la position vérifiée précise ou le LiDAR HD sous la photo
+    (False tant que la vérification n'est pas faite)."""
+    return bool(res) and not (res["precise"] and res["lidar"] is True)
+
+
+def degraded_reasons(res):
+    """Ce qui manque pour des mesures pleinement fiables (liste de textes)."""
+    out = []
+    if not res["precise"]:
+        out.append("position GPS non vérifiée au décimètre ({})".format(res["reason"]))
+    if res["lidar"] is False:
+        out.append("pas de LiDAR HD publié à cet endroit")
+    elif res["lidar"] is None:
+        out.append("présence du LiDAR HD non vérifiée (service d'altimétrie indisponible)")
+    return out
+
+
+def state_text(res, accuracy=None):
+    """Ligne d'état du panneau : précision de la position et présence du LiDAR HD."""
+    if not res:
+        return "Position GPS et LiDAR HD : vérification en cours…"
+    if res["precise"]:
+        position = "Position GPS vérifiée (±{} m)".format("{:.2f}".format(res["accuracy"]).replace(".", ","))
+    elif accuracy is not None:
+        position = "Position GPS non vérifiée (±{} m annoncés)".format("{:g}".format(accuracy).replace(".", ","))
+    else:
+        position = "Position GPS non vérifiée"
+    lidar = {True: "LiDAR HD", False: "pas de LiDAR HD", None: "LiDAR HD non vérifié"}[res["lidar"]]
+    text = "{} · {}".format(position, lidar)
+    return "⚠ " + text + " : mode de mesure dégradé" if degraded(res) else text
 
 
 class PrecisionChecker:
@@ -85,10 +115,6 @@ class PrecisionChecker:
 
     def check(self, item, callback):
         """Précision de la photo (fiche STAC) : callback(résultat) dès qu'il est connu."""
-        accuracy = api.exif_accuracy(item)
-        if accuracy is not None and accuracy <= PRECISE_ACCURACY:
-            callback(result(True, accuracy, reason="précision déclarée dans les métadonnées de la photo"))
-            return
         sequence = item.get("collection")
         if sequence in self._results:
             callback(self._results[sequence])
@@ -109,17 +135,20 @@ class PrecisionChecker:
         except (KeyError, TypeError, ValueError):
             done(result(False, reason="position de la photo inconnue"))
             return
-        if api.gps_differential(item) and sequence:
+        accuracy = api.exif_accuracy(item)
+        if accuracy is not None and accuracy <= PRECISE_ACCURACY:
+            self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy)
+        elif api.gps_differential(item) and sequence:
             self._check_sequence(item, sequence, lon, lat, done)
         else:
             self._check_lidar(lon, lat, done, "pas de correction différentielle déclarée")
 
-    def _check_lidar(self, lon, lat, done, reason):
-        """Photo imprécise : le LiDAR HD est-il publié sous la photo ?"""
+    def _check_lidar(self, lon, lat, done, reason, accuracy=None):
+        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None."""
         def got(data, error):
             ground = _ground(data) if not error else []
             lidar = None if error else bool(ground and ground[0] is not None)
-            done(result(False, lidar=lidar, reason=reason))
+            done(result(accuracy is not None, accuracy, lidar, reason))
 
         api.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 

@@ -72,7 +72,7 @@ class Check(unittest.TestCase):
         res = self.check(photos[0], FakeServices(photos))
         self.assertFalse(res["precise"])
         self.assertTrue(res["lidar"])
-        self.assertFalse(precision.degraded(res))  # LiDAR publié : pas de mode dégradé
+        self.assertTrue(precision.degraded(res))  # LiDAR publié, mais position non vérifiée
 
     def test_degraded_without_lidar(self):
         photos = [photo(i) for i in range(20)]
@@ -86,10 +86,14 @@ class Check(unittest.TestCase):
     def test_declared_accuracy(self):
         item = photo(0, differential=False)
         item["properties"]["exif"]["Exif.GPSInfo.GPSHPositioningError"] = "5/100"
+        res = self.check(item, FakeServices([], lidar=True))
+        self.assertEqual((res["precise"], res["accuracy"], res["lidar"]), (True, 0.05, True))
+        self.assertFalse(precision.degraded(res))
         services = FakeServices([], lidar=False)
         res = self.check(item, services)
-        self.assertEqual((res["precise"], res["accuracy"]), (True, 0.05))
-        self.assertEqual(services.calls, [])  # métadonnées suffisantes : aucune requête
+        self.assertTrue(res["precise"])
+        self.assertTrue(precision.degraded(res))  # précise, mais sans LiDAR HD
+        self.assertEqual(services.calls, ["data.geopf.fr"])  # LiDAR sous la photo seulement
 
     def test_too_few_photos_or_altitudes(self):
         photos = [photo(i) for i in range(5)] + [photo(i, altitude=False) for i in range(5, 20)]
@@ -117,15 +121,34 @@ class Check(unittest.TestCase):
     def test_service_down_simple_gps(self):
         res = self.check(photo(0, differential=False), FakeServices([], down={"data.geopf.fr"}))
         self.assertIsNone(res["lidar"])
-        self.assertFalse(precision.degraded(res))
+        self.assertTrue(precision.degraded(res))
 
     def test_service_down(self):
         photos = [photo(i) for i in range(20)]
         res = self.check(photos[0], FakeServices(photos, down={"data.geopf.fr"}))
         self.assertFalse(res["precise"])
-        self.assertIsNone(res["lidar"])  # inconnu : pas de mode dégradé annoncé à tort
-        self.assertFalse(precision.degraded(res))
+        self.assertIsNone(res["lidar"])  # inconnu
+        self.assertTrue(precision.degraded(res))  # position non vérifiée
+        self.assertIn("non vérifiée (service d'altimétrie indisponible)", precision.degraded_reasons(res)[-1])
 
+
+
+class Texts(unittest.TestCase):
+    def test_full_mode(self):
+        res = precision.result(True, 0.1, True, "vérifiée")
+        self.assertFalse(precision.degraded(res))
+        self.assertEqual(precision.degraded_reasons(res), [])
+        self.assertEqual(precision.state_text(res), "Position GPS vérifiée (±0,10 m) · LiDAR HD")
+
+    def test_degraded(self):
+        res = precision.result(False, lidar=False, reason="pas de correction différentielle déclarée")
+        self.assertEqual(precision.degraded_reasons(res), [
+            "position GPS non vérifiée au décimètre (pas de correction différentielle déclarée)",
+            "pas de LiDAR HD publié à cet endroit"])
+        self.assertEqual(precision.state_text(res, 4.0),
+                         "⚠ Position GPS non vérifiée (±4 m annoncés) · pas de LiDAR HD : mode de mesure dégradé")
+        self.assertFalse(precision.degraded(None))  # vérification en cours
+        self.assertIn("en cours", precision.state_text(None))
 
 if __name__ == "__main__":
     unittest.main()

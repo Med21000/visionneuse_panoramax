@@ -47,7 +47,7 @@ La mesure est ensuite un simple calcul sur deux points 3D : distance, composante
 | Mode | Surface des points | Grandeur affichée |
 |---|---|---|
 | Largeur perpendiculaire à la chaussée | sol | composante en travers de l'axe de la route |
-| Largeur parallèle à la route | sol | distance 3D entre les deux points |
+| Longueur parallèle à la route | sol | distance 3D entre les deux points |
 | Hauteur d'un objet | pied au sol, sommet dans le plan vertical face à la caméra | composante verticale |
 | Triangulation d'un objet | aucune : visées depuis plusieurs photos | position sur la carte |
 | Mesure libre 3D | au choix : sol, façade, plan vertical face à la caméra, plan horizontal, triangulation 3D | distance 3D décomposée (hauteur sur le plan vertical) |
@@ -208,9 +208,9 @@ Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplace
 
 - **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé.
 - **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le second bord cliqué est relié en pointillés au pied de la perpendiculaire. La distance en biais est aussi indiquée.
-- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la largeur parallèle.
+- **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la longueur parallèle à la route.
 
-### 4.2 Largeur parallèle à la route
+### 4.2 Longueur parallèle à la route
 
 - **Clics.** Les deux extrémités de l'objet, au sol, typiquement le long de la route sur le côté du véhicule : façade, portail, place de stationnement.
 - **Calcul.** Distance 3D entre les deux points au sol (elle suit la pente) ; le dénivelé est indiqué à partir de 5 cm. Le calcul étant une distance directe, il reste juste dans n'importe quelle direction.
@@ -263,7 +263,7 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 - Le **plan horizontal** est vu d'autant plus en rasant qu'il est proche de la hauteur de la caméra : à 1 m sous une caméra à 2 m, les visées y sont deux fois plus rasantes qu'au sol (±0,15 m contre ±0,04 m pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
 - Des altitudes de sources différentes entre les clics (service IGN et sol plat) sont signalées : la composante verticale peut en être faussée.
 
-**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la largeur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
+**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la longueur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
 
 ---
 
@@ -366,7 +366,7 @@ Sur scène simulée (porte de 2,10 m dans un mur à 6 m, hauteur de caméra faus
 
 **Largeur d'une fenêtre ou d'un portail le long d'un mur.**
 
-1. Mode « Largeur parallèle à la route » : cliquer les deux coins au pied.
+1. Mode « Longueur parallèle à la route » : cliquer les deux coins au pied.
 2. Sur la carte, glisser **les deux** points sur le bord du bâtiment : le plan calé est le mur.
 3. Viser à nouveau chaque coin dans la photo.
 

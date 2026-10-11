@@ -190,7 +190,7 @@ class EndToEnd(Base):
         self.assertIn("layername=mesures", layer.source())
         f = next(layer.getFeatures())
         self.assertAlmostEqual(f["valeur_m"], math.hypot(7.0, 4.0), places=3)
-        self.assertEqual(f["type"], "largeur parallèle à la route")
+        self.assertEqual(f["type"], "longueur parallèle à la route")
         self.assertEqual(f["photos"], "p1")
         self.assertEqual(tool.save(), (False, "Les mesures affichées sont déjà enregistrées."))
         # Point recalé sur la carte : l'entité est mise à jour, pas dupliquée

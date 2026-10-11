@@ -29,7 +29,7 @@ from .measure_tool import FREE_SURFACES
 
 MEASURE_MODES = (
     ("Largeur perpendiculaire à la chaussée", "road"),
-    ("Largeur parallèle à la route", "width"),
+    ("Longueur parallèle à la route", "width"),
     ("Hauteur d'un objet", "height"),
     ("Triangulation d'un objet", "tri"),
     ("Mesure libre 3D", "free"),

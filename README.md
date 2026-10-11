@@ -9,7 +9,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 ## Fonctionnalités
 
 - Mesures (bouton « 📐 Mesure ») :
-  - largeur perpendiculaire à la chaussée, largeur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
+  - largeur perpendiculaire à la chaussée, longueur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
   - triangulation d'un objet : le positionner (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
   - mesure libre 3D : distance entre deux points pris au sol, sur une façade, dans un plan vertical ou horizontal, ou par triangulation depuis deux photos ;
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
@@ -37,7 +37,7 @@ Cliquer sur « 📐 Mesure » puis choisir le mode. Les méthodes de calcul, le 
 
 ### Largeur et hauteur
 
-- **Largeur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
+- **Longueur parallèle à la route** : cliquer au sol aux deux extrémités de l'objet, typiquement le long de la route sur le côté du véhicule (façade, portail, place de stationnement…). La distance directe entre les deux points est mesurée ; elle reste juste dans n'importe quelle direction.
 - **Largeur perpendiculaire à la chaussée** : cliquer au pied d'un bord (bordure, marquage, limite de chaussée), puis au pied du bord opposé. Les deux clics n'ont pas besoin d'être exactement en face : la largeur est prise perpendiculairement à l'axe de la route, donné par la direction de la séquence (photos précédente et suivante) ou, à défaut, par l'orientation de la photo. La distance en biais est aussi indiquée. À réserver aux mesures en travers de la route : le long de la route, la composante perpendiculaire est presque nulle.
 - **Hauteur d'un objet** : cliquer au pied de l'objet (au sol), puis à son sommet, sur la même photo.
 

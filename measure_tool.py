@@ -8,7 +8,7 @@ sur une surface, puis la mesure est une grandeur calculée sur ces points.
 
 - "road" : largeur perpendiculaire à la chaussée (deux points au sol, composante
   en travers de l'axe de la route) ;
-- "width" : largeur parallèle à la route (distance 3D entre deux points au sol) ;
+- "width" : longueur parallèle à la route (distance 3D entre deux points au sol) ;
 - "height" : hauteur d'un objet (pied au sol, sommet dans le plan vertical face à
   la caméra, composante verticale) ;
 - "free" : mesure libre, sur la surface choisie (sol, façade, plan vertical face à
@@ -64,7 +64,7 @@ LAYER_FIELDS = (
     "&field=horiz_m:double&field=vert_m:double&field=long_route_m:double&field=travers_m:double"
     "&field=dist_photo_m:double&field=camera_m:double&field=camera_calee:integer&field=terrain:string"
     "&field=recales:integer&field=photos:string&field=date_mesure:string&field=commentaire:string")
-KIND_NAMES = {"road": "largeur perpendiculaire à la chaussée", "width": "largeur parallèle à la route",
+KIND_NAMES = {"road": "largeur perpendiculaire à la chaussée", "width": "longueur parallèle à la route",
               "height": "hauteur", "free": "mesure libre 3D"}
 
 
@@ -513,7 +513,7 @@ class Measure:
                 value, unc, _num(d["horizontal"], 2), _num(self.clicks[0]["axis"], 0),
                 self.clicks[0].get("axis_source") or "?")
         elif self.kind == "width":
-            text = "Largeur : {} m (±{} m) entre les deux points · à {} et {} m de la photo".format(
+            text = "Longueur : {} m (±{} m) entre les deux points · à {} et {} m de la photo".format(
                 value, unc, _num(r["ranges"][0]), _num(r["ranges"][1]))
             if abs(d["vertical"]) >= 0.05:
                 text += " · dénivelé {} m".format(_num(d["vertical"], 2))

@@ -217,7 +217,7 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 
 **Contrôles.** Visées presque parallèles (moins de 3°), point derrière une photo ou à plus de 500 m : refusés. Croisement inférieur à 15° ou GPS moins bon que ±5 m : signalés.
 
-**Résultats.** Distances, angle de croisement, incertitude (grand axe de l'ellipse de covariance), écart des visées (à partir de 3), précision GPS. « Enregistrer le point » l'ajoute à la couche temporaire « Panoramax – points triangulés ».
+**Résultats.** Distances, angle de croisement, incertitude (grand axe de l'ellipse de covariance), écart des visées (à partir de 3), précision GPS. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (GeoPackage ou couche temporaire, au choix lors du premier enregistrement).
 
 **Géométrie favorable.** L'erreur vaut à peu près `σ / sin θ` (θ : angle de croisement) : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet.
 
@@ -438,6 +438,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 - **Mesures conservées.** Une mesure terminée reste affichée dans la visionneuse (sur la photo où elle a été prise) et sur la carte quand on en commence une autre, qu'on change de mode ou qu'on arrête de mesurer.
 - **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
+- **Enregistrer les mesures.** Ajoute les mesures terminées affichées à la couche « Panoramax – mesures » (segment mesuré et attributs du résultat, dont la décomposition et l'incertitude) ; une mesure déjà enregistrée puis recalée y est mise à jour. Effacer une mesure de l'écran ne la retire pas de la couche.
 - **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
 - **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
 - **Couche.** Seuls les points triangulés s'enregistrent dans une couche (« Panoramax – points triangulés », temporaire, à sauvegarder).

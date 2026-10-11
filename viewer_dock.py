@@ -875,8 +875,15 @@ class PanoramaxDock(QDockWidget):
         """Boutons du mode choisi ; réticule (triangulation) ou clics (mesures au sol)."""
         mode = self.measure_mode()
         active = self.btn_measure.isChecked()
-        for w in (self.btn_aim, self.btn_save):
-            w.setVisible(mode == "tri")
+        self.btn_aim.setVisible(mode == "tri")
+        self.btn_save.setVisible(mode in ("tri",) + GROUND_MODES)
+        if mode == "tri":
+            self.btn_save.setText("Enregistrer le point")
+            self.btn_save.setToolTip("Ajouter le point triangulé à la couche « Panoramax – points triangulés »")
+        else:
+            self.btn_save.setText("Enregistrer les mesures")
+            self.btn_save.setToolTip("Ajouter les mesures terminées affichées à la couche « Panoramax – mesures » "
+                                     "(une mesure déjà enregistrée puis recalée y est mise à jour)")
         for w in (self.lbl_camera, self.spin_camera):
             w.setVisible(mode in GROUND_MODES)
         self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))

@@ -22,18 +22,16 @@ from qgis.core import (
     QgsMarkerSymbol,
     QgsPointXY,
     QgsProject,
-    QgsVectorLayer,
 )
 from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPen
 
-from . import calibration, triangulation
+from . import calibration, output, triangulation
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
 LAYER_NAME = "Panoramax – points triangulés"
-LAYER_KEY = "visionneuse_panoramax/kind"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
     "&field=dist_max_m:double&field=gps_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
@@ -188,11 +186,15 @@ class Triangulator:
                      "positionnées, ou d'autres séquences.".format(_num(r["gps"])))
         return text
 
-    def save(self):
-        """Enregistre le point courant. Retourne (succès, message)."""
+    def save(self, parent=None):
+        """Enregistre le point courant. Retourne (succès, message) ; message None si
+        l'utilisateur a renoncé à créer la couche."""
         if self.result is None:
             return False, self.error or "Il faut au moins deux visées qui se croisent."
-        layer = self._layer()
+        layer, error = output.ensure_layer("triangulation", LAYER_NAME, "points_triangules", "Point",
+                                           LAYER_FIELDS, _style_points, parent)
+        if layer is None:
+            return False, error
         r = self.result
         geom = QgsGeometry.fromPointXY(QgsPointXY(r["lon"], r["lat"]))
         geom.transform(QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance()))
@@ -211,27 +213,15 @@ class Triangulator:
         for name, value in values.items():
             if layer.fields().indexOf(name) >= 0:
                 feat.setAttribute(name, value)
-        ok = layer.addFeature(feat) if layer.isEditable() else layer.dataProvider().addFeatures([feat])[0]
-        if not ok:
+        if output.write_feature(layer, feat) is None:
             return False, "Impossible d'ajouter le point à la couche « {} ».".format(layer.name())
-        layer.updateExtents()
-        layer.triggerRepaint()
         self.clear()
         return True, "Point enregistré dans « {} » (incertitude ±{} m).".format(layer.name(), _num(r["uncertainty"]))
 
-    @staticmethod
-    def _layer():
-        project = QgsProject.instance()
-        for layer in project.mapLayers().values():
-            if isinstance(layer, QgsVectorLayer) and layer.isValid() and layer.customProperty(LAYER_KEY) == "triangulation":
-                return layer
-        crs = project.crs() if project.crs().isValid() else WGS84
-        layer = QgsVectorLayer("Point?crs={}&{}".format(crs.authid() or "EPSG:4326", LAYER_FIELDS), LAYER_NAME, "memory")
-        layer.setCustomProperty(LAYER_KEY, "triangulation")
-        layer.renderer().setSymbol(QgsMarkerSymbol.createSimple(
-            {"name": "circle", "color": COLOR.name(), "outline_color": "white", "outline_width": "0.4", "size": "2.8"}))
-        project.addMapLayer(layer)
-        return layer
+
+def _style_points(layer):
+    layer.renderer().setSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": COLOR.name(), "outline_color": "white", "outline_width": "0.4", "size": "2.8"}))
 
 
 # --------------------------------------------------------------------------

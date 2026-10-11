@@ -616,11 +616,13 @@ class PanoramaxPlugin:
             self._show_measure(self.measures.status())
 
     def _on_measure_save(self):
-        tri = self._ensure_triangulator()
-        ok, msg = tri.save()
-        self.iface.messageBar().pushMessage(
-            "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
-        self._show_measure(tri.status())
+        """« Enregistrer » : point triangulé, ou mesures terminées affichées."""
+        tool = self._ensure_triangulator() if self.dock.measure_mode() == "tri" else self._ensure_measures()
+        ok, msg = tool.save(self.iface.mainWindow())
+        if msg:  # None : création de la couche annulée
+            self.iface.messageBar().pushMessage(
+                "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
+        self._show_measure(tool.status())
 
     def _on_measure_clear_all(self):
         """« Tout effacer » : mesures terminées et en cours, visées de triangulation."""

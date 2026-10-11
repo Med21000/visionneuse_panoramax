@@ -182,7 +182,8 @@ class PanoramaxDock(QDockWidget):
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(capture_dir())))
         self.btn_capture.setMenu(menu)
         bar.addWidget(self.btn_capture)
-        btn_thumb = QPushButton("🖼 Capture vignette")
+        # \ufe0f : 🖼 en emoji couleur, comme 📷 et 📐 (sinon police de secours plus haute)
+        btn_thumb = QPushButton("🖼\ufe0f Capture vignette")
         btn_thumb.setToolTip("Enregistrer la visionneuse telle qu'affichée (avec les mesures) en image PNG, "
                              "copiée aussi dans le presse-papiers")
         btn_thumb.clicked.connect(self.capture_thumbnail)
@@ -205,7 +206,7 @@ class PanoramaxDock(QDockWidget):
         layout.addLayout(bar)
         # Libellés complets et réduits (mode compact) des boutons de la barre
         self._labels = {self.btn_pick: ("Choisir sur la carte", "📍"), self.btn_filter: ("Filtre", "🔎"),
-                        self.btn_capture: ("📷 Capture HD", "📷"), btn_thumb: ("🖼 Capture vignette", "🖼"),
+                        self.btn_capture: ("📷 Capture HD", "📷"), btn_thumb: ("🖼\ufe0f Capture vignette", "🖼\ufe0f"),
                         self.btn_measure: ("📐 Mesure", "📐"), btn_browser: ("Navigateur", "🌐")}
 
         self.instance_row = QWidget(root)

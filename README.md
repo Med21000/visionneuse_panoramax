@@ -1,6 +1,6 @@
 # Visionneuse Panoramax pour QGIS
 
-[![Tests](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml/badge.svg)](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml)
+[![Tests](https://github.com/medlab-code/visionneuse_panoramax/actions/workflows/tests.yml/badge.svg)](https://github.com/medlab-code/visionneuse_panoramax/actions/workflows/tests.yml)
 
 Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec des mesures à l'écran : largeurs, hauteurs, distances 3D et position d'objets par triangulation, directement dans la photo.
 
@@ -17,6 +17,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
   - enregistrement des mesures et des points triangulés dans des couches QGIS, dans un fichier GeoPackage ou en couche temporaire ;
   - calage des photos : correction de l'inclinaison de la caméra, recalage du cap et de la position sur des repères de la carte, et hauteur de caméra déduite d'une longueur connue.
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
+- Mode compact du panneau : le chevron à droite de la barre réduit les boutons à leur icône et masque les lignes Instance, options et aide de la mesure (l'aide passe dans la bulle du bouton « 📐 Mesure »). Le choix est mémorisé.
 - Filtre des photos (bouton « Filtre ») : n'afficher dans le filaire, et n'ouvrir par un clic sur la carte, que les photos prises depuis une date, en 360° ou classiques, de précision GPS donnée (≤ 2 m pour le matériel de relevé, ≤ 4 m), ou d'un producteur (liste déroulante qui propose celui de la photo affichée). Le filtre est mémorisé ; « Filtre ● » signale qu'il est actif. Aux petites échelles (grille de densité), seul le type de caméra est filtré.
 - Synchronisation carte ↔ visionneuse : curseur de vue (position, direction et ouverture) sur la carte, clic sur la carte pour ouvrir la photo la plus proche, carte QGIS recentrée sur la photo (option « Centrer la carte QGIS sur la photo »).
 - Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
@@ -88,7 +89,7 @@ Le résultat est la distance 3D, avec sa décomposition : horizontale, verticale
 
 ### Calage des photos
 
-Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction s'applique ensuite à toutes les mesures (triangulation, largeur, hauteur) et est enregistrée dans le projet QGIS (le projet passe en « modifié » : l'enregistrer pour conserver le calage). Le calage en cours est rappelé sous les boutons de mesure, et « Effacer » le supprime.
+Trois modes corrigent les défauts d'une photo avant de mesurer ; la correction s'applique ensuite à toutes les mesures (triangulation, largeur, hauteur) et est conservée dans le profil QGIS, d'une session et d'un projet à l'autre, jusqu'à ce qu'elle soit refaite ou effacée (le calage d'un projet enregistré par une version précédente est repris à son ouverture). Le calage en cours est rappelé sous les boutons de mesure, et « Effacer » le supprime.
 
 - **Calage : inclinaison (objets verticaux)**, pour la photo affichée : cliquer le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). Un objet corrige la pente vue dans sa direction ; un second objet, à environ 90° du premier, corrige toute l'inclinaison. C'est la principale source d'erreur des largeurs et des hauteurs.
 - **Calage : cap et position (repères sur la carte)** : cliquer dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment), puis ce même repère sur la carte (glisser pour déplacer la carte, molette pour zoomer, Échap pour annuler). Les repères donnent, par relèvement, le décalage de cap et de position GPS de la séquence, chacun combiné à sa valeur d'origine selon les précisions : un repère seul corrige surtout le cap (le choisir lointain : à 100 m, 2 m d'erreur GPS faussent déjà le cap de plus de 1°) ; trois repères ou plus, bien répartis autour de la photo (devant, derrière, sur les côtés), recalent aussi sa position. Un repère incohérent avec les précédents est refusé. Le GPS dérivant au fil d'une séquence, le recalage ne vaut que pour les photos situées à moins de 300 m de celles qui l'ont servi ; la position recalée et sa précision remplacent alors celles du GPS dans les mesures.
@@ -100,7 +101,7 @@ Prérequis : **QGIS 4.0 ou plus récent**. L'extension ne fonctionne qu'avec QGI
 
 ### Depuis la release (recommandé)
 
-1. Télécharger `visionneuse_panoramax-1.0.0.zip` sur la page de la release : [Visionneuse Panoramax 1.0.0](https://github.com/Med21000/visionneuse_panoramax/releases/tag/v1.0.0) (toutes les versions : [releases](https://github.com/Med21000/visionneuse_panoramax/releases)).
+1. Télécharger le fichier `visionneuse_panoramax-<version>.zip` de la [dernière release](https://github.com/medlab-code/visionneuse_panoramax/releases/latest) (toutes les versions : [releases](https://github.com/medlab-code/visionneuse_panoramax/releases)).
 2. Dans QGIS : *Extensions › Installer/Gérer les extensions › Installer depuis un ZIP*, choisir le fichier téléchargé, puis « Installer l'extension ».
 
 ### Depuis les sources
@@ -114,7 +115,7 @@ Activer ensuite le plugin dans *Extensions › Installer/Gérer les extensions*.
 
 ## Tests
 
-Les calculs (triangulation, points 3D, mesures au sol, calage, profil du terrain, mesures et leur recalage sur la carte) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire (QGIS, l'affichage et les services d'altitude y sont simulés) ; depuis le dossier du plugin :
+Les calculs (triangulation, points 3D, mesures au sol, calage, profil du terrain, mesures et leur recalage sur la carte, filtre des photos) sont vérifiés par des tests automatiques sur des scènes synthétiques dont la réponse est connue. Ils ne demandent ni QGIS ni bibliothèque supplémentaire (QGIS, l'affichage et les services d'altitude y sont simulés) ; depuis le dossier du plugin :
 
 ```
 python3 -m unittest discover -s tests
@@ -122,7 +123,7 @@ python3 -m unittest discover -s tests
 
 Ils sont lancés automatiquement sur GitHub à chaque push et pull request (Python 3.12 à 3.14), avec une analyse statique du code (pyflakes).
 
-L'enregistrement dans les couches et le GeoPackage est vérifié par une seconde série, avec QGIS, à lancer sur son poste : `python3 -m unittest discover -s tests/qgis`.
+L'enregistrement dans les couches et le GeoPackage, ainsi que la conservation du calage, sont vérifiés par une seconde série, avec QGIS, à lancer sur son poste : `python3 -m unittest discover -s tests/qgis`.
 
 Principe, contenu et ajout de tests : voir [tests/README.md](tests/README.md).
 

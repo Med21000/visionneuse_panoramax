@@ -8,9 +8,9 @@ about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement). Mesures direc
 version=1.1.0
 author=Cédric COCHART
 email=cedric.cochart@gmail.com
-homepage=https://github.com/Med21000/visionneuse_panoramax
-repository=https://github.com/Med21000/visionneuse_panoramax
-tracker=https://github.com/Med21000/visionneuse_panoramax/issues
+homepage=https://github.com/medlab-code/visionneuse_panoramax
+repository=https://github.com/medlab-code/visionneuse_panoramax
+tracker=https://github.com/medlab-code/visionneuse_panoramax/issues
 tags=panoramax,photos,street view,immersive,voirie,mesure,triangulation,stac,tuiles vectorielles
 category=Web
 icon=icon.png
@@ -20,6 +20,7 @@ changelog=1.1.0
     - Enregistrement des mesures dans la couche « Panoramax – mesures », mises à jour après recalage ; mesures et points triangulés dans un GeoPackage au choix ou en couche temporaire
     - Filtre des photos du filaire et du clic sur la carte : date, 360° ou classiques, précision GPS, producteur
     - Mode compact du panneau
+    - Calage des photos conservé dans le profil QGIS, d'une session et d'un projet à l'autre, jusqu'à ce qu'il soit refait ou effacé
     - Correction : l'image ne saute plus au second clic d'une mesure
     - Correction : la ligne de calage ne fait plus bouger l'image d'une photo à l'autre
     - Correction : bouton « Capture vignette » à la hauteur des autres

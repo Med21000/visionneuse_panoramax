@@ -209,6 +209,25 @@ class Storage(unittest.TestCase):
         self.assertEqual(other.untilted("p1", 50.0, 1.0), cal.untilted("p1", 50.0, 1.0))
         self.assertAlmostEqual(other.pose("s")["offset"], cal.pose("s")["offset"])
 
+    def test_merge_keeps_current(self):
+        old = calibration.Calibration()
+        old.add_vertical("p1", *vertical_object(tilted_up(4.0, 0.0), 90, 8))
+        old.add_vertical("p2", *vertical_object(tilted_up(1.0, 0.0), 90, 8))
+        old.heights["s1"], old.heights["s2"] = [(1.5, 0.05)], [(2.5, 0.05)]
+        cal = calibration.Calibration()
+        cal.add_vertical("p1", *vertical_object(tilted_up(2.0, 0.0), 90, 8))  # refait depuis
+        cal.heights["s1"] = [(2.1, 0.05)]
+        notified = []
+        cal.changed = lambda: notified.append(True)
+        self.assertEqual(cal.merge(old.to_dict()), 2)  # p2 et s2
+        self.assertAlmostEqual(cal.tilt("p1")["tilt"], 2.0, places=4)  # le calage refait l'emporte
+        self.assertAlmostEqual(cal.tilt("p2")["tilt"], 1.0, places=4)
+        self.assertEqual(cal.camera("s1")["height"], 2.1)
+        self.assertEqual(cal.camera("s2")["height"], 2.5)
+        self.assertEqual(notified, [])
+        self.assertEqual(cal.merge(None), 0)
+        self.assertEqual(cal.merge(old.to_dict()), 0)  # déjà repris
+
     def test_bad_data(self):
         cal = calibration.Calibration()
         for data in (None, "x", {"format": 99}, {"format": 1, "verticals": {"p": [[1]]}},

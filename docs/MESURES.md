@@ -368,13 +368,13 @@ Sur scène simulée (pieds de mur masqués, cliqués 15 cm trop haut, hauteur de
 - **Bord de toiture.** Sur l'orthophoto, on voit souvent le **débord de toit**, pas le pied du mur ; le cadastre ou la BD TOPO donnent mieux l'emprise au sol. Un débord de 50 cm à 6 m fausse une hauteur d'environ 8 %.
 - **Décalage de l'orthophoto.** Une orthophoto non vraie (« ortho » classique) décale les bâtiments hauts, leur sommet étant vu de biais.
 - **Plan vertical uniquement.** Le plan calé est vertical : il ne convient pas à un objet incliné (toiture, talus).
-- **Non enregistré.** Les mesures et leurs recalages ne sont pas enregistrés dans le projet QGIS, contrairement au calage des photos.
+- **Pas de reprise après fermeture.** « Enregistrer les mesures » écrit le résultat dans une couche (segment et valeurs, mis à jour après un recalage), mais pas les clics ni les points recalés : une mesure ne peut plus être recalée après la fermeture de QGIS. Le calage des photos, lui, est conservé dans le profil QGIS.
 
 ---
 
 ## 6. Le calage des photos
 
-Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **enregistrés dans le projet QGIS** (seules les observations sont stockées, les corrections en sont recalculées à l'ouverture ; le projet passe en « modifié »). « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
+Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **conservés dans le profil QGIS**, d'une session et d'un projet à l'autre, jusqu'à ce qu'ils soient refaits ou effacés (seules les observations sont stockées, les corrections en sont recalculées au démarrage). Le calage d'un projet enregistré par une version précédente, qui le stockait dans le projet, est repris à l'ouverture du projet pour les photos et séquences qui n'en ont pas encore, puis retiré du projet. « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
 
 Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont complémentaires : le premier corrige **une mesure** après coup ; le second corrige **la photo ou la séquence** pour toutes les mesures à venir.
 
@@ -441,7 +441,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 - **Enregistrer les mesures.** Ajoute les mesures terminées affichées à la couche « Panoramax – mesures » (segment mesuré et attributs du résultat, dont la décomposition et l'incertitude) ; une mesure déjà enregistrée puis recalée y est mise à jour. Effacer une mesure de l'écran ne la retire pas de la couche.
 - **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
 - **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
-- **Couche.** Seuls les points triangulés s'enregistrent dans une couche (« Panoramax – points triangulés », temporaire, à sauvegarder).
+- **Couches.** Mesures et points triangulés s'enregistrent dans « Panoramax – mesures » et « Panoramax – points triangulés » : au premier enregistrement, dans un fichier GeoPackage choisi (tables `mesures` et `points_triangules`, conservé à la fermeture de QGIS) ou en couche temporaire (à sauvegarder).
 
 ---
 
@@ -476,7 +476,6 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 - **Accrochage** : accrocher les points et les extrémités de façade glissés aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
 - **Plan calé depuis une couche** : prendre directement le plan dans l'arête de bâtiment la plus proche, sans glisser.
-- **Enregistrer les mesures** et leurs recalages dans une couche ou dans le projet.
 - **Plan incliné** défini par trois points connus en 3D (triangulés), pour les toitures, talus et rampes.
 
 ### Mesures sans hypothèse de sol ni de hauteur de caméra

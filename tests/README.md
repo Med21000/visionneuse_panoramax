@@ -3,8 +3,8 @@
 Ces tests vérifient les calculs du plugin : triangulation, points 3D, mesures au sol,
 calage des photos, profil du terrain, mesures et leur recalage sur la carte, filtre des
 photos. Une seconde série, avec le vrai QGIS, vérifie l'enregistrement des mesures dans
-les couches et le GeoPackage. Ils ne testent pas l'interface (panneau, visionneuse web,
-dessin sur la carte).
+les couches et le GeoPackage, ainsi que la conservation du calage. Ils ne testent pas
+l'interface (panneau, visionneuse web, dessin sur la carte).
 
 Ils ne sont pas livrés avec le plugin : le dossier `tests/` est exclu du zip de release
 (`.gitattributes`).
@@ -93,13 +93,14 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_triangulation.py` | 9 | Conversions de coordonnées, intersection de deux ou trois visées, visées bruitées, incertitude qui augmente avec l'erreur GPS, erreur de visée selon le matériel. Refus : une seule visée, visées parallèles, croisement derrière les photos, point à plus de 500 m. |
 | `test_ground.py` | 9 | Direction d'un pixel de la vue, intersection du rayon avec un sol plat, en pente ou avec un talus, hauteur d'un poteau ou d'un mur cliqué de côté. Refus : visée qui ne touche pas le sol, pied et sommet sur deux photos, sommet sous le pied. |
 | `test_geometry.py` | 11 | Points sur une façade, sur le plan vertical face à la caméra, sur un plan horizontal ; triangulation 3D ; décomposition d'une distance (horizontale, verticale, le long de la route, en travers) ; résolution d'un système 3 × 3. Refus : visée parallèle au plan, plan derrière la caméra ou trop loin. |
-| `test_calibration.py` | 17 | Inclinaison retrouvée à partir d'un ou deux objets verticaux, correction des directions ; hauteur de caméra à partir d'une longueur au sol ou d'une hauteur connue ; recalage du cap et de la position par des repères, portée de 300 m ; refus des repères trop proches, invraisemblables ou contredits par les précédents ; enregistrement et relecture du calage, données abîmées. |
+| `test_calibration.py` | 18 | Inclinaison retrouvée à partir d'un ou deux objets verticaux, correction des directions ; hauteur de caméra à partir d'une longueur au sol ou d'une hauteur connue ; recalage du cap et de la position par des repères, portée de 300 m ; refus des repères trop proches, invraisemblables ou contredits par les précédents ; enregistrement et relecture du calage, données abîmées, ajout d'un calage enregistré ailleurs sans écraser le calage en cours. |
 | `test_terrain.py` | 6 | Droite de pente robuste (insensible à un fossé ou à une rivière sous un pont), altitudes manquantes ; enchaînement des sources : IGN, puis OpenTopoData, puis Open-Meteo, puis sol plat, avec la raison de chaque source écartée. Les services sont simulés par un faux `api.fetch_json` (`FakeServices`) qui renvoie les altitudes d'un terrain de pente connue. |
 | `test_measure_tool.py` | 17 | Préréglages (largeur perpendiculaire à la chaussée, sur une route droite ou en biais, largeur parallèle, hauteur), hauteur de caméra calée, mesures gardées à l'écran ; mesure libre sur le sol, une façade, le plan vertical, un plan horizontal, par triangulation 3D ; recalage d'un point sur la carte et nouvelle visée. Le dessin sur la carte est remplacé par `FakeItem`. |
 | `test_calibration_tool.py` | 11 | Outil de calage, du clic au calage enregistré : inclinaison (correction partielle puis complète, sommet sur une autre photo, clics inversés), hauteur de caméra sur une longueur au sol ou une hauteur connue, repère cliqué dans la photo puis sur la carte (position GPS d'origine, matériel de relevé), effacement du calage, repères dans la visionneuse. |
 | `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
 | `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
+| `qgis/test_calibration_storage.py` | 3 | Avec QGIS : calage conservé dans le profil d'une session et d'un projet à l'autre, effacement, réglage abîmé ; reprise du calage d'un vrai projet `.qgz` enregistré par une version précédente, sans écraser le calage plus récent, puis retrait du projet. |
 
 ## Ajouter un test
 

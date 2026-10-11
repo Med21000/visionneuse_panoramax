@@ -85,7 +85,7 @@ class MeasurePanel(QWidget):
     facadeRequested = pyqtSignal()
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
-    terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
+    terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -151,14 +151,13 @@ class MeasurePanel(QWidget):
         tlay = QHBoxLayout(self.terrain_row)
         tlay.setContentsMargins(0, 0, 0, 0)
         tlay.addWidget(QLabel("Terrain :"))
-        self.chk_ign = QCheckBox("Service d'altimétrie IGN")
-        self.chk_ign.setToolTip("Altitudes du RGE ALTI (IGN, 1 m, France), interrogées à chaque clic. Désactivé, "
-                                "sans réponse en 5 s ou hors couverture : services en ligne de secours "
-                                "(OpenTopoData EU-DEM 25 m, puis Open-Meteo Copernicus 90 m, pente générale "
-                                "seulement), puis sol plat.")
-        self.chk_ign.setChecked(QgsSettings().value("visionneuse_panoramax/terrain_ign", True, type=bool))
-        self.chk_ign.toggled.connect(self._on_terrain_ign)
-        tlay.addWidget(self.chk_ign)
+        self.chk_bridge = QCheckBox("Mesure sur un pont")
+        self.chk_bridge.setToolTip(
+            "Photo prise sur un pont : sol plat et horizontal sous la caméra. Les altitudes du terrain (RGE ALTI de "
+            "l'IGN, terrain nu) donnent sinon le fond du cours d'eau sous le tablier. Décoché : altitudes IGN, "
+            "puis services de secours (OpenTopoData, Open-Meteo), puis sol plat.")
+        self.chk_bridge.toggled.connect(self.terrainChanged)
+        tlay.addWidget(self.chk_bridge)
         tlay.addStretch(1)
         mbox.addWidget(self.terrain_row)
         self.free_row = QWidget(self)
@@ -209,8 +208,9 @@ class MeasurePanel(QWidget):
     def camera_height(self):
         return self.spin_camera.value()
 
-    def use_ign(self):
-        return self.chk_ign.isChecked()
+    def on_bridge(self):
+        """Option « Mesure sur un pont » : sol plat (voir terrain.TerrainProvider.bridge)."""
+        return self.chk_bridge.isChecked()
 
     def surface(self):
         """Surface de la mesure libre 3D (voir measure_tool.FREE_SURFACES)."""
@@ -238,10 +238,6 @@ class MeasurePanel(QWidget):
         settings.setValue("visionneuse_panoramax/reference_kind", kind)
         settings.setValue("visionneuse_panoramax/reference_length", float(length))
         self.referenceChanged.emit()
-
-    def _on_terrain_ign(self, checked):
-        QgsSettings().setValue("visionneuse_panoramax/terrain_ign", bool(checked))
-        self.terrainChanged.emit()
 
     # Affichage ------------------------------------------------------------------
     def update_widgets(self):

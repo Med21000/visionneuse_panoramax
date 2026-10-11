@@ -53,15 +53,17 @@ Pendant la mesure, le curseur devient un réticule fin et un clic ne change plus
 
 Altitude du terrain : sources essayées dans l'ordre jusqu'à la première qui répond (délai de 5 secondes chacune) :
 
-1. le service d'altimétrie de l'IGN (RGE ALTI 1 m, France) : case « Service d'altimétrie IGN », cochée par défaut ;
-2. s'il est décoché, ne répond pas ou ne couvre pas la zone : des services en ligne de secours, OpenTopoData EU-DEM 25 m (Europe), puis Open-Meteo Copernicus 90 m (monde). Leurs mailles sont grossières : seule la pente générale de la rue est retenue (droite ajustée sur 180 m autour de la photo). Ce sont des modèles de surface, qui incluent les bâtiments : une pente supérieure à 12 % est jugée invraisemblable et la source est écartée ;
+1. le service d'altimétrie de l'IGN (RGE ALTI 1 m, France) ;
+2. s'il ne répond pas ou ne couvre pas la zone : des services en ligne de secours, OpenTopoData EU-DEM 25 m (Europe), puis Open-Meteo Copernicus 90 m (monde). Leurs mailles sont grossières : seule la pente générale de la rue est retenue (droite ajustée sur 180 m autour de la photo). Ce sont des modèles de surface, qui incluent les bâtiments : une pente supérieure à 12 % est jugée invraisemblable et la source est écartée ;
 3. à défaut, un sol plat et horizontal.
 
 Google Elevation n'est pas proposé : il exige une clé API et un compte de facturation, et ses conditions interdisent d'utiliser les données hors d'une carte Google.
 
 La source utilisée, et la raison d'un éventuel repli, sont indiquées avec le résultat.
 
-Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste sur 120 m) plutôt que le profil brut du terrain : un modèle de terrain nu ignore les ponts (il donne le fond du cours d'eau sous le tablier) et contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) se corrige par le calage (voir ci-dessous), et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
+**Mesure sur un pont** : le modèle de terrain nu donne, sous un pont, le fond du cours d'eau. Pour une photo prise sur un pont, cocher « Mesure sur un pont » (ligne « Terrain ») : le sol est alors pris plat et horizontal sous la caméra, sans interroger les services. L'option n'est pas mémorisée d'une session à l'autre.
+
+Le plugin retient la pente de la route autour de la photo (droite ajustée de façon robuste de 10 m derrière la photo à 25 m devant) plutôt que le profil brut du terrain : un modèle de terrain nu contient fossés, talus et bruit, qui fausseraient fortement les mesures éloignées. La fenêtre reste courte pour que la droite suive le sol de la rue près des points mesurés, et non le relief lointain. Les rues en pente sont ainsi prises en compte. L'inclinaison propre de la caméra (véhicule penché) se corrige par le calage (voir ci-dessous), et le MNT décrit le sol nu (ni voitures, ni murets). La précision baisse vite avec la distance : à réserver aux objets situés à moins de 15–20 m. L'incertitude affichée correspond à ±0,5° d'inclinaison.
 
 ### Triangulation d'un objet
 

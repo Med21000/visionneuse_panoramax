@@ -133,7 +133,7 @@ class PanoramaxDock(QDockWidget):
     facadeRequested = pyqtSignal()
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
-    terrainChanged = pyqtSignal()  # service IGN activé ou désactivé (voir use_ign)
+    terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
     filterChanged = pyqtSignal(object)  # filtre des photos modifié (filters.PhotoFilter)
 
     def __init__(self, parent=None):
@@ -346,8 +346,8 @@ class PanoramaxDock(QDockWidget):
     def camera_height(self):
         return self.measure_box.camera_height()
 
-    def use_ign(self):
-        return self.measure_box.use_ign()
+    def on_bridge(self):
+        return self.measure_box.on_bridge()
 
     def surface(self):
         """Surface de la mesure libre 3D (voir measure_tool.FREE_SURFACES)."""

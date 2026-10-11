@@ -368,13 +368,13 @@ Sur scène simulée (pieds de mur masqués, cliqués 15 cm trop haut, hauteur de
 - **Bord de toiture.** Sur l'orthophoto, on voit souvent le **débord de toit**, pas le pied du mur ; le cadastre ou la BD TOPO donnent mieux l'emprise au sol. Un débord de 50 cm à 6 m fausse une hauteur d'environ 8 %.
 - **Décalage de l'orthophoto.** Une orthophoto non vraie (« ortho » classique) décale les bâtiments hauts, leur sommet étant vu de biais.
 - **Plan vertical uniquement.** Le plan calé est vertical : il ne convient pas à un objet incliné (toiture, talus).
-- **Non enregistré.** Les mesures et leurs recalages ne sont pas enregistrés dans le projet QGIS, contrairement au calage des photos.
+- **Non enregistré.** Les mesures et leurs recalages ne sont pas enregistrés dans le projet QGIS ; le calage des photos est conservé dans le profil QGIS.
 
 ---
 
 ## 6. Le calage des photos
 
-Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **enregistrés dans le projet QGIS** (seules les observations sont stockées, les corrections en sont recalculées à l'ouverture ; le projet passe en « modifié »). « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
+Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **conservés dans le profil QGIS**, d'une session et d'un projet à l'autre, jusqu'à ce qu'ils soient refaits ou effacés (seules les observations sont stockées, les corrections en sont recalculées au démarrage). Le calage d'un projet enregistré par la version 1.1.0, qui le stockait dans le projet, est repris à l'ouverture du projet pour les photos et séquences qui n'en ont pas encore, puis retiré du projet. « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
 
 Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont complémentaires : le premier corrige **une mesure** après coup ; le second corrige **la photo ou la séquence** pour toutes les mesures à venir.
 

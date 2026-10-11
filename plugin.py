@@ -33,7 +33,8 @@ from .viewer_dock import PanoramaxDock
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
 PROJECT_SCOPE = "visionneuse_panoramax"  # section du plugin dans le projet QGIS
-CALIBRATION_KEY = "calibration"
+CALIBRATION_KEY = "calibration"  # calage enregistré dans les projets par la version 1.1.0
+CALIBRATION_SETTING = "visionneuse_panoramax/calibration"  # calage conservé dans le profil QGIS
 
 
 class LandmarkTool(QgsMapToolPan):
@@ -137,7 +138,7 @@ class PanoramaxPlugin:
         self.calibrator = None
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
-        self.calibration = Calibration()  # enregistré dans le projet QGIS
+        self.calibration = Calibration()  # conservé dans le profil QGIS
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
@@ -169,19 +170,16 @@ class PanoramaxPlugin:
         self.edit_tool = MeasureMapTool(self.canvas, self._find_handle, self._move_handle)
         self.edit_tool.clicked.connect(lambda point: self._on_canvas_clicked(point, Qt.MouseButton.LeftButton))
 
-        # Calage enregistré dans le projet : relu à l'ouverture, vidé pour un nouveau projet
-        project = QgsProject.instance()
-        project.readProject.connect(self._load_calibration)
-        project.cleared.connect(self._load_calibration)
+        # Calage conservé dans le profil d'une session et d'un projet à l'autre ; celui d'un
+        # projet enregistré par la version 1.1.0 y est ajouté à l'ouverture du projet
+        QgsProject.instance().readProject.connect(self._import_project_calibration)
         self._load_calibration()
 
     def unload(self):
-        project = QgsProject.instance()
-        for signal in (project.readProject, project.cleared):
-            try:
-                signal.disconnect(self._load_calibration)
-            except (TypeError, RuntimeError):
-                pass
+        try:
+            QgsProject.instance().readProject.disconnect(self._import_project_calibration)
+        except (TypeError, RuntimeError):
+            pass
         self.calibration.changed = None
         for action in self.actions:
             self.iface.removePluginWebMenu(MENU, action)
@@ -246,22 +244,45 @@ class PanoramaxPlugin:
         return self.dock
 
     # ------------------------------------------------------------------
-    # Calage enregistré dans le projet QGIS
+    # Calage conservé dans le profil QGIS
     # ------------------------------------------------------------------
     def _save_calibration(self):
-        """Écrit le calage dans le projet (qui passe en « modifié », à enregistrer)."""
-        QgsProject.instance().writeEntry(PROJECT_SCOPE, CALIBRATION_KEY,
-                                         json.dumps(self.calibration.to_dict(), separators=(",", ":")))
+        """Écrit le calage dans le profil : il est retrouvé aux sessions suivantes, quel que
+        soit le projet, jusqu'à ce qu'il soit refait ou effacé."""
+        QgsSettings().setValue(CALIBRATION_SETTING, json.dumps(self.calibration.to_dict(), separators=(",", ":")))
 
-    def _load_calibration(self, *args):
-        text, _ = QgsProject.instance().readEntry(PROJECT_SCOPE, CALIBRATION_KEY, "")
+    def _load_calibration(self):
+        text = QgsSettings().value(CALIBRATION_SETTING, "") or ""
         try:
             data = json.loads(text) if text else None
         except ValueError:
             data = None
-            self.iface.messageBar().pushMessage("Panoramax", "Calage du projet illisible : ignoré.",
+            self.iface.messageBar().pushMessage("Panoramax", "Calage enregistré illisible : ignoré.",
                                                 level=Qgis.MessageLevel.Warning, duration=6)
         self.calibration.load(data)
+        self._calibration_updated()
+
+    def _import_project_calibration(self, *args):
+        """Projet enregistré par la version 1.1.0 : son calage complète celui en mémoire (pour
+        les photos et séquences qui n'en ont pas encore), puis il est retiré du projet."""
+        project = QgsProject.instance()
+        text, found = project.readEntry(PROJECT_SCOPE, CALIBRATION_KEY, "")
+        if not found or not text:
+            return
+        try:
+            added = self.calibration.merge(json.loads(text))
+        except ValueError:
+            added = 0
+        project.removeEntry(PROJECT_SCOPE, CALIBRATION_KEY)
+        if added:
+            self._save_calibration()
+            self._calibration_updated()
+            self.iface.messageBar().pushMessage(
+                "Panoramax", "Calage du projet repris pour {} photo{} ou séquence{}.".format(
+                    added, *(("s", "s") if added > 1 else ("", ""))),
+                level=Qgis.MessageLevel.Info, duration=6)
+
+    def _calibration_updated(self):
         if self.calibrator is not None:
             self.calibrator.reset()  # clics en attente et visées vers les repères
         if self.dock is not None:

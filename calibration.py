@@ -21,7 +21,8 @@
 
 Directions : (cap absolu en degrés, 0 = nord, sens horaire ; élévation en
 degrés). Les corrections s'appliquent dans cet ordre : inclinaison, puis cap.
-Calage enregistré dans le projet QGIS (voir plugin.py). Module sans dépendance à QGIS.
+Calage conservé dans le profil QGIS de l'utilisateur, d'une session et d'un projet à
+l'autre, jusqu'à ce qu'il soit refait ou effacé (voir plugin.py). Module sans dépendance à QGIS.
 """
 
 import math
@@ -205,7 +206,8 @@ class Calibration:
     """Calages : inclinaison par photo ; cap, position et hauteur de caméra par séquence.
 
     Seules les observations sont conservées (clics et repères) : les corrections en sont
-    recalculées. to_dict / load permettent de les enregistrer (dans le projet QGIS) ;
+    recalculées. to_dict / load permettent de les enregistrer (dans le profil QGIS), merge
+    d'y ajouter un calage enregistré ailleurs (projet d'une version précédente) ;
     `changed`, s'il est défini, est appelé après chaque modification.
     """
 
@@ -256,6 +258,23 @@ class Calibration:
                     self.heights[seq] = obs
         except (TypeError, ValueError, KeyError, IndexError, AttributeError):
             pass  # format abîmé : on garde ce qui a pu être lu
+
+    def merge(self, data):
+        """Ajoute le calage enregistré `data` (dict de to_dict) pour les photos et séquences
+        qui n'en ont pas encore : le calage en cours, plus récent, l'emporte. Ne déclenche pas
+        `changed`. Retourne le nombre de photos et séquences ajoutées."""
+        other = Calibration()
+        other.load(data)
+        added = 0
+        for mine, theirs in ((self.verticals, other.verticals), (self.landmarks, other.landmarks),
+                             (self.heights, other.heights)):
+            for key, obs in theirs.items():
+                if key not in mine:
+                    mine[key] = obs
+                    added += 1
+        for pic, tilt in other._tilts.items():
+            self._tilts.setdefault(pic, tilt)
+        return added
 
     # Inclinaison ---------------------------------------------------------
     def add_vertical(self, pic, bottom, top):

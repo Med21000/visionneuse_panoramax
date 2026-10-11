@@ -198,7 +198,7 @@ class MeasurePanel(QWidget):
         self.measure_status = QLabel("")
         self.measure_status.setWordWrap(True)
         self.measure_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        self.reset_status_height()
+        self.reset_heights()
         mbox.addWidget(self.measure_status)
         self.update_widgets()
 
@@ -268,24 +268,36 @@ class MeasurePanel(QWidget):
             w.setVisible(surface == "horizontal")
 
     def set_calibration_text(self, text):
-        self.lbl_calibration.setText(text)
-        self.lbl_calibration.setVisible(bool(text))
+        """Rappel du calage de la photo affichée. Une fois apparu pendant une séance de mesure,
+        il reste (vide au besoin) et ne rapetisse pas : sinon la visionneuse change de taille
+        d'une photo à l'autre (voir set_status)."""
+        label = self.lbl_calibration
+        label.setText(text)
+        if text:
+            label.setVisible(True)
+            self._keep_height(label)
 
     def set_status(self, text):
         """Ligne d'aide : consigne de clic ou résultat de la mesure.
 
-        Sa hauteur ne diminue pas au fil des mesures (voir reset_status_height) : sinon la
+        Sa hauteur ne diminue pas au fil des mesures (voir reset_heights) : sinon la
         visionneuse, en dessous, change de taille et l'image saute sous le curseur au
         moment où le résultat, plus long que la consigne, s'affiche."""
-        label = self.measure_status
-        label.setText(text)
+        self.measure_status.setText(text)
+        self._keep_height(self.measure_status)
+
+    @staticmethod
+    def _keep_height(label):
+        """La hauteur minimale du texte suit sa plus grande hauteur depuis reset_heights."""
         if label.width() > 0:
             label.setMinimumHeight(max(label.minimumHeight(), label.heightForWidth(label.width())))
 
-    def reset_status_height(self):
-        """Hauteur de la ligne d'aide ramenée à trois lignes, celle d'un résultat à la largeur
-        habituelle du panneau (début d'une séance de mesure)."""
+    def reset_heights(self):
+        """Début d'une séance de mesure : ligne d'aide ramenée à trois lignes, celle d'un résultat
+        à la largeur habituelle du panneau ; rappel du calage affiché seulement s'il y en a un."""
         self.measure_status.setMinimumHeight(STATUS_LINES * self.measure_status.fontMetrics().lineSpacing())
+        self.lbl_calibration.setMinimumHeight(0)
+        self.lbl_calibration.setVisible(bool(self.lbl_calibration.text()))
 
     def status(self):
         return self.measure_status.text()

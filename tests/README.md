@@ -1,8 +1,10 @@
 # Tests automatiques
 
 Ces tests vérifient les calculs du plugin : triangulation, points 3D, mesures au sol,
-calage des photos, profil du terrain, mesures et leur recalage sur la carte. Ils ne
-testent pas l'interface (panneau, visionneuse web, dessin sur la carte).
+calage des photos, profil du terrain, mesures et leur recalage sur la carte, filtre des
+photos. Une seconde série, avec le vrai QGIS, vérifie l'enregistrement des mesures dans
+les couches et le GeoPackage. Ils ne testent pas l'interface (panneau, visionneuse web,
+dessin sur la carte).
 
 Ils ne sont pas livrés avec le plugin : le dossier `tests/` est exclu du zip de release
 (`.gitattributes`).
@@ -30,6 +32,21 @@ les fichiers importent `support.py` comme un module voisin.
 Sur GitHub, le workflow `.github/workflows/tests.yml` les lance à chaque push sur `main`
 ou `dev` et à chaque pull request, sous Python 3.12, 3.13 et 3.14. Il vérifie aussi que
 tout le code se compile et passe pyflakes (noms inconnus, imports inutilisés).
+
+### Tests avec QGIS
+
+Les tests de `tests/qgis/` demandent une installation de QGIS 4 dont Python importe
+`qgis` (PyQGIS). Ils se lancent à part, sur la machine du développeur :
+
+```
+python3 -m unittest discover -s tests/qgis
+```
+
+Ils démarrent QGIS sans fenêtre (`QT_QPA_PLATFORM=offscreen`) et redirigent ses réglages
+vers un dossier temporaire : le profil QGIS de l'utilisateur n'est ni lu ni modifié. Ils
+ne tournent pas sur GitHub, où QGIS n'est pas installé, et la série principale ne les
+lance pas (le dossier n'est pas un paquet Python). Ils ne peuvent pas tourner dans le
+même processus que la série principale, qui remplace `qgis` par un faux paquet.
 
 ## Principe : des scènes à réponse connue
 
@@ -79,12 +96,17 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_calibration.py` | 17 | Inclinaison retrouvée à partir d'un ou deux objets verticaux, correction des directions ; hauteur de caméra à partir d'une longueur au sol ou d'une hauteur connue ; recalage du cap et de la position par des repères, portée de 300 m ; refus des repères trop proches, invraisemblables ou contredits par les précédents ; enregistrement et relecture du calage, données abîmées. |
 | `test_terrain.py` | 6 | Droite de pente robuste (insensible à un fossé ou à une rivière sous un pont), altitudes manquantes ; enchaînement des sources : IGN, puis OpenTopoData, puis Open-Meteo, puis sol plat, avec la raison de chaque source écartée. Les services sont simulés par un faux `api.fetch_json` (`FakeServices`) qui renvoie les altitudes d'un terrain de pente connue. |
 | `test_measure_tool.py` | 17 | Préréglages (largeur perpendiculaire à la chaussée, sur une route droite ou en biais, largeur parallèle, hauteur), hauteur de caméra calée, mesures gardées à l'écran ; mesure libre sur le sol, une façade, le plan vertical, un plan horizontal, par triangulation 3D ; recalage d'un point sur la carte et nouvelle visée. Le dessin sur la carte est remplacé par `FakeItem`. |
+| `test_calibration_tool.py` | 11 | Outil de calage, du clic au calage enregistré : inclinaison (correction partielle puis complète, sommet sur une autre photo, clics inversés), hauteur de caméra sur une longueur au sol ou une hauteur connue, repère cliqué dans la photo puis sur la carte (position GPS d'origine, matériel de relevé), effacement du calage, repères dans la visionneuse. |
+| `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
+| `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
 
 ## Ajouter un test
 
 1. Choisir le fichier du module concerné, ou créer `test_<module>.py` en commençant
    par `from support import …` (et `install_qgis_stub()` si le module importe QGIS).
+   Ce qui a besoin du vrai QGIS (couches, fichiers, géométries) va dans `tests/qgis/`,
+   en commençant par `from qgis_support import module`.
 2. Construire la scène à partir de la vérité : placer les objets, puis calculer les
    clics avec les outils du fichier (`click` dans `test_measure_tool.py`, `sighting`
    dans `test_triangulation.py`, `vertical_object` dans `test_calibration.py`…).

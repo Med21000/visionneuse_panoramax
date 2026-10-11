@@ -122,6 +122,8 @@ python3 -m unittest discover -s tests
 
 Ils sont lancés automatiquement sur GitHub à chaque push et pull request (Python 3.12 à 3.14), avec une analyse statique du code (pyflakes).
 
+L'enregistrement dans les couches et le GeoPackage est vérifié par une seconde série, avec QGIS, à lancer sur son poste : `python3 -m unittest discover -s tests/qgis`.
+
 Principe, contenu et ajout de tests : voir [tests/README.md](tests/README.md).
 
 ## Licence

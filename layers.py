@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Couche filaire Panoramax (tuiles vectorielles)."""
+"""Couche filaire Panoramax (tuiles vectorielles).
+
+Créée semi-transparente (DEFAULT_OPACITY) pour laisser voir le fond de carte ; l'opacité
+que l'utilisateur lui donne ensuite est mémorisée dans son profil et reprise pour les
+couches filaires créées plus tard (voir watch_opacity). Une couche enregistrée dans un
+projet garde l'opacité du projet."""
 
 from qgis.core import (
     Qgis,
@@ -9,6 +14,7 @@ from qgis.core import (
     QgsLineSymbol,
     QgsMarkerSymbol,
     QgsProject,
+    QgsSettings,
     QgsVectorTileBasicRenderer,
     QgsVectorTileBasicRendererStyle,
     QgsVectorTileLayer,
@@ -18,13 +24,38 @@ from . import api
 
 TILE_LAYER_NAME = "Panoramax – filaire"
 ORANGE = "#FF6F00"
+OPACITY_SETTING = "visionneuse_panoramax/tiles_opacity"  # dernière opacité donnée au filaire
+DEFAULT_OPACITY = 0.6
+WATCHED = "panoramaxOpacityWatched"  # propriété Qt (non enregistrée) des couches dont l'opacité est suivie
+
+
+def is_tile_layer(layer):
+    return isinstance(layer, QgsVectorTileLayer) and bool(layer.customProperty("panoramax/tiles"))
 
 
 def find_tile_layer():
     for layer in QgsProject.instance().mapLayers().values():
-        if isinstance(layer, QgsVectorTileLayer) and layer.customProperty("panoramax/tiles"):
+        if is_tile_layer(layer):
             return layer
     return None
+
+
+def saved_opacity():
+    """Opacité des nouvelles couches filaires : la dernière choisie, sinon DEFAULT_OPACITY."""
+    try:
+        value = float(QgsSettings().value(OPACITY_SETTING, DEFAULT_OPACITY))
+    except (TypeError, ValueError):
+        return DEFAULT_OPACITY
+    return min(1.0, max(0.0, value))
+
+
+def watch_opacity(layers):
+    """Mémorise l'opacité que l'utilisateur donne aux couches filaires parmi `layers` (couches
+    créées par le plugin, ou chargées avec un projet : à relier à QgsProject.layersAdded)."""
+    for layer in layers:
+        if is_tile_layer(layer) and not layer.property(WATCHED):
+            layer.setProperty(WATCHED, True)
+            layer.opacityChanged.connect(lambda value: QgsSettings().setValue(OPACITY_SETTING, float(value)))
 
 
 def _tile_uri():
@@ -52,10 +83,12 @@ def create_tile_layer(photo_filter=None):
     if not layer.isValid():
         return None
     layer.setCustomProperty("panoramax/tiles", True)
+    layer.setOpacity(saved_opacity())
     layer.setRenderer(_build_renderer())
     if photo_filter is not None:
         apply_filter(photo_filter, layer)
     QgsProject.instance().addMapLayer(layer)
+    watch_opacity([layer])
     return layer
 
 

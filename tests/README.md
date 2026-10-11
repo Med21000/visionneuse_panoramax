@@ -103,6 +103,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
 | `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
 | `qgis/test_altitude.py` | 2 | Avec QGIS : altitude GPS ellipsoïdale convertie en altitude NGF par la grille RAF20 (Pouilly-en-Auxois : géoïde 47,59 m, caméra à 1,88 m du sol LiDAR HD ; test sauté si la grille ne peut pas être téléchargée), rien hors de France. |
+| `qgis/test_layers.py` | 4 | Avec QGIS : couche filaire créée à 60 % d'opacité, puis à la dernière opacité choisie ; opacité conservée par le filtre ; couche chargée avec un projet : opacité du projet gardée, changement mémorisé ; réglage abîmé. |
 | `qgis/test_calibration_storage.py` | 3 | Avec QGIS : calage conservé dans le profil d'une session et d'un projet à l'autre, effacement, réglage abîmé ; reprise du calage d'un vrai projet `.qgz` enregistré par une version précédente, sans écraser le calage plus récent, puis retrait du projet. |
 
 ## Ajouter un test

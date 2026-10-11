@@ -175,11 +175,17 @@ class PanoramaxPlugin:
         QgsProject.instance().readProject.connect(self._import_project_calibration)
         self._load_calibration()
 
+        # Opacité du filaire mémorisée quand l'utilisateur la change (voir layers.watch_opacity)
+        QgsProject.instance().layersAdded.connect(layers.watch_opacity)
+        layers.watch_opacity(QgsProject.instance().mapLayers().values())
+
     def unload(self):
-        try:
-            QgsProject.instance().readProject.disconnect(self._import_project_calibration)
-        except (TypeError, RuntimeError):
-            pass
+        for signal, slot in ((QgsProject.instance().readProject, self._import_project_calibration),
+                             (QgsProject.instance().layersAdded, layers.watch_opacity)):
+            try:
+                signal.disconnect(slot)
+            except (TypeError, RuntimeError):
+                pass
         self.calibration.changed = None
         for action in self.actions:
             self.iface.removePluginWebMenu(MENU, action)

@@ -52,6 +52,11 @@ class Intersect(unittest.TestCase):
         self.assertAlmostEqual(s, 10.0 + 10.0 * 2 / 3, places=6)
         self.assertAlmostEqual(z, 2.0, places=6)
 
+    def test_anchored(self):
+        profile = [(0.0, 100.4), (60.0, 106.4)]
+        self.assertEqual(ground.anchored(profile, 100.0), [(0.0, 100.0), (60.0, 106.0)])
+        self.assertIs(ground.anchored(profile, None), profile)
+
     def test_no_ground(self):
         with self.assertRaises(GroundError):
             ground.intersect(ground.flat_profile(), 2.0, 5.0)

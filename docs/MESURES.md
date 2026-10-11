@@ -100,7 +100,7 @@ Le centre optique d'une photo est :
 
 Aucun calage ne modifie `z_sol`, et le terrain ne modifie pas `h` : le calage de hauteur de caméra n'est donc pas en concurrence avec le profil de terrain, il remplace seulement la valeur saisie de `h`.
 
-`z_sol` est figé au premier clic, puis le même pour tous les clics de la photo. Le profil d'un clic dépendant de la direction visée (quelques centimètres d'écart d'une direction à l'autre à Commarin), chaque clic aurait sinon sa propre altitude de caméra, et les hauteurs mesurées sur un plan en seraient faussées.
+`z_sol` est figé au premier clic, puis le même pour tous les clics de la photo, y compris pour les points au sol : le profil d'un clic garde sa pente dans la direction visée, mais il est recalé verticalement sur `z_sol`. Le profil d'un clic dépend en effet de la direction visée (de quelques centimètres à quelques décimètres d'écart sous la caméra d'une direction à l'autre) : chaque clic aurait sinon sa propre altitude de caméra, ce qui fausserait les hauteurs mesurées sur un plan et les dénivelés entre points au sol, et décalerait le repère du point dans la visionneuse (7,6° plus haut pour 0,6 m d'écart sur un point au sol à 4 m de la photo).
 
 ### 2.6 Corrections appliquées à chaque clic
 

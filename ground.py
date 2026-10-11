@@ -74,8 +74,22 @@ def intersect(profile, camera_height, elevation):
                       "plus près de la photo.".format(MAX_DISTANCE))
 
 
-def _ground_point(camera_height, click):
-    s, z = intersect(click.get("profile") or flat_profile(), camera_height, click["elev"])
+def anchored(profile, ground_z):
+    """Profil décalé verticalement pour que le sol sous la caméra soit à ground_z.
+
+    Le profil d'un clic est la droite de pente du terrain dans la direction visée : son
+    altitude sous la caméra varie d'une direction à l'autre (quelques décimètres). Tous les
+    clics d'une même photo doivent partir de la même caméra : sinon chaque point est calculé
+    depuis une hauteur différente, ce qui fausse les dénivelés et décale son repère dans la
+    visionneuse. ground_z None : profil inchangé."""
+    if ground_z is None:
+        return profile
+    dz = ground_z - profile[0][1]
+    return [(s, z + dz) for s, z in profile]
+
+
+def _ground_point(camera_height, click, ground_z=None):
+    s, z = intersect(anchored(click.get("profile") or flat_profile(), ground_z), camera_height, click["elev"])
     return s, offset(click["lon"], click["lat"], click["yaw"], s), z
 
 

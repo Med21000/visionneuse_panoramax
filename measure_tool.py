@@ -247,7 +247,7 @@ class Measure:
         pts, sources, incidence = [], [], None
         if self.surface == "ground":
             for c in clicks:
-                pts.append(fixed(len(pts), geometry.on_ground(c, h(c), origin)[0], c))
+                pts.append(fixed(len(pts), geometry.on_ground(c, h(c), origin, zof(c))[0], c))
                 sources.append(c)
         elif self.surface == "tri3d":
             for k in range(0, len(clicks) - 1, 2):
@@ -264,7 +264,7 @@ class Measure:
                     raise geometry.GeometryError("Façade non définie : définissez-la dans la photo ou sur la carte.")
                 plane = geometry.vertical_plane(*(geometry.to_local(*p, origin) for p in facade))
             elif self.surface == "vertical":
-                first = fixed(0, geometry.on_ground(clicks[0], h(clicks[0]), origin)[0], clicks[0])
+                first = fixed(0, geometry.on_ground(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0], clicks[0])
                 cam = geometry.camera(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0]
                 plane = geometry.facing_plane(cam, first)
                 planar, pts, sources = clicks[1:], [first], [clicks[0]]
@@ -616,7 +616,8 @@ class MeasureTool:
     def facade_from(self, clicks):
         """Façade (deux points lon, lat, altitude) à partir de deux clics au pied du mur."""
         origin = (clicks[0]["lon"], clicks[0]["lat"])
-        a, b = (geometry.on_ground(c, self.camera_for(c), origin)[0] for c in clicks)
+        ground_z = _ground_z(clicks)
+        a, b = (geometry.on_ground(c, self.camera_for(c), origin, ground_z[c.get("pic")])[0] for c in clicks)
         geometry.vertical_plane(a, b)  # contrôle
         return [geometry.to_geographic(a, origin), geometry.to_geographic(b, origin)]
 

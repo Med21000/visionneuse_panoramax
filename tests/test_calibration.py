@@ -108,6 +108,14 @@ class CameraHeight(unittest.TestCase):
         self.assertAlmostEqual(found, h, places=6)
         self.assertGreater(sigma, 0.0)
 
+    def test_ground_reference_with_different_profiles(self):
+        h = 2.1  # même scène, profil du second clic décalé de 0,5 m sous la caméra
+        clicks = [self.click(math.degrees(math.atan2(-h, d))) for d in (8.0, 11.0)]
+        clicks[0]["profile"] = [(0.0, 50.0), (60.0, 50.0)]
+        clicks[1]["profile"] = [(0.0, 50.5), (60.0, 50.5)]
+        found, _ = calibration.camera_height("ground", clicks, 3.0)
+        self.assertAlmostEqual(found, h, places=6)
+
     def test_height_reference(self):
         h = 1.75  # objet de 4 m à 10 m
         clicks = [self.click(math.degrees(math.atan2(-h, 10.0))), self.click(math.degrees(math.atan2(4 - h, 10.0)))]

@@ -1,6 +1,6 @@
 # Visionneuse Panoramax pour QGIS
 
-[![Tests](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml/badge.svg)](https://github.com/Med21000/visionneuse_panoramax/actions/workflows/tests.yml)
+[![Tests](https://github.com/medlab-code/visionneuse_panoramax/actions/workflows/tests.yml/badge.svg)](https://github.com/medlab-code/visionneuse_panoramax/actions/workflows/tests.yml)
 
 Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec des mesures à l'écran : largeurs, hauteurs, distances 3D et position d'objets par triangulation, directement dans la photo.
 
@@ -100,7 +100,7 @@ Prérequis : **QGIS 4.0 ou plus récent**. L'extension ne fonctionne qu'avec QGI
 
 ### Depuis la release (recommandé)
 
-1. Télécharger `visionneuse_panoramax-1.0.0.zip` sur la page de la release : [Visionneuse Panoramax 1.0.0](https://github.com/Med21000/visionneuse_panoramax/releases/tag/v1.0.0) (toutes les versions : [releases](https://github.com/Med21000/visionneuse_panoramax/releases)).
+1. Télécharger le fichier `visionneuse_panoramax-<version>.zip` de la [dernière release](https://github.com/medlab-code/visionneuse_panoramax/releases/latest) (toutes les versions : [releases](https://github.com/medlab-code/visionneuse_panoramax/releases)).
 2. Dans QGIS : *Extensions › Installer/Gérer les extensions › Installer depuis un ZIP*, choisir le fichier téléchargé, puis « Installer l'extension ».
 
 ### Depuis les sources

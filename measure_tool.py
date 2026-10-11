@@ -21,10 +21,28 @@ de la hauteur de caméra.
 """
 
 import math
+from datetime import datetime
 
-from . import geometry, ground, triangulation
+from qgis.core import (
+    Qgis,
+    QgsCoordinateTransform,
+    QgsFeature,
+    QgsGeometry,
+    QgsLineSymbol,
+    QgsMarkerLineSymbolLayer,
+    QgsMarkerSymbol,
+    QgsPalLayerSettings,
+    QgsPointXY,
+    QgsProject,
+    QgsTextBufferSettings,
+    QgsTextFormat,
+    QgsVectorLayerSimpleLabeling,
+)
+from qgis.PyQt.QtGui import QColor
+
+from . import geometry, ground, output, triangulation
 from .calibration import MAP_ERROR
-from .measure import DEFAULT_CAMERA_HEIGHT, MeasureItem, _num
+from .measure import COLOR, DEFAULT_CAMERA_HEIGHT, WGS84, MeasureItem, _num
 
 FREE_SURFACES = (
     ("Sol", "ground"),
@@ -38,6 +56,40 @@ PRESET_SURFACES = {"road": "ground", "width": "ground", "height": "vertical"}  #
 PLANE_HEIGHT_ERROR = 0.05  # incertitude de la hauteur saisie du plan horizontal (m)
 SELECT_ANGLE = 1.0  # écart maximal (degrés) entre un clic et le repère d'un point pour le sélectionner
 ERRORS = (geometry.GeometryError, ground.GroundError)
+LAYER_NAME = "Panoramax – mesures"
+LAYER_FIELDS = (
+    "field=type:string&field=surface:string&field=valeur_m:double&field=incert_m:double"
+    "&field=horiz_m:double&field=vert_m:double&field=long_route_m:double&field=travers_m:double"
+    "&field=dist_photo_m:double&field=camera_m:double&field=camera_calee:integer&field=terrain:string"
+    "&field=recales:integer&field=photos:string&field=date_mesure:string&field=commentaire:string")
+KIND_NAMES = {"road": "largeur perpendiculaire à la chaussée", "width": "largeur parallèle à la route",
+              "height": "hauteur", "free": "mesure libre 3D"}
+
+
+def _style_measures(layer):
+    """Trait rouge, points aux extrémités (une hauteur, verticale, n'en montre qu'un) et
+    valeur en étiquette."""
+    symbol = QgsLineSymbol.createSimple({"color": COLOR.name(), "width": "0.6"})
+    ends = QgsMarkerLineSymbolLayer()
+    ends.setPlacements(Qgis.MarkerLinePlacement.Vertex)
+    ends.setSubSymbol(QgsMarkerSymbol.createSimple(
+        {"name": "circle", "color": COLOR.name(), "outline_color": "white", "outline_width": "0.3", "size": "2"}))
+    symbol.appendSymbolLayer(ends)
+    layer.renderer().setSymbol(symbol)
+    text = QgsTextFormat()
+    text.setSize(9)
+    buffer = QgsTextBufferSettings()
+    buffer.setEnabled(True)
+    buffer.setColor(QColor("white"))
+    buffer.setSize(1)
+    text.setBuffer(buffer)
+    settings = QgsPalLayerSettings()
+    settings.fieldName = "replace(format_number(\"valeur_m\", 2), '.', ',') || ' m'"
+    settings.isExpression = True
+    settings.placement = Qgis.LabelPlacement.Horizontal
+    settings.setFormat(text)
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(settings))
+    layer.setLabelsEnabled(True)
 
 
 def _ground_z(clicks):
@@ -82,6 +134,8 @@ class Measure:
         self.notice = None  # avertissement sur la source d'altitude
         self.incidence = None  # angle d'incidence le plus rasant sur un plan (degrés)
         self.item = None
+        self.fid = None  # entité de la couche des mesures, une fois enregistrée
+        self.saved = None  # résultat au moment de l'enregistrement (voir _snapshot)
 
     def needed(self):
         return 4 if self.surface == "tri3d" else 2
@@ -345,6 +399,53 @@ class Measure:
                 return []
             pts = [(k,) + geometry.to_geographic(p, origin)[:2] for k, p in enumerate(raw)]
         return pts[:1] if self.surface == "vertical" else pts
+
+    # Enregistrement -----------------------------------------------------------
+    def _snapshot(self):
+        """Ce qui doit être réécrit dans la couche s'il change : valeur, incertitude, points."""
+        r = self.result
+        return round(r["value"], 4), round(r["uncertainty"], 4), tuple(map(tuple, r["picks"]))
+
+    def unsaved(self):
+        """Mesure terminée, pas encore enregistrée, ou modifiée depuis (recalage, visée)."""
+        return bool(self.result) and self.saved != self._snapshot()
+
+    def feature(self, layer):
+        """Entité de la couche des mesures : segment mesuré (pour une largeur perpendiculaire,
+        du premier bord au pied de la perpendiculaire ; pour une hauteur, du pied au sommet, à
+        la verticale l'un de l'autre) et attributs du résultat."""
+        r, d = self.result, self.result["decomposition"]
+        ends = r["points"] if len(r["points"]) >= 2 else r["picks"]
+        geom = QgsGeometry.fromPolylineXY([QgsPointXY(lon, lat) for lon, lat in ends])
+        geom.transform(QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance()))
+        height, calibrated = self.tool.camera_info(self.clicks[0])
+
+        def num(value, digits=2):
+            return None if value is None else round(value, digits)
+
+        values = {
+            "type": KIND_NAMES[self.kind],
+            "surface": SURFACE_NAMES.get(self.surface, self.surface),
+            "valeur_m": num(r["value"], 3),
+            "incert_m": num(r["uncertainty"], 3),
+            "horiz_m": num(d["horizontal"], 3),
+            "vert_m": num(d["vertical"], 3),
+            "long_route_m": num(d["along"], 3),
+            "travers_m": num(d["across"], 3),
+            "dist_photo_m": num(max(r["ranges"]), 1),
+            "camera_m": num(height),
+            "camera_calee": int(calibrated),
+            "terrain": " + ".join(sorted({c.get("terrain") for c in self.clicks if c.get("terrain")})) or ground.FLAT,
+            "recales": len(self.overrides),
+            "photos": ",".join(dict.fromkeys(c.get("pic") or "" for c in self.clicks)),
+            "date_mesure": datetime.now().isoformat(timespec="seconds"),
+        }
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        for name, value in values.items():
+            if layer.fields().indexOf(name) >= 0:
+                feat.setAttribute(name, value)
+        return feat
 
     # Affichage ----------------------------------------------------------------
     def label(self):
@@ -647,6 +748,38 @@ class MeasureTool:
     def measures(self):
         """Toutes les mesures affichées (terminées, puis en cours)."""
         return self.done + ([self.current] if self.current is not None else [])
+
+    # Enregistrement -----------------------------------------------------------
+    def save(self, parent=None):
+        """Enregistre dans la couche « Panoramax – mesures » les mesures affichées terminées
+        qui ne le sont pas encore ; une mesure déjà enregistrée puis modifiée (recalage,
+        nouvelle visée) remplace son entité. Retourne (succès, message) ; message None si
+        l'utilisateur a renoncé à créer la couche."""
+        todo = [m for m in self.measures() if m.unsaved()]
+        if not todo:
+            if any(m.result for m in self.measures()):
+                return False, "Les mesures affichées sont déjà enregistrées."
+            return False, "Aucune mesure terminée à enregistrer."
+        layer, error = output.ensure_layer("measures", LAYER_NAME, "mesures", "LineString", LAYER_FIELDS,
+                                           _style_measures, parent)
+        if layer is None:
+            return False, error
+        added = updated = 0
+        for m in todo:
+            fid = output.write_feature(layer, m.feature(layer), m.fid)
+            if fid is None:
+                return False, "Impossible d'enregistrer la mesure dans la couche « {} ».".format(layer.name())
+            if m.fid is not None and fid == m.fid:
+                updated += 1
+            else:
+                added += 1
+            m.fid, m.saved = fid, m._snapshot()
+        parts = []
+        if added:
+            parts.append("{} mesure{} ajoutée{}".format(added, *(("s", "s") if added > 1 else ("", ""))))
+        if updated:
+            parts.append("{} mise{} à jour".format(updated, "s" if updated > 1 else ""))
+        return True, "{} dans « {} ».".format(" et ".join(parts).capitalize(), layer.name())
 
     # Recalage sur la carte ----------------------------------------------------
     def handles(self):

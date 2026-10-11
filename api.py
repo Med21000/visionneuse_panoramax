@@ -343,9 +343,10 @@ def get_instances(callback, force=False):
     fetch_json(INSTANCES_URL, done)
 
 
-def nearest_cached(lon, lat, max_m):
-    """Photo en cache la plus proche à moins de max_m mètres (None sinon)."""
-    feat = nearest_feature(_items.values(), lon, lat)
+def nearest_cached(lon, lat, max_m, accept=None):
+    """Photo en cache la plus proche à moins de max_m mètres (None sinon), parmi celles
+    qu'accepte la fonction accept(fiche) si elle est donnée."""
+    feat = nearest_feature([f for f in _items.values() if accept is None or accept(f)], lon, lat)
     if feat is None:
         return None
     flon, flat = feat["geometry"]["coordinates"][:2]

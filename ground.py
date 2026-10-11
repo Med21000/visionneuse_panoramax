@@ -18,7 +18,7 @@ Module sans dépendance à QGIS, pour pouvoir être testé seul.
 
 import math
 
-from .triangulation import _local, offset
+from .triangulation import offset
 
 PITCH_ERROR = 0.5  # erreur d'inclinaison supposée (degrés) pour l'incertitude affichée
 MAX_DISTANCE = 60.0  # longueur du profil de terrain et portée maximale d'une mesure

@@ -42,7 +42,7 @@ def _tile_layer_name():
     return "{} ({})".format(TILE_LAYER_NAME, api.INSTANCE_NAME)
 
 
-def create_tile_layer():
+def create_tile_layer(photo_filter=None):
     """Crée (ou retrouve) la couche filaire Panoramax en tuiles vectorielles."""
     existing = find_tile_layer()
     if existing is not None:
@@ -53,6 +53,8 @@ def create_tile_layer():
         return None
     layer.setCustomProperty("panoramax/tiles", True)
     layer.setRenderer(_build_renderer())
+    if photo_filter is not None:
+        apply_filter(photo_filter, layer)
     QgsProject.instance().addMapLayer(layer)
     return layer
 
@@ -67,6 +69,27 @@ def retarget_tile_layer():
         return None
     renderer = layer.renderer().clone() if layer.renderer() else _build_renderer()
     layer.setDataSource(_tile_uri(), _tile_layer_name(), "xyzvectortiles")
+    layer.setRenderer(renderer)
+    layer.triggerRepaint()
+    return layer
+
+
+def apply_filter(photo_filter, layer=None):
+    """Applique le filtre des photos (voir filters.PhotoFilter) aux styles de la couche
+    filaire, selon la couche des tuiles qu'ils dessinent ; les symboles sont conservés.
+    Retourne la couche, ou None si elle n'existe pas."""
+    layer = layer or find_tile_layer()
+    if layer is None or layer.renderer() is None:
+        return None
+    renderer = layer.renderer().clone()
+    if not hasattr(renderer, "styles"):  # moteur de rendu remplacé (style MapLibre…) : pas de filtre
+        return layer
+    styles = []
+    for style in renderer.styles():
+        if style.layerName() in ("sequences", "pictures", "grid"):
+            style.setFilterExpression(photo_filter.tile_expression(style.layerName()))
+        styles.append(style)
+    renderer.setStyles(styles)
     layer.setRenderer(renderer)
     layer.triggerRepaint()
     return layer

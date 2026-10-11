@@ -21,13 +21,14 @@ from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QAction, QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import QPushButton
 
-from . import api, layers
+from . import api, filters, layers
 from .cursor import ViewCursor
 from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
+from .measure_panel import GROUND_MODES
 from .terrain import TerrainProvider
-from .viewer_dock import GROUND_MODES, PanoramaxDock
+from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 MENU = "&Panoramax"
@@ -238,6 +239,7 @@ class PanoramaxPlugin:
             self.dock.surfaceChanged.connect(self._on_surface_changed)
             self.dock.facadeRequested.connect(self._on_facade_requested)
             self.dock.planeHeightChanged.connect(self._on_plane_height)
+            self.dock.filterChanged.connect(self._on_filter_changed)
             self.terrain.use_ign = self.dock.use_ign()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
@@ -301,8 +303,19 @@ class PanoramaxPlugin:
     # ------------------------------------------------------------------
     # Couche filaire
     # ------------------------------------------------------------------
+    def _photo_filter(self):
+        """Filtre des photos : celui du panneau, ou le dernier mémorisé."""
+        return self.dock.photo_filter() if self.dock is not None else filters.PhotoFilter.load()
+
+    def _on_filter_changed(self, photo_filter):
+        if layers.apply_filter(photo_filter) is None and photo_filter.active():
+            self.add_tile_layer()
+        text = ("Filtre des photos : {}.".format(photo_filter.describe()) if photo_filter.active()
+                else "Filtre des photos désactivé : toutes les photos sont affichées.")
+        self.iface.statusBarIface().showMessage("Panoramax : " + text, 5000)
+
     def add_tile_layer(self):
-        layer = layers.create_tile_layer()
+        layer = layers.create_tile_layer(self._photo_filter())
         if layer is None:
             self.iface.messageBar().pushMessage(
                 "Panoramax", "Impossible de créer la couche de tuiles vectorielles.",
@@ -325,8 +338,10 @@ class PanoramaxPlugin:
         # Rayon de recherche adapté à l'échelle (≈ 15 pixels, entre 10 et 150 m)
         radius = min(150.0, max(10.0, self.canvas.mapUnitsPerPixel() * 15 *
                                 self._meters_per_map_unit()))
+        photo_filter = self._photo_filter()
+        accept = photo_filter.matches if photo_filter.active() else None
         # Photo déjà connue tout près du clic (séquence préchargée) : aucun appel à l'API
-        cached = api.nearest_cached(lon, lat, radius / 3.0)
+        cached = api.nearest_cached(lon, lat, radius / 3.0, accept)
         if cached is not None:
             flon, flat = cached["geometry"]["coordinates"][:2]
             self._ensure_dock().show_picture(cached["id"], flon, flat)
@@ -339,20 +354,23 @@ class PanoramaxPlugin:
                     "Panoramax", "Recherche impossible : {}".format(error),
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
-            feat = api.nearest_feature(data.get("features", []), lon, lat)
+            features = data.get("features", [])
+            feat = api.nearest_feature([f for f in features if accept is None or accept(f)], lon, lat)
             if feat is not None:
                 api.remember_items([feat])  # sa fiche ne sera pas redemandée
             dock = self._ensure_dock()
             if feat is None:
-                self.iface.messageBar().pushMessage(
-                    "Panoramax", "Aucune photo à moins de {:.0f} m.".format(radius),
-                    level=Qgis.MessageLevel.Info, duration=4)
+                text = "Aucune photo à moins de {:.0f} m".format(radius)
+                if accept is not None and features:
+                    text += " ne correspond au filtre ({})".format(photo_filter.describe())
+                self.iface.messageBar().pushMessage("Panoramax", text + ".", level=Qgis.MessageLevel.Info, duration=4)
                 dock.show_location(lon, lat)
                 return
             flon, flat = feat["geometry"]["coordinates"][:2]
             dock.show_picture(feat["id"], flon, flat)
 
-        api.fetch_json(api.search_url(lon, lat, radius_m=radius), done)
+        # Filtre actif : plus de photos demandées, pour en garder assez une fois filtrées
+        api.fetch_json(api.search_url(lon, lat, radius_m=radius, limit=100 if accept else 20), done)
 
     def _meters_per_map_unit(self):
         crs = self.canvas.mapSettings().destinationCrs()
@@ -616,11 +634,13 @@ class PanoramaxPlugin:
             self._show_measure(self.measures.status())
 
     def _on_measure_save(self):
-        tri = self._ensure_triangulator()
-        ok, msg = tri.save()
-        self.iface.messageBar().pushMessage(
-            "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
-        self._show_measure(tri.status())
+        """« Enregistrer » : point triangulé, ou mesures terminées affichées."""
+        tool = self._ensure_triangulator() if self.dock.measure_mode() == "tri" else self._ensure_measures()
+        ok, msg = tool.save(self.iface.mainWindow())
+        if msg:  # None : création de la couche annulée
+            self.iface.messageBar().pushMessage(
+                "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
+        self._show_measure(tool.status())
 
     def _on_measure_clear_all(self):
         """« Tout effacer » : mesures terminées et en cours, visées de triangulation."""

@@ -76,7 +76,7 @@ message destiné à l'utilisateur, et ne pas renvoyer un résultat faux.
   son nom sur le disque, pour que les imports relatifs des modules (`from . import
   ground`) fonctionnent ;
 - fournit `install_qgis_stub()`, un faux paquet `qgis` pour les modules qui importent
-  QGIS (`terrain.py`, `measure_tool.py`, `measure_panel.py`). Toute classe Qt ou QGIS y est une coquille
+  QGIS (`terrain.py`, `measure_tool.py`, `measure_panel.py`, `webengine.py`). Toute classe Qt ou QGIS y est une coquille
   vide (`Stub`) : on peut l'instancier, l'appeler, lire n'importe quel attribut ou en
   hériter. Les calculs s'exécutent donc réellement, et ce qui touche à l'affichage ou
   au réseau est remplacé dans les tests eux-mêmes ;
@@ -99,6 +99,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_calibration_tool.py` | 11 | Outil de calage, du clic au calage enregistré : inclinaison (correction partielle puis complète, sommet sur une autre photo, clics inversés), hauteur de caméra sur une longueur au sol ou une hauteur connue, repère cliqué dans la photo puis sur la carte (position GPS d'origine, matériel de relevé), effacement du calage, repères dans la visionneuse. |
 | `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
+| `test_webengine.py` | 10 | Options du moteur web selon l'option « Accélération matérielle » (rendu logiciel par défaut, options imposées par l'utilisateur respectées), variable de rendu logiciel posée puis rétablie avec sa valeur précédente, diagnostic du moteur WebGL obtenu et écart avec le rendu demandé. |
 | `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
 
 ## Ajouter un test

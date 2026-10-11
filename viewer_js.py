@@ -15,6 +15,15 @@ WEBGL_TEST_JS = (
     "}catch(e){return false;}})()"
 )
 
+# Moteur WebGL réellement utilisé (carte graphique ou rendu logiciel), pour le diagnostic
+WEBGL_RENDERER_JS = (
+    "(function(){try{var c=document.createElement('canvas');"
+    "var gl=c.getContext('webgl2')||c.getContext('webgl');if(!gl)return '';"
+    "var d=gl.getExtension('WEBGL_debug_renderer_info');"
+    "return String(d?gl.getParameter(d.UNMASKED_RENDERER_WEBGL):gl.getParameter(gl.RENDERER));"
+    "}catch(e){return '';}})()"
+)
+
 # La visionneuse affiche son propre message quand WebGL est refusé
 # (ex. rendu logiciel jugé trop lent) : on le repère dans la page.
 WEBGL_ERROR_JS = (

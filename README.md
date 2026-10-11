@@ -22,6 +22,7 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 - Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
 - Capture vignette (« 🖼 Capture vignette ») : la visionneuse telle qu'affichée, mesures comprises, enregistrée en PNG et copiée dans le presse-papiers.
 - Option « Filtrage anisotrope » (décochée par défaut, mémorisée) : atténue le crénelage et le scintillement des détails fins vus de loin en gardant l'image nette, au prix d'une navigation un peu moins fluide.
+- Option « Accélération matérielle (expérimental) » (décochée par défaut, prise en compte au redémarrage de QGIS) : calcul de la visionneuse par la carte graphique, nettement plus fluide qu'en rendu logiciel par le processeur, avec un risque d'écran noir ou de plantage selon le pilote. Le moteur réellement utilisé est indiqué dans le journal QGIS (onglet Panoramax) et dans la bulle d'aide de l'option.
 - Sans QtWebEngine ou sans WebGL, une visionneuse native intégrée prend le relais, en **mode dégradé** (voir ci-dessous).
 
 ### Visionneuse intégrée (mode dégradé)

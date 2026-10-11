@@ -569,9 +569,20 @@ class PanoramaxDock(QDockWidget):
         btn_browser.setToolTip("Ouvrir la vue actuelle dans le navigateur")
         btn_browser.clicked.connect(self.open_in_browser)
         bar.addWidget(btn_browser)
+        self.btn_compact = QToolButton()
+        self.btn_compact.setAutoRaise(True)
+        self.btn_compact.setCheckable(True)
+        self.btn_compact.toggled.connect(self._set_compact)
+        bar.addWidget(self.btn_compact)
         layout.addLayout(bar)
+        # Libellés complets et réduits (mode compact) des boutons de la barre
+        self._labels = {self.btn_pick: ("Choisir sur la carte", "📍"), self.btn_filter: ("Filtre", "🔎"),
+                        self.btn_capture: ("📷 Capture HD", "📷"), btn_thumb: ("🖼 Capture vignette", "🖼"),
+                        self.btn_measure: ("📐 Mesure", "📐"), btn_browser: ("Navigateur", "🌐")}
 
-        inst = QHBoxLayout()
+        self.instance_row = QWidget(root)
+        inst = QHBoxLayout(self.instance_row)
+        inst.setContentsMargins(0, 0, 0, 0)
         inst.addWidget(QLabel("Instance :"))
         self.cmb_instance = QComboBox()
         self.cmb_instance.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
@@ -582,7 +593,7 @@ class PanoramaxDock(QDockWidget):
         btn_reload.setFixedWidth(30)
         btn_reload.clicked.connect(lambda: self.load_instances(force=True))
         inst.addWidget(btn_reload)
-        layout.addLayout(inst)
+        layout.addWidget(self.instance_row)
         self._fill_instances([])
         self.cmb_instance.activated.connect(self._on_instance_activated)
         self.load_instances()
@@ -702,7 +713,9 @@ class PanoramaxDock(QDockWidget):
         self._update_measure_widgets()
         layout.addWidget(self.measure_box)
 
-        opts = QHBoxLayout()
+        self.options_row = QWidget(root)
+        opts = QHBoxLayout(self.options_row)
+        opts.setContentsMargins(0, 0, 0, 0)
         self.chk_follow = QCheckBox("Centrer la carte QGIS sur la photo")
         self.chk_follow.setChecked(True)
         opts.addWidget(self.chk_follow)
@@ -714,7 +727,9 @@ class PanoramaxDock(QDockWidget):
         self.chk_aniso.toggled.connect(self._on_aniso)
         opts.addWidget(self.chk_aniso)
         opts.addStretch(1)
-        layout.addLayout(opts)
+        layout.addWidget(self.options_row)
+        self.btn_compact.setChecked(QgsSettings().value("visionneuse_panoramax/compact", False, type=bool))
+        self._set_compact(self.btn_compact.isChecked())
 
         if HAS_WEBENGINE and WEBGL_OK is not False:
             self.web = QWebEngineView(root)
@@ -837,6 +852,27 @@ class PanoramaxDock(QDockWidget):
         QgsSettings().setValue("visionneuse_panoramax/terrain_ign", bool(checked))
         self.terrainChanged.emit()
 
+    def _set_label(self, button, full, short):
+        """Libellé d'un bouton de la barre, réduit à son icône en mode compact."""
+        self._labels[button] = (full, short)
+        button.setText(short if self.btn_compact.isChecked() else full)
+
+    def _set_compact(self, compact):
+        """Mode compact : boutons réduits à leur icône, lignes Instance et Options masquées."""
+        QgsSettings().setValue("visionneuse_panoramax/compact", bool(compact))
+        for button, (full, short) in self._labels.items():
+            button.setText(short if compact else full)
+            if isinstance(button, QPushButton):  # largeur minimale du style trop grande pour une icône
+                button.setMaximumWidth(button.fontMetrics().horizontalAdvance(short) + 24 if compact else 16777215)
+        self.instance_row.setVisible(not compact)
+        self.options_row.setVisible(not compact)
+        self.measure_status.setVisible(not compact)
+        self._update_measure_tooltip()
+        self.btn_compact.setArrowType(Qt.ArrowType.DownArrow if compact else Qt.ArrowType.UpArrow)
+        self.btn_compact.setToolTip("Déployer le panneau" if compact else
+                                    "Compacter le panneau : boutons réduits à leur icône, instance, options et "
+                                    "aide de la mesure masquées")
+
     def _on_aniso(self, checked):
         QgsSettings().setValue("visionneuse_panoramax/anisotropic", bool(checked))
         if self.web is not None:
@@ -930,7 +966,7 @@ class PanoramaxDock(QDockWidget):
 
     def _update_filter_widgets(self):
         active = self.photo_filter().active()
-        self.btn_filter.setText("Filtre ●" if active else "Filtre")
+        self._set_label(self.btn_filter, "Filtre ●" if active else "Filtre", "🔎●" if active else "🔎")
         self.btn_filter.setToolTip(("Filtre actif : {}.".format(self.photo_filter().describe()) if active else
                                     "Filtrer les photos du filaire et du clic sur la carte : date, type de caméra, "
                                     "précision GPS, producteur"))
@@ -1161,6 +1197,12 @@ class PanoramaxDock(QDockWidget):
 
     def set_measure_status(self, text):
         self.measure_status.setText(text)
+        self._update_measure_tooltip()
+
+    def _update_measure_tooltip(self):
+        """En mode compact, la ligne d'aide de la mesure passe dans la bulle d'aide du bouton."""
+        text = self.measure_status.text() if self.btn_compact.isChecked() else ""
+        self.btn_measure.setToolTip(text or "Triangulation, largeur ou hauteur d'un objet")
 
     def current_sighting(self):
         """Visée depuis la photo affichée (centre de la vue), ou None."""
@@ -1236,7 +1278,7 @@ class PanoramaxDock(QDockWidget):
             return
         view = self._current_view(item)
         self.btn_capture.setEnabled(False)
-        self.btn_capture.setText("📷 Téléchargement…")
+        self._set_label(self.btn_capture, "📷 Téléchargement…", "⏳")
         api.fetch(href, lambda data, error: self._on_capture_image(item, view, data, error))
 
     def capture_thumbnail(self):
@@ -1282,7 +1324,7 @@ class PanoramaxDock(QDockWidget):
         from . import capture
 
         self.btn_capture.setEnabled(True)
-        self.btn_capture.setText("📷 Capture HD")
+        self._set_label(self.btn_capture, "📷 Capture HD", "📷")
         if error or not data:
             self.message.emit("Téléchargement de la photo impossible : {}".format(error), 1, "")
             return

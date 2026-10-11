@@ -70,8 +70,11 @@ class Presets(Base):
         m = self.measure("road", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         self.assertValue(m, 7.0)
         self.assertGreater(m.result["uncertainty"], 0.0)
-        foot = m.result["points"][1]  # pied de la perpendiculaire, en face du premier bord
-        self.assertLess(distance(foot, point(4.0, 8.0)), 1e-6)
+        # Trait à mi-chemin des deux bords le long de la route (nord), relié en pointillés à chacun
+        start, end = m.result["points"]
+        self.assertLess(distance(start, point(-3.0, 10.0)), 1e-6)
+        self.assertLess(distance(end, point(4.0, 10.0)), 1e-6)
+        self.assertEqual(m.result["extra"], m.result["picks"])
         self.assertIn("Largeur perpendiculaire", m.status())
 
     def test_oblique_road(self):
@@ -81,8 +84,11 @@ class Presets(Base):
         p2 = (p1[0] + 6.0 * across[0] + 3.0 * along[0], p1[1] + 6.0 * across[1] + 3.0 * along[1])
         m = self.measure("road", [click(p1 + (0.0,), axis=30.0), click(p2 + (0.0,), axis=30.0)])
         self.assertValue(m, 6.0)
-        foot = (p1[0] + 6.0 * across[0], p1[1] + 6.0 * across[1])
-        self.assertLess(distance(m.result["points"][1], point(*foot)), 1e-6)
+        # Bords décalés de 3 m le long de la route : trait à mi-chemin (1,5 m de chacun)
+        start = (p1[0] + 1.5 * along[0], p1[1] + 1.5 * along[1])
+        end = (start[0] + 6.0 * across[0], start[1] + 6.0 * across[1])
+        for got, expected in zip(m.result["points"], (start, end)):
+            self.assertLess(distance(got, point(*expected)), 1e-6)
 
     def test_profiles_with_different_ground_under_camera(self):
         # Droite de pente du terrain ajustée dans chaque direction visée : son altitude sous la

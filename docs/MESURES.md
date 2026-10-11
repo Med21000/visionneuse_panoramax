@@ -207,7 +207,7 @@ Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplace
 ### 4.1 Largeur perpendiculaire à la chaussée
 
 - **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé.
-- **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le second bord cliqué est relié en pointillés au pied de la perpendiculaire. La distance en biais est aussi indiquée.
+- **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le trait est tracé perpendiculairement à l'axe, à mi-chemin des deux bords cliqués le long de la route, et chaque bout est relié en pointillés à son bord cliqué (point déplaçable). La distance en biais est aussi indiquée.
 - **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la longueur parallèle à la route.
 
 ### 4.2 Longueur parallèle à la route
@@ -460,7 +460,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 - **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
 - **Enregistrer les mesures.** Ajoute les mesures terminées affichées à la couche « Panoramax – mesures » (segment mesuré et attributs du résultat, dont la décomposition et l'incertitude) ; une mesure déjà enregistrée puis recalée y est mise à jour. Effacer une mesure de l'écran ne la retire pas de la couche.
 - **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
-- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers le second bord pour la largeur perpendiculaire ; trait « façade » au pied du mur.
+- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers les deux bords cliqués pour la largeur perpendiculaire ; trait « façade » au pied du mur.
 - **Couches.** Mesures et points triangulés s'enregistrent dans « Panoramax – mesures » et « Panoramax – points triangulés » : au premier enregistrement, dans un fichier GeoPackage choisi (tables `mesures` et `points_triangules`, conservé à la fermeture de QGIS) ou en couche temporaire (à sauvegarder).
 
 ---

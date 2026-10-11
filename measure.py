@@ -234,14 +234,15 @@ class MeasureItem(QgsMapCanvasItem):
         super().__init__(canvas)
         self._canvas = canvas
         self.points, self.label = [], ""
-        self.extra = None  # point cliqué non relié (largeur : second bord)
+        self.extras = []  # points cliqués reliés en pointillés aux bouts du trait (largeur perpendiculaire)
         self._screen = []
-        self._extra = None
+        self._extras = []
         self._rect = QRectF()
         self.setZValue(990)
 
-    def set_data(self, points, label, extra=None):
-        self.points, self.label, self.extra = points, label, extra
+    def set_data(self, points, label, extras=None):
+        """extras : pour chaque point, le point cliqué à relier en pointillés (ou None)."""
+        self.points, self.label, self.extras = points, label, list(extras or [])
         self.updatePosition()
 
     def _label_rect(self):
@@ -257,13 +258,14 @@ class MeasureItem(QgsMapCanvasItem):
         ct = QgsCoordinateTransform(WGS84, self._canvas.mapSettings().destinationCrs(), QgsProject.instance())
         try:
             self._screen = [self.toCanvasCoordinates(ct.transform(QgsPointXY(*p))) for p in self.points]
-            self._extra = self.toCanvasCoordinates(ct.transform(QgsPointXY(*self.extra))) if self.extra else None
+            self._extras = [(i, self.toCanvasCoordinates(ct.transform(QgsPointXY(*e))))
+                            for i, e in enumerate(self.extras) if e is not None and i < len(self._screen)]
         except Exception:
-            self._screen, self._extra = [], None
+            self._screen, self._extras = [], []
         self.prepareGeometryChange()
         self.setPos(0, 0)
         if self._screen:
-            pts = self._screen + ([self._extra] if self._extra is not None else [])
+            pts = self._screen + [e for _, e in self._extras]
             xs, ys = [p.x() for p in pts], [p.y() for p in pts]
             rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(-10, -10, 10, 10)
             self._rect = rect.united(self._label_rect())
@@ -287,13 +289,13 @@ class MeasureItem(QgsMapCanvasItem):
         painter.setBrush(QBrush(COLOR))
         for p in self._screen:
             painter.drawEllipse(p, 5, 5)
-        if self._extra is not None:
-            # Second bord cliqué, relié en pointillés au pied de la perpendiculaire
+        for i, extra in self._extras:
+            # Bord cliqué, relié en pointillés au bout du trait perpendiculaire
             painter.setPen(QPen(COLOR, 1.5, Qt.PenStyle.DotLine))
-            painter.drawLine(self._screen[-1], self._extra)
+            painter.drawLine(self._screen[i], extra)
             painter.setPen(QPen(COLOR, 2))
             painter.setBrush(QColor(255, 255, 255))
-            painter.drawEllipse(self._extra, 4, 4)
+            painter.drawEllipse(extra, 4, 4)
         rect = self._label_rect()
         if not rect.isNull():
             painter.setPen(Qt.PenStyle.NoPen)

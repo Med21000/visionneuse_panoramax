@@ -61,12 +61,13 @@ def _ground(data):
     return out
 
 
-def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, height=None):
+def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, height=None, transient=False):
     """Résultat d'une vérification : precise, accuracy (m, ou None : celle de la photo), lidar (LiDAR
     HD publié sous la photo, None si inconnu), reason (texte), count, spread et height (hauteur de
-    caméra médiane) pour une séquence vérifiée."""
+    caméra médiane) pour une séquence vérifiée. transient : obtenu malgré un service injoignable,
+    donc pas gardé pour la session (la vérification sera refaite)."""
     return {"precise": precise, "accuracy": accuracy, "lidar": lidar, "reason": reason, "count": count,
-            "spread": spread, "height": height}
+            "spread": spread, "height": height, "transient": transient}
 
 
 def degraded(res):
@@ -119,15 +120,17 @@ class PrecisionChecker:
         if sequence in self._results:
             callback(self._results[sequence])
             return
-        if sequence in self._pending:
-            self._pending[sequence].append(callback)
+        # Photo sans séquence : vérifiée seule (deux photos sans séquence ne partagent rien)
+        key = sequence if sequence is not None else ("photo", item.get("id"))
+        if key in self._pending:
+            self._pending[key].append(callback)
             return
-        self._pending[sequence] = [callback]
+        self._pending[key] = [callback]
 
         def done(res):
-            if sequence is not None:
+            if sequence is not None and not res.get("transient"):
                 self._results[sequence] = res
-            for cb in self._pending.pop(sequence, []):
+            for cb in self._pending.pop(key, []):
                 cb(res)
 
         try:
@@ -143,12 +146,13 @@ class PrecisionChecker:
         else:
             self._check_lidar(lon, lat, done, "pas de correction différentielle déclarée")
 
-    def _check_lidar(self, lon, lat, done, reason, accuracy=None):
-        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None."""
+    def _check_lidar(self, lon, lat, done, reason, accuracy=None, transient=False):
+        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None ;
+        transient : une étape précédente n'a pas pu joindre son service."""
         def got(data, error):
             ground = _ground(data) if not error else []
             lidar = None if error else bool(ground and ground[0] is not None)
-            done(result(accuracy is not None, accuracy, lidar, reason))
+            done(result(accuracy is not None, accuracy, lidar, reason, transient=transient or bool(error)))
 
         api.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 
@@ -163,6 +167,9 @@ class PrecisionChecker:
                 ngf = altitude.ngf_altitude(plon, plat, api.item_altitude(feat))
                 if ngf is not None and feat.get("collection", sequence) == sequence:
                     photos.append((plon, plat, ngf))
+            if error:
+                self._check_lidar(lon, lat, done, "photos voisines indisponibles ({})".format(error), transient=True)
+                return
             if len(photos) < MIN_PHOTOS:
                 self._check_lidar(lon, lat, done, "altitude GPS inexploitable ({} photos voisines)".format(len(photos)))
                 return
@@ -171,7 +178,7 @@ class PrecisionChecker:
 
         def got_ground(photos, data, error):
             if error:
-                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error)))
+                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error), transient=True))
                 return
             heights = [ngf - g for (_, _, ngf), g in zip(photos, _ground(data)) if g is not None]
             if len(heights) < MIN_PHOTOS:

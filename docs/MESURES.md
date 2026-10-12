@@ -106,7 +106,7 @@ Aucun calage ne modifie `z_sol`, et le terrain ne modifie pas `h` : le calage de
 
 Dans cet ordre :
 
-1. **inclinaison** de la photo (calage par objets verticaux) ;
+1. **inclinaison** de la photo (calée à la main sur des objets verticaux, sinon calculée automatiquement : section 6.1 bis) ;
 2. **décalage de cap** de la séquence (calage par repères) ;
 3. **position recalée** de la photo (calage par repères, à partir de trois repères) ;
 4. **hauteur de caméra** calée pour la séquence.
@@ -130,7 +130,7 @@ Pour une photo vérifiée précise :
 
 **Mode dégradé.** Les mesures ne sont pleinement fiables qu'avec **à la fois** une position vérifiée précise et le **LiDAR HD** sous la photo. S'il manque l'un ou l'autre, les mesures dépendent de la hauteur de caméra (à caler), de l'inclinaison et, sans LiDAR, d'un sol approximatif (RGE ALTI) : l'outil est en mode dégradé. Une **fenêtre** l'annonce quand on active la mesure (« 📐 Mesure ») sur une telle photo, avec ce qui manque et les calages à faire ; une case permet de ne plus l'afficher pendant la session. Si la vérification de la photo n'est pas encore terminée, la fenêtre s'ouvre dès qu'elle l'est. Une **ligne d'état** sous les boutons de mesure rappelle en permanence la précision de la position et la présence du LiDAR HD (par exemple « Position GPS vérifiée (±0,10 m) · LiDAR HD », ou « ⚠ Position GPS non vérifiée (±4 m annoncés) · LiDAR HD : mode de mesure dégradé »). La présence du LiDAR HD est contrôlée pour toute photo, y compris quand sa précision est déclarée dans l'EXIF.
 
-L'**inclinaison** (roulis et tangage), mesurée par la centrale, n'est pas transmise dans les métadonnées des photos : le calage d'inclinaison (section 6.1) reste nécessaire, et devient la principale source d'erreur.
+L'**inclinaison** (roulis et tangage), mesurée par la centrale, n'est pas transmise dans les métadonnées des photos, et les photos ne sont pas mises à niveau : à Pouilly-en-Auxois, la caméra penche de 1 à 3° avec le véhicule. Elle devient la principale source d'erreur : le plugin la calcule automatiquement (section 6.1 bis) et la **ligne d'état** l'indique (« inclinaison calée (verticales de la photo, ±0,1°) », « inclinaison en cours de calcul… », ou « ⚠ … inclinaison non calée : calez-la sur deux objets verticaux »).
 
 ## 3. Le moteur de mesure
 
@@ -210,6 +210,23 @@ Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplace
 - **Clics.** Pied d'un bord (bordure, marquage, limite de chaussée), puis pied du bord opposé.
 - **Calcul.** Deux points au sol ; la largeur est la composante de `PQ` **en travers de l'axe de la route**. Les clics n'ont pas besoin d'être exactement en face l'un de l'autre. Sur la carte, le trait est tracé perpendiculairement à l'axe, à mi-chemin des deux bords cliqués le long de la route, et chaque bout est relié en pointillés à son bord cliqué (point déplaçable). La distance en biais est aussi indiquée.
 - **Usage.** En travers de la route uniquement. Le long de la route (deux points d'un mur sur le côté du véhicule), la composante perpendiculaire est presque nulle : utiliser la longueur parallèle à la route.
+- **Axe de la route** (`roads.py`), pris au **milieu des deux bords cliqués**, pas à la caméra : le point mesuré est souvent 10 à 20 m devant, où la route a déjà tourné.
+  1. **BD TOPO** de l'IGN (tronçons de route, service WFS de la Géoplateforme, sans clé) : parmi les tronçons à moins de 15 m du milieu, ceux qui coupent le segment cliqué d'au moins 45° (à un carrefour, la rue que traverse la mesure) ; le plus proche donne l'axe, direction locale du tronçon sur ±10 m. Tronçons lus par maille d'environ 100 m, une fois par session.
+  2. À défaut (hors de France, service injoignable, aucun tronçon) : **trajectoire de la séquence** au point mesuré, axe principal des positions de ses photos à moins de 20 m.
+  3. À défaut : **direction du véhicule** à la caméra (photos précédente et suivante, ou orientation de la photo).
+
+  La largeur est d'abord calculée avec la direction du véhicule (« lecture de la BD TOPO… »), puis recalculée dès que l'axe arrive. Le résultat indique la source : « axe 47° (BD TOPO, D977BIS) ».
+
+  **Validation** (séquence CD21 de Pouilly-en-Auxois, 12/10/2026). Sur 419 points, BD TOPO et trajectoire du véhicule s'accordent à 0,4° en ligne droite et 0,8° en courbe (médianes) ; aux carrefours où le véhicule tourne, l'orthophoto montre que la BD TOPO suit la route et la trajectoire la coupe. Largeur simulée 15 m devant la caméra, comparée à la direction de la route à cet endroit (trajectoire lissée sur 30 m) :
+
+  | | Axe BD TOPO au point mesuré | Direction du véhicule à la caméra |
+  |---|---|---|
+  | Courbe (119 points) | 0,9° (90 % sous 2,7°) | 3,0° (6,7°) |
+  | Courbe serrée (46 points) | 2,3° (8,2°) | 10,6° (24,5°) |
+
+  Effet sur la largeur : environ `w·(1 − cos δ) + a·sin δ`, avec `a` le décalage des deux bords le long de la route ; pour 7 m et 2 m de décalage, 3° d'erreur d'axe font 11 cm, 10° en font 45.
+
+  **Limites.** Un tronçon BD TOPO est l'axe de toute la route : sur une bretelle ou un tronçon simplifié, la direction peut s'écarter de quelques degrés ; sur la carte, le trait bleu « perpendiculaire à la route » permet de le contrôler sur l'orthophoto.
 
 ### 4.2 Longueur parallèle à la route
 
@@ -411,6 +428,30 @@ Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont c
 
 **Vérification.** Caméra simulée penchée de 2,5° : retrouvée exactement avec deux poteaux, un point au sol étant ensuite corrigé au centième de degré.
 
+Le calage à la main l'emporte sur l'inclinaison automatique (section 6.1 bis) ; « Effacer » le retire et rend la main à celle-ci.
+
+### 6.1 bis Inclinaison automatique, par photo
+
+**Constat.** Diagnostic du 12/10/2026 sur 28 photos imajbox du CD21 (Pouilly-en-Auxois) : les panoramas ne sont pas mis à niveau. La caméra penche de 1 à 3° avec le véhicule ; le tangage suit la pente de la route (corrélation 0,95), le roulis son dévers. Sans correction, un point au sol à 6 m est déplacé d'environ 37 cm par degré.
+
+**Quand.** Dès que la mesure est active, pour chaque photo 360° affichée qui n'a pas d'inclinaison calée à la main : le plugin télécharge la photo HD (7 à 8 Mo pour l'imajbox) et calcule en arrière-plan (3 à 4 s). Le résultat est conservé dans le profil QGIS avec les autres calages : une photo n'est analysée qu'une fois. Les clics faits sur la photo avant la fin du calcul sont corrigés à son arrivée, et leurs mesures recalculées.
+
+**1. Verticales de la photo** (`autotilt.py`). Sur une photo de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent verticales dans l'image équirectangulaire ; la caméra penchée, elles s'inclinent selon une loi connue. La photo est décodée à 6 144 px de large, dans la bande de 3 à 45° au-dessus de l'horizon (le sol, les véhicules et la voiture de prise de vue sont en dessous). Par bandes de 4° : sommes du gradient horizontal le long de droites de pentes variées (transformée de Radon locale) pour repérer les arêtes rectilignes, puis position de l'arête sur chaque ligne (centre du gradient) et droite des moindres carrés. Chaque segment est traité comme un objet vertical cliqué (6.1) ; moindres carrés sur toutes, avec rejet itératif à 3 écarts-types (arbres, toits, objets penchés). Résultat retenu avec au moins 40 segments, répartis sur au moins trois quarts de l'horizon, et une incertitude de moins de 0,25°.
+
+**2. Pente et dévers du LiDAR HD**, faute de verticales (campagne). Plan du sol ajusté sur 15 points du LiDAR HD sous le véhicule (1,5 m devant et derrière, 0,8 m de chaque côté, sous les roues) : le tangage suit la pente, le roulis le dévers. Cette estimation n'est utilisée que sur une séquence où **au moins trois photos calées par leurs verticales** confirment que la caméra suit le véhicule (écart-type de moins de 0,8°) : une caméra portée à pied ou stabilisée n'est pas concernée. Le décalage moyen entre verticales et LiDAR (fixation de la caméra) est ajouté.
+
+**Validation (Pouilly-en-Auxois, photos réelles).**
+
+| | Résultat |
+|---|---|
+| Inclinaison imposée à une photo réelle (1° en long, 1° en travers) | retrouvée à 0,05–0,2° près |
+| Photos calées par leurs verticales | 18 sur 28 (centre-ville) ; ±0,03 à 0,17° annoncés |
+| Comparaison avec un détecteur de segments de référence (OpenCV LSD) | 0,1 à 0,3° d'écart, 0,6° au plus |
+| LiDAR comparé aux verticales, en validation croisée (18 photos) | 0,4° en long, 0,5° en travers ; décalage de fixation +0,2° et −0,2° |
+| Photos de campagne (10 sur 28) | estimées par le LiDAR, ±0,5° |
+
+**Limites.** Calcul seulement pour les photos 360° (équirectangulaires) ; numpy est nécessaire (fourni avec QGIS) ; sans numpy, seule l'estimation LiDAR reste possible, et seulement si la séquence a déjà été validée. Une photo sans verticales sur une séquence non validée reste non calée : la ligne d'état le signale.
+
 ### 6.2 Hauteur de caméra (longueur connue), par séquence
 
 **But.** Mesurer la hauteur réelle de la caméra, dont les mesures au sol dépendent proportionnellement.
@@ -448,7 +489,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 ### 6.4 Ordre conseillé
 
-1. **Inclinaison**, qui intervient dans tous les autres calculs.
+1. **Inclinaison**, qui intervient dans tous les autres calculs : automatique en général (6.1 bis) ; à caler à la main quand la ligne d'état l'indique non calée.
 2. **Hauteur de caméra**, une fois pour la séquence.
 3. **Cap et position**, si l'on triangule ou reporte des points sur la carte.
 4. Puis mesurer, et **recaler sur la carte** les mesures qui le demandent (section 5).
@@ -472,7 +513,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 |---|---|---|---|
 | Pied masqué ou cliqué au-dessus du sol | quelques dizaines de cm à plusieurs mètres de profondeur | point au sol derrière le mur, distance et hauteur trop grandes | glisser le point sur la carte, viser à nouveau (section 5) |
 | Hauteur de caméra | ±10 à 20 % si non calée | largeurs et hauteurs proportionnelles | calage de hauteur (6.2) ; recalage sur la carte, qui l'élimine (5.3) |
-| Inclinaison de la caméra | 0,5 à 3° | mesures au sol : `δd ≈ d²/h · δe`, surtout sur le côté (roulis) | calage d'inclinaison (6.1) ; recalage sur la carte |
+| Inclinaison de la caméra | 0,5 à 3° (1 à 3° sur l'imajbox) | mesures au sol : `δd ≈ d²/h · δe`, surtout sur le côté (roulis) | inclinaison automatique (6.1 bis : ±0,1 à 0,2°, ±0,5° par le LiDAR) ; calage d'inclinaison (6.1) ; recalage sur la carte |
 | Terrain | creux, bosses, ponts, bordures | distances au sol | pente de Theil-Sen (3.1) ; recalage sur la carte |
 | Position GPS de la photo | 2 m (relevé) à 5 m et plus | position absolue des points ; peu d'effet sur les longueurs prises sur une photo | recalage par repères (6.3), pondération (4.4) |
 | Cap de la photo | 0,3° à plusieurs degrés ; +0,5° si arrondi | triangulation : `t · tan ε` de décalage latéral | cap EXIF précis (2.4), recalage du cap (6.3) |
@@ -489,7 +530,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 ### Exploiter mieux les données existantes
 
 - **Inclinaison fournie par la caméra** : lire `PosePitchDegrees` et `PoseRollDegrees` (XMP GPano) quand ils sont renseignés et non nuls.
-- **Inclinaison par séquence** : décomposer l'inclinaison en un défaut de montage constant plus la pente et le dévers de la route (tirés du MNT), pour caler toute une séquence à partir de deux ou trois photos.
+- **Inclinaison lissée le long de la séquence** : l'inclinaison du véhicule varie lentement d'une photo à l'autre (5 m) ; combiner les photos voisines réduirait le bruit des photos pauvres en verticales.
 - **Cap lissé** : combiner le cap EXIF avec la direction de la trajectoire et un décalage de montage constant.
 - **Axe de la route** ajusté sur plusieurs photos, ou cliqué par l'utilisateur.
 
@@ -575,6 +616,13 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | `GPS_ACCURACY`, `GPS_WARNING` | 3 m, 5 m | précision GPS supposée, seuil d'avertissement | `triangulation.py` |
 | `MIN_ANGLE`, `MAX_DISTANCE` | 3°, 500 m | croisement minimal et distance maximale d'un point triangulé | `triangulation.py` |
 | `MAX_TILT`, `MIN_SPAN`, `MAX_LEAN` | 10°, 3°, 30° | contrôles du calage d'inclinaison | `calibration.py` |
+| `MAX_DISTANCE`, `MIN_CROSSING`, `TANGENT` | 15 m, 45°, ±10 m | choix du tronçon BD TOPO et direction locale | `roads.py` |
+| `CELL`, `TRACK_RADIUS`, `RETRY` | 0,001° (~100 m), 20 m, 30 s | maille de lecture des tronçons, photos de la trajectoire, nouvel essai après une panne | `roads.py` |
+| `ELEV_MIN`, `ELEV_MAX`, `BAND_DEG` | 3°, 45°, 4° | bande et bandes d'analyse des verticales | `autotilt.py` |
+| `WIDTH` | 6 144 px | largeur de décodage de la photo | `autotilt.py` |
+| `MIN_SEGMENTS`, `MIN_QUADRANTS`, `MAX_SIGMA` | 40, 3, 0,25° | conditions pour retenir l'inclinaison des verticales | `autotilt.py` |
+| `LIDAR_ALONG`, `LIDAR_ACROSS` | 1,5 m, 0,8 m | grille LiDAR sous le véhicule | `calibration.py` |
+| `LIDAR_MIN_PHOTOS`, `LIDAR_MAX_SIGMA` | 3, 0,8° | validation du modèle LiDAR d'une séquence | `calibration.py` |
 | `SURVEY_PRIOR`, `PRIOR` | 0,5°, 3° | précision a priori du cap | `calibration.py` |
 | `REACH`, `OUTLIER` | 300 m, 4 | portée du recalage, seuil de refus d'un repère | `calibration.py` |
 | `CAMERA_MIN`, `CAMERA_MAX` | 0,3 m, 6 m | plage de recherche de la hauteur de caméra | `calibration.py` |

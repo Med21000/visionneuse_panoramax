@@ -28,6 +28,7 @@ from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
+from .roads import RoadAxisProvider
 from .terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
 
@@ -144,6 +145,8 @@ class PanoramaxPlugin:
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
         self.terrain = TerrainProvider()
+        self.roads = RoadAxisProvider()  # axe de la route au point mesuré (largeur perpendiculaire)
+        self.roads.ready = self._on_road_axis
         self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
     # ------------------------------------------------------------------
@@ -248,6 +251,7 @@ class PanoramaxPlugin:
             self.dock.facadeRequested.connect(self._on_facade_requested)
             self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
+            self.dock.tiltChanged.connect(self._on_tilt_changed)
             self.terrain.bridge = self.dock.on_bridge()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
@@ -467,6 +471,7 @@ class PanoramaxPlugin:
             self.measures.calibration = self.dock.calibration
             self.measures.plane_height = self.dock.spin_plane.value()
             self.measures.surface = self.dock.surface()
+            self.measures.road_lookup = self.roads.lookup
         return self.measures
 
     def _ensure_calibrator(self):
@@ -635,6 +640,26 @@ class PanoramaxPlugin:
             tool.new_camera = None
             spin = self.dock.spin_camera
             spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
+
+    def _on_road_axis(self):
+        """Axe de la route lu (BD TOPO ou trajectoire) : largeurs perpendiculaires recalculées."""
+        if self._unloaded or self.measures is None or self.dock is None:
+            return
+        if self.measures.recompute_roads() and self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_tilt_changed(self, pic):
+        """Inclinaison automatique arrivée après des clics sur la photo : ils sont corrigés."""
+        if self._unloaded or self.measures is None:
+            return
+        cal = self.dock.calibration
+
+        def correct(c):
+            gps = c.get("gps") or [None, None]
+            return cal.correct(pic, c.get("sequence"), c["raw"][0], c["raw"][1], gps[0], gps[1])
+
+        if self.measures.recorrect(pic, correct) and self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
 
     def _on_terrain_changed(self):
         self.terrain.bridge = self.dock.on_bridge()

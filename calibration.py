@@ -7,7 +7,10 @@
   On clique le pied puis le sommet d'objets verticaux (poteau, angle de façade) :
   chacun impose que la vraie verticale soit dans le plan qui contient la caméra
   et l'objet. Un objet corrige la pente vue de côté dans sa direction ; deux
-  objets à peu près à angle droit corrigent l'inclinaison complète.
+  objets à peu près à angle droit corrigent l'inclinaison complète. Sans clic,
+  l'inclinaison est calculée d'après les verticales de la photo (autotilt.py), ou à
+  défaut estimée par la pente et le dévers du LiDAR HD sous le véhicule, quand la
+  séquence a montré que la caméra penche avec lui (voir lidar_model).
 - Hauteur de caméra (par séquence) : on mesure une longueur connue, au sol
   (trait de marquage, place de stationnement) ou en hauteur (objet de hauteur
   connue). Les longueurs mesurées étant à peu près proportionnelles à la
@@ -42,6 +45,16 @@ SURVEY_PRIOR = 0.5  # précision du cap d'origine, matériel de relevé (degrés
 PRIOR = 3.0  # précision du cap d'origine, autres appareils (boussole, trajectoire GPS)
 REACH = 300.0  # portée du recalage (m) autour des photos qui l'ont servi : le GPS dérive au-delà
 OUTLIER = 4.0  # un repère qui s'écarte de plus de OUTLIER écarts-types des autres est refusé
+# Inclinaison estimée par le LiDAR HD : plan du sol ajusté sous le véhicule, sur une grille de
+# LIDAR_ALONG m devant et derrière la caméra et LIDAR_ACROSS m à droite et à gauche (sous les
+# roues) ; la grille atténue l'arrondi au centimètre des altitudes du service. Validé à
+# Pouilly-en-Auxois (imajbox, 18 photos) : 0,4° d'écart en long et 0,5° en travers avec les
+# verticales.
+LIDAR_ALONG, LIDAR_ACROSS = 1.5, 0.8
+LIDAR_GRID = [(a * LIDAR_ALONG, c * LIDAR_ACROSS) for a in (-1, -0.5, 0, 0.5, 1) for c in (-1, 0, 1)]
+LIDAR_MIN_PHOTOS = 3  # photos de la séquence calées par leurs verticales pour valider le modèle
+LIDAR_MAX_SIGMA = 0.8  # au-delà, la caméra ne suit pas le véhicule (portée à pied, stabilisée)
+LIDAR_MIN_SIGMA = 0.3
 
 
 CAMERA_MIN, CAMERA_MAX = 0.3, 6.0  # plage de hauteurs de caméra admises (m)
@@ -124,6 +137,63 @@ def tilt_from_verticals(verticals):
                                               for n in normals) / len(normals)))
     return {"up": up, "tilt": tilt, "toward": math.degrees(math.atan2(up[0], up[1])) % 360,
             "residual": residual, "partial": partial, "count": len(normals)}
+
+
+def tilt_components(up, heading):
+    """(avant, droite) en degrés : de combien la verticale vraie, vue de la caméra, penche
+    vers l'avant (cap `heading`) et vers la droite. Une caméra qui monte une pente de p° voit
+    la verticale pencher de p° vers l'avant ; inclinée vers la gauche, vers la droite."""
+    h = math.radians(heading)
+    return (math.degrees(math.atan2(up[0] * math.sin(h) + up[1] * math.cos(h), up[2])),
+            math.degrees(math.atan2(up[0] * math.cos(h) - up[1] * math.sin(h), up[2])))
+
+
+def up_from_components(forward, right, heading):
+    """Verticale vraie (repère de la photo) penchée de forward° vers l'avant et right° vers la
+    droite (inverse de tilt_components)."""
+    h = math.radians(heading)
+    f, r = math.tan(math.radians(forward)), math.tan(math.radians(right))
+    return _unit((f * math.sin(h) + r * math.cos(h), f * math.cos(h) - r * math.sin(h), 1.0))
+
+
+def lidar_points(lon, lat, heading):
+    """Points du sol où lire le LiDAR HD : grille LIDAR_GRID (en avant, à droite) autour de
+    la caméra."""
+    out = []
+    for along, right in LIDAR_GRID:
+        p = offset(lon, lat, heading, along) if along else (lon, lat)
+        out.append(offset(p[0], p[1], heading + 90, right) if right else p)
+    return out
+
+
+def lidar_slopes(z):
+    """(pente en long, dévers) en degrés du plan ajusté sur les altitudes des lidar_points
+    (grille symétrique : les pentes sont des moyennes pondérées indépendantes). La verticale
+    penche vers l'avant en montée, vers la droite quand la droite est plus haute."""
+    sa = sum(a * h for (a, _), h in zip(LIDAR_GRID, z)) / sum(a * a for a, _ in LIDAR_GRID)
+    sc = sum(c * h for (_, c), h in zip(LIDAR_GRID, z)) / sum(c * c for _, c in LIDAR_GRID)
+    return math.degrees(math.atan(sa)), math.degrees(math.atan(sc))
+
+
+def lidar_model(entries):
+    """Modèle de la séquence : la caméra penche-t-elle avec le véhicule ? entries : inclinaisons
+    automatiques des photos de la séquence (voir Calibration.auto). Retourne le décalage moyen
+    (avant, droite) entre verticales et LiDAR (fixation de la caméra), l'écart-type sigma et le
+    nombre de photos, ou None si trop peu de photos le vérifient ou si l'écart est trop grand."""
+    diffs = []
+    for e in entries:
+        v, lidar = e.get("verticals"), e.get("lidar")
+        if v and lidar:
+            f, r = tilt_components(v["up"], e["heading"])
+            diffs.append((f - lidar[0], r - lidar[1]))
+    if len(diffs) < LIDAR_MIN_PHOTOS:
+        return None
+    n = len(diffs)
+    mf, mr = sum(d[0] for d in diffs) / n, sum(d[1] for d in diffs) / n
+    sigma = math.sqrt(sum((d[0] - mf) ** 2 + (d[1] - mr) ** 2 for d in diffs) / (2 * max(n - 1, 1)))
+    if sigma > LIDAR_MAX_SIGMA:
+        return None
+    return {"offset": (mf, mr), "sigma": max(sigma, LIDAR_MIN_SIGMA), "count": n}
 
 
 def untilt(up, yaw, elev):
@@ -218,7 +288,12 @@ class Calibration:
         self.verticals = {}  # pic -> [((cap, élév.) pied, (cap, élév.) sommet)]
         self.landmarks = {}  # séquence -> [dicts : pic, lon, lat, yaw, elev, mlon, mlat, accuracy, prior]
         self.heights = {}  # séquence -> [(hauteur de caméra, incertitude)]
+        # pic -> inclinaison automatique : sequence, heading (cap du centre de l'image),
+        # verticals (up, count, sigma : d'après les verticales de la photo, ou None), lidar
+        # ((pente, dévers) en degrés sous le véhicule, ou None)
+        self.auto = {}
         self._tilts = {}
+        self._models = {}  # séquence -> lidar_model (cache)
         self.changed = None
 
     def _notify(self):
@@ -232,12 +307,14 @@ class Calibration:
             "verticals": {pic: [[list(b), list(t)] for b, t in v] for pic, v in self.verticals.items()},
             "landmarks": self.landmarks,
             "heights": {seq: [list(o) for o in obs] for seq, obs in self.heights.items()},
+            "auto": self.auto,
         }
 
     def load(self, data):
         """Remplace le calage par celui enregistré (dict de to_dict, ou None : calage vide).
         Les entrées illisibles sont ignorées. Ne déclenche pas `changed`."""
         self.verticals, self.landmarks, self.heights, self._tilts = {}, {}, {}, {}
+        self.auto, self._models = {}, {}
         if not isinstance(data, dict) or data.get("format") != self.FORMAT:
             return
         keys = ("pic", "lon", "lat", "yaw", "elev", "mlon", "mlat", "accuracy", "prior")
@@ -257,6 +334,10 @@ class Calibration:
                 obs = [(float(h), float(s)) for h, s in obs if float(s) > 0]
                 if obs:
                     self.heights[seq] = obs
+            for pic, entry in (data.get("auto") or {}).items():
+                entry = _auto_entry(entry)
+                if entry:
+                    self.auto[pic] = entry
         except (TypeError, ValueError, KeyError, IndexError, AttributeError):
             pass  # format abîmé : on garde ce qui a pu être lu
 
@@ -268,13 +349,14 @@ class Calibration:
         other.load(data)
         added = 0
         for mine, theirs in ((self.verticals, other.verticals), (self.landmarks, other.landmarks),
-                             (self.heights, other.heights)):
+                             (self.heights, other.heights), (self.auto, other.auto)):
             for key, obs in theirs.items():
                 if key not in mine:
                     mine[key] = obs
                     added += 1
         for pic, tilt in other._tilts.items():
             self._tilts.setdefault(pic, tilt)
+        self._models = {}
         return added
 
     # Inclinaison ---------------------------------------------------------
@@ -286,7 +368,45 @@ class Calibration:
         return result
 
     def tilt(self, pic):
-        return self._tilts.get(pic)
+        """Inclinaison de la photo (dict de tilt_from_verticals), ou None. Dans l'ordre : calée
+        à la main (source "clics"), calculée d'après les verticales de la photo
+        ("verticales"), estimée par le LiDAR HD ("lidar"), avec sigma (degrés) pour les
+        deux dernières."""
+        t = self._tilts.get(pic)
+        if t:
+            return dict(t, source="clics")
+        entry = self.auto.get(pic)
+        if not entry:
+            return None
+        v = entry.get("verticals")
+        if v:
+            up = tuple(v["up"])
+            return {"up": up, "tilt": math.degrees(math.acos(min(1.0, up[2]))),
+                    "toward": math.degrees(math.atan2(up[0], up[1])) % 360, "residual": None, "partial": False,
+                    "count": v["count"], "sigma": v["sigma"], "source": "verticales"}
+        model = self.lidar_model(entry.get("sequence"))
+        if model and entry.get("lidar"):
+            f = entry["lidar"][0] + model["offset"][0]
+            r = entry["lidar"][1] + model["offset"][1]
+            up = up_from_components(f, r, entry["heading"])
+            return {"up": up, "tilt": math.hypot(f, r), "toward": math.degrees(math.atan2(up[0], up[1])) % 360,
+                    "residual": None, "partial": False, "count": model["count"], "sigma": model["sigma"],
+                    "source": "lidar"}
+        return None
+
+    def set_auto(self, pic, entry):
+        """Inclinaison automatique de la photo (voir self.auto), enregistrée."""
+        self.auto[pic] = entry
+        self._models.pop(entry.get("sequence"), None)
+        self._notify()
+
+    def lidar_model(self, sequence):
+        """Modèle LiDAR de la séquence (voir lidar_model), ou None."""
+        if sequence is None:
+            return None
+        if sequence not in self._models:
+            self._models[sequence] = lidar_model([e for e in self.auto.values() if e.get("sequence") == sequence])
+        return self._models[sequence]
 
     def clear_tilt(self, pic):
         self.verticals.pop(pic, None)
@@ -294,7 +414,7 @@ class Calibration:
         self._notify()
 
     def untilted(self, pic, yaw, elev):
-        t = self._tilts.get(pic)
+        t = self.tilt(pic)
         return untilt(t["up"], yaw, elev) if t else (yaw % 360, elev)
 
     # Hauteur de caméra --------------------------------------------------------
@@ -456,6 +576,22 @@ class Calibration:
         """Erreur de visée (degrés) d'une séquence recalée, ou None si elle ne l'est pas."""
         pose = self.pose(sequence, lon, lat)
         return math.hypot(pose["sigma"], AIM_ERROR) if pose else None
+
+
+def _auto_entry(entry):
+    """Inclinaison automatique relue (voir Calibration.auto), ou None si illisible."""
+    try:
+        out = {"sequence": entry.get("sequence"), "heading": float(entry["heading"]), "verticals": None,
+               "lidar": None}
+        v = entry.get("verticals")
+        if v:
+            up = _unit(tuple(float(c) for c in v["up"]))
+            out["verticals"] = {"up": list(up), "count": int(v["count"]), "sigma": float(v["sigma"])}
+        if entry.get("lidar"):
+            out["lidar"] = [float(entry["lidar"][0]), float(entry["lidar"][1])]
+        return out
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError, ZeroDivisionError):
+        return None
 
 
 def _inverse3(m):

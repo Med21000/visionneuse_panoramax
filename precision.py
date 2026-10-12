@@ -101,10 +101,14 @@ def camera_suggestion(res):
                            "({}). Cliquer pour remplir le champ « Caméra à ».".format(how))
 
 
-def state_text(res, accuracy=None):
-    """Ligne d'état du panneau : précision de la position et présence du LiDAR HD."""
+def state_text(res, accuracy=None, tilt=None):
+    """Ligne d'état du panneau : précision de la position, présence du LiDAR HD et, si
+    `tilt` (texte, manquante) est donné, inclinaison de la photo."""
+    tilt_text, tilt_missing = tilt or ("", False)
     if not res:
-        return "Position GPS et LiDAR HD : vérification en cours…"
+        text = "Position GPS et LiDAR HD : vérification en cours…"
+        return "⚠ {} · {}".format(text, tilt_text) if tilt_missing else (
+            "{} · {}".format(text, tilt_text) if tilt_text else text)
     if res["precise"]:
         position = "Position GPS vérifiée (±{} m)".format("{:.2f}".format(res["accuracy"]).replace(".", ","))
     elif accuracy is not None:
@@ -112,8 +116,12 @@ def state_text(res, accuracy=None):
     else:
         position = "Position GPS non vérifiée"
     lidar = {True: "LiDAR HD", False: "pas de LiDAR HD", None: "LiDAR HD non vérifié"}[res["lidar"]]
-    text = "{} · {}".format(position, lidar)
-    return "⚠ " + text + " : mode de mesure dégradé" if degraded(res) else text
+    text = " · ".join(t for t in (position, lidar, tilt_text) if t)
+    if degraded(res):
+        return "⚠ " + text + " : mode de mesure dégradé"
+    if tilt_missing:
+        return "⚠ " + text + " : calez-la sur deux objets verticaux"
+    return text
 
 
 class PrecisionChecker:

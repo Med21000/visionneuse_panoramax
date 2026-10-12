@@ -69,6 +69,17 @@ class FakeChecker:
             callback(res)
 
 
+class FakeTilts:
+    """Inclinaison automatique : rien à calculer (voir test_autotilt.py)."""
+
+    def pending(self, pic):
+        return False
+
+    def check(self, item, cal, done=None):
+        if done:
+            done()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.requests = []
@@ -84,13 +95,14 @@ class Base(unittest.TestCase):
         self.dock = viewer_dock.PanoramaxDock()
         self.dock.calibration = calibration.Calibration()
         self.dock.precision = FakeChecker()
+        self.dock.tilts = FakeTilts()
         self.popups = []
         self.dock._show_degraded_popup = lambda reasons: self.popups.append(reasons) or False
         self.signals = []
         for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoClicked", "aimRequested",
                      "measureSaveRequested", "measureClearRequested", "measureClearAllRequested",
                      "cameraHeightChanged", "surfaceChanged", "planeHeightChanged", "terrainChanged",
-                     "filterChanged", "message"):
+                     "filterChanged", "message", "tiltChanged"):
             getattr(self.dock, name).connect(lambda *args, n=name: self.signals.append((n, args)))
         self.dock.resize(1092, 990)
         self.dock.show()
@@ -302,7 +314,8 @@ class DegradedMode(Base):
         dock.show_picture("q1", 5.0415, 47.322)
         dock.btn_measure.setChecked(True)
         self.assertEqual(self.popups, [])
-        self.assertEqual(dock.measure_box.lbl_quality.text(), "Position GPS vérifiée (±0,10 m) · LiDAR HD")
+        self.assertEqual(dock.measure_box.lbl_quality.text(), "⚠ Position GPS vérifiée (±0,10 m) · LiDAR HD · "
+                                                              "inclinaison non calée : calez-la sur deux objets verticaux")
         dock._on_native_click(95.0, -10.0)
         self.assertEqual(self.emitted("photoClicked")[-1][0]["accuracy"], 0.1)
         dock.btn_measure.setChecked(False)
@@ -338,6 +351,49 @@ class DegradedMode(Base):
         dock.show_picture("p1", 5.0415, 47.322)
         self.assertAlmostEqual(box.spin_camera.value(), 1.87)  # le champ n'est jamais changé sans clic
         self.assertFalse(self.visible(btn))
+
+
+class DeferredTilts(FakeTilts):
+    """Inclinaison automatique en cours de calcul jusqu'à l'appel de self.done."""
+
+    def __init__(self):
+        self.done, self.checked = None, []
+
+    def pending(self, pic):
+        return self.done is not None
+
+    def check(self, item, cal, done=None):
+        self.checked.append(item["id"])
+        self.done = done
+
+
+class AutomaticTilt(Base):
+    def test_state_line(self):
+        dock = self.dock
+        tilts = dock.tilts = DeferredTilts()
+        dock.show_picture("q1", 5.0415, 47.322)
+        self.assertEqual(tilts.checked, [])  # mesure inactive : pas de téléchargement
+        dock.btn_measure.setChecked(True)
+        self.assertEqual(tilts.checked, ["q1"])
+        self.assertEqual(dock.measure_box.lbl_quality.text(),
+                         "Position GPS vérifiée (±0,10 m) · LiDAR HD · inclinaison en cours de calcul…")
+        up = calibration.up_from_components(1.2, 0.5, 0.0)
+        dock.calibration.set_auto("q1", {"sequence": "rtk", "heading": 0.0, "lidar": None,
+                                         "verticals": {"up": list(up), "count": 90, "sigma": 0.12}})
+        done, tilts.done = tilts.done, None
+        done()
+        self.assertEqual(self.emitted("tiltChanged"), [("q1",)])
+        self.assertEqual(dock.measure_box.lbl_quality.text(), "Position GPS vérifiée (±0,10 m) · LiDAR HD · "
+                                                              "inclinaison calée (verticales de la photo, ±0,1°)")
+        self.assertIn("corrigée automatiquement", dock.measure_box.lbl_calibration.text())
+        # Clic suivant : direction corrigée de l'inclinaison
+        dock._on_native_click(95.0, -10.0)
+        click = self.emitted("photoClicked")[-1][0]
+        self.assertEqual(click["raw"], [95.0, -10.0])
+        self.assertNotAlmostEqual(click["elev"], -10.0, places=2)
+        # Photo suivante pendant la mesure : analysée à son tour
+        dock.show_picture("p1", 5.0415, 47.322)
+        self.assertEqual(tilts.checked, ["q1", "p1"])
 
 
 if __name__ == "__main__":

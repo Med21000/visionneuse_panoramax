@@ -139,6 +139,8 @@ class Measure:
         self.fid = None  # entité de la couche des mesures, une fois enregistrée
         self.layer_id = None  # couche de cette entité : un fid ne vaut que dans sa couche
         self.saved = None  # résultat au moment de l'enregistrement (voir _snapshot)
+        self.road = None  # axe de la route au point mesuré (largeur perpendiculaire, voir roads.py)
+        self.road_pending = False  # lecture de cet axe en cours
 
     def needed(self):
         return 4 if self.surface == "tri3d" else 2
@@ -282,6 +284,34 @@ class Measure:
                 incidence = angle if incidence is None else min(incidence, angle)
         return pts, incidence, origin, sources
 
+    @property
+    def axis(self):
+        """Axe de la route retenu (cap en degrés) : au point mesuré si connu (voir roads.py),
+        sinon direction du véhicule à la caméra, portée par le premier clic."""
+        return self.road["axis"] if self.road else self.clicks[0].get("axis")
+
+    @property
+    def axis_source(self):
+        if self.road:
+            return self.road["source"]
+        source = self.clicks[0].get("axis_source")
+        return source + ", lecture de la BD TOPO…" if self.road_pending and source else source
+
+    def _road_axis(self, pts, origin):
+        """Axe de la route au milieu des deux bords (voir roads.py), si l'outil sait le lire."""
+        lookup = self.tool.road_lookup
+        self.road, self.road_pending = None, False
+        if lookup is None:
+            return
+        mid = ((pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2, pts[0][2])
+        lon, lat = geometry.to_geographic(mid, origin)[:2]
+        crossing = math.degrees(math.atan2(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])) % 360
+        res = lookup(lon, lat, crossing, self.clicks[0].get("sequence"))
+        if isinstance(res, dict):
+            self.road = res
+        else:
+            self.road_pending = res == "pending"
+
     def quantity(self, d):
         """Grandeur mesurée d'après la décomposition d (voir geometry.decompose)."""
         if self.kind == "road":
@@ -298,7 +328,7 @@ class Measure:
 
     def _value(self, **variant):
         pts, _, _, _ = self.points(**variant)
-        return self.quantity(geometry.decompose(pts[0], pts[1], self.clicks[0].get("axis")))
+        return self.quantity(geometry.decompose(pts[0], pts[1], self.axis))
 
     def _spread(self):
         """Écart maximal de la mesure quand varient : l'élévation de chaque clic (±PITCH_ERROR),
@@ -354,7 +384,9 @@ class Measure:
                 raise geometry.GeometryError("Le pied et le sommet doivent être cliqués sur la même photo.")
             pts, self.incidence, origin, sources = self.points()
             if len(pts) == 2 and len(self.clicks) == self.needed():
-                d = geometry.decompose(pts[0], pts[1], self.clicks[0].get("axis"))
+                if self.kind == "road":
+                    self._road_axis(pts, origin)
+                d = geometry.decompose(pts[0], pts[1], self.axis)
                 value = self.quantity(d)
                 lonlat = [geometry.to_geographic(p, origin)[:2] for p in pts]
                 ranges = []
@@ -367,7 +399,7 @@ class Measure:
                 if self.kind == "road":
                     # Trait perpendiculaire à l'axe, à mi-chemin des deux bords cliqués le long de la
                     # route ; chaque bout est relié en pointillés à son bord cliqué
-                    a = math.radians(self.clicks[0]["axis"])
+                    a = math.radians(self.axis)
                     ux, uy = math.sin(a), math.cos(a)
                     half = ((pts[1][0] - pts[0][0]) * ux + (pts[1][1] - pts[0][1]) * uy) / 2.0
                     start = (pts[0][0] + half * ux, pts[0][1] + half * uy, pts[0][2])
@@ -514,8 +546,7 @@ class Measure:
         value, unc = _num(r["value"], 2), _num(r["uncertainty"], 2)
         if self.kind == "road":
             text = ("Largeur perpendiculaire à la chaussée : {} m (±{} m) · en biais {} m · axe {}° ({})").format(
-                value, unc, _num(d["horizontal"], 2), _num(self.clicks[0]["axis"], 0),
-                self.clicks[0].get("axis_source") or "?")
+                value, unc, _num(d["horizontal"], 2), _num(self.axis % 180, 0), self.axis_source or "?")
         elif self.kind == "width":
             text = "Longueur : {} m (±{} m) entre les deux points · à {} et {} m de la photo".format(
                 value, unc, _num(r["ranges"][0]), _num(r["ranges"][1]))
@@ -565,6 +596,7 @@ class MeasureTool:
         self.mode = "road"  # préréglage, ou "free"
         self.surface = "ground"  # surface de la mesure libre
         self.camera_height = DEFAULT_CAMERA_HEIGHT  # hauteur saisie dans le panneau
+        self.road_lookup = None  # roads.RoadAxisProvider.lookup : axe de la route au point mesuré
         self.calibration = None  # calibration.Calibration : hauteur calée par séquence
         self.plane_height = 1.0  # hauteur du plan horizontal au-dessus du sol (m)
         self.facade = None  # Facade en cours (voir Facade)
@@ -769,6 +801,28 @@ class MeasureTool:
     def measures(self):
         """Toutes les mesures affichées (terminées, puis en cours)."""
         return self.done + ([self.current] if self.current is not None else [])
+
+    def recompute_roads(self):
+        """Axe de la route arrivé (voir roads.py) : largeurs perpendiculaires recalculées.
+        Retourne le nombre de mesures concernées."""
+        roads = [m for m in self.measures() if m.kind == "road" and len(m.clicks) == m.needed()]
+        for m in roads:
+            m.compute()
+        return len(roads)
+
+    def recorrect(self, pic, correct):
+        """Calage de la photo `pic` changé (inclinaison automatique arrivée après les clics) :
+        directions de ses clics recalculées depuis leur direction brute par correct(clic) →
+        (cap, élévation), puis mesures recalculées. Retourne le nombre de mesures concernées."""
+        count = 0
+        for m in self.measures():
+            clicks = [c for c in m.clicks if c.get("pic") == pic and c.get("raw")]
+            for c in clicks:
+                c["yaw"], c["elev"] = correct(c)
+            if clicks:
+                m.compute()
+                count += 1
+        return count
 
     # Enregistrement -----------------------------------------------------------
     def save(self, parent=None):

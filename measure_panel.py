@@ -46,10 +46,16 @@ def calibration_text(cal, pic, sequence, lon, lat):
     """Calage de la photo et de la séquence affichées (texte, vide sans calage)."""
     parts = []
     tilt = cal.tilt(pic) if pic else None
-    if tilt:
+    if tilt and tilt.get("source", "clics") == "clics":
         parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
             tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
             "s" if tilt["count"] > 1 else "").replace(".", ","))
+    elif tilt and tilt["source"] == "verticales":
+        parts.append("inclinaison {:.1f}° corrigée automatiquement ({} verticales de la photo, ±{:.1f}°)".format(
+            tilt["tilt"], tilt["count"], max(tilt["sigma"], 0.1)).replace(".", ","))
+    elif tilt:
+        parts.append("inclinaison {:.1f}° estimée par la pente et le dévers LiDAR HD (±{:.1f}°, modèle vérifié "
+                     "sur {} photos de la séquence)".format(tilt["tilt"], tilt["sigma"], tilt["count"]).replace(".", ","))
     camera = cal.camera(sequence) if sequence else None
     if camera:
         parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(

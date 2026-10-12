@@ -30,6 +30,18 @@ class CalibrationText(unittest.TestCase):
         self.assertEqual(self.text(), "Calage : inclinaison 1,8° corrigée en partie (1 objet) · "
                                       "caméra à 2,10 m (±0,04 m, 2 références)")
 
+    def test_automatic_tilt(self):
+        up = calibration.up_from_components(1.5, -0.8, 30.0)
+        self.cal.set_auto("p1", {"sequence": "s1", "heading": 30.0, "lidar": [1.0, -0.6],
+                                 "verticals": {"up": list(up), "count": 140, "sigma": 0.08}})
+        self.assertEqual(self.text(), "Calage : inclinaison 1,7° corrigée automatiquement (140 verticales de la "
+                                      "photo, ±0,1°)")
+        for i in range(3):
+            self.cal.set_auto("v{}".format(i), self.cal.auto["p1"])
+        self.cal.set_auto("p2", {"sequence": "s1", "heading": 30.0, "lidar": [1.0, 0.0], "verticals": None})
+        self.assertEqual(self.text(pic="p2"), "Calage : inclinaison 1,5° estimée par la pente et le dévers LiDAR HD "
+                                              "(±0,3°, modèle vérifié sur 4 photos de la séquence)")
+
     def test_heading(self):
         mark = point(0, 80)
         self.cal.add_landmark("s1", "p1", LON0, LAT0, bearing((LON0, LAT0), mark) - 2.0, -2.0, *mark, 3.0, False)

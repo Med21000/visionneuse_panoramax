@@ -206,5 +206,19 @@ class Texts(unittest.TestCase):
         self.assertFalse(precision.degraded(None))  # vérification en cours
         self.assertIn("en cours", precision.state_text(None))
 
+    def test_tilt(self):
+        res = precision.result(True, 0.1, True, "vérifiée")
+        self.assertEqual(precision.state_text(res, tilt=("inclinaison calée à la main", False)),
+                         "Position GPS vérifiée (±0,10 m) · LiDAR HD · inclinaison calée à la main")
+        # Position et LiDAR, mais inclinaison non calée : avertissement
+        self.assertEqual(precision.state_text(res, tilt=("inclinaison non calée", True)),
+                         "⚠ Position GPS vérifiée (±0,10 m) · LiDAR HD · inclinaison non calée : calez-la sur deux "
+                         "objets verticaux")
+        degraded = precision.result(False, lidar=True, reason="GPS simple")
+        self.assertTrue(precision.state_text(degraded, 4.0, ("inclinaison non calée", True)).endswith(
+            "inclinaison non calée : mode de mesure dégradé"))
+        self.assertEqual(precision.state_text(None, tilt=("inclinaison non calée", True)),
+                         "⚠ Position GPS et LiDAR HD : vérification en cours… · inclinaison non calée")
+
 if __name__ == "__main__":
     unittest.main()

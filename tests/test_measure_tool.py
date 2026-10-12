@@ -38,7 +38,8 @@ def click(target, photo=(0.0, 0.0), pic="p1", camera=CAMERA, **extra):
     dx, dy, dz = target[0] - photo[0], target[1] - photo[1], target[2] - camera
     lon, lat = point(*photo)
     c = {"lon": lon, "lat": lat, "pic": pic, "yaw": math.degrees(math.atan2(dx, dy)) % 360,
-         "elev": math.degrees(math.atan2(dz, math.hypot(dx, dy))), "axis": 0.0, "sequence": "s1"}
+         "elev": math.degrees(math.atan2(dz, math.hypot(dx, dy))), "axis": 0.0, "axis_source": "séquence",
+         "sequence": "s1"}
     c.update(extra)
     return c
 
@@ -241,6 +242,69 @@ class Relocation(Base):
         m = self.measure("width", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         m.reaim(1, click((4.0, 16.0, 0.0)))
         self.assertValue(m, math.hypot(7.0, 8.0))
+
+
+class RoadAxisAtMeasure(Base):
+    """Axe de la route lu au point mesuré (roads.py) plutôt que la direction du véhicule."""
+
+    def test_axis_at_measured_point(self):
+        a = math.radians(30.0)  # la route tourne : axe de 30° au point mesuré, 0° à la caméra
+        along, across = (math.sin(a), math.cos(a)), (math.cos(a), -math.sin(a))
+        p1 = (-2.0, 9.0)
+        p2 = (p1[0] + 6.0 * across[0] + 3.0 * along[0], p1[1] + 6.0 * across[1] + 3.0 * along[1])
+        asked = []
+
+        def lookup(lon, lat, crossing, sequence):
+            asked.append((lon, lat, crossing, sequence))
+            return {"axis": 210.0, "source": "BD TOPO, D16"}  # même droite, autre sens
+
+        self.tool.road_lookup = lookup
+        m = self.measure("road", [click(p1 + (0.0,)), click(p2 + (0.0,))])
+        self.assertValue(m, 6.0)
+        lon, lat, crossing, sequence = asked[-1]
+        self.assertLess(distance((lon, lat), point((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2)), 1e-6)  # milieu
+        self.assertAlmostEqual(crossing, math.degrees(math.atan2(p2[0] - p1[0], p2[1] - p1[1])) % 360, places=6)
+        self.assertEqual(sequence, "s1")
+        self.assertIn("axe 30° (BD TOPO, D16)", m.status())
+        start = (p1[0] + 1.5 * along[0], p1[1] + 1.5 * along[1])  # trait perpendiculaire au nouvel axe
+        self.assertLess(distance(m.result["points"][0], point(*start)), 1e-6)
+
+    def test_pending_then_ready(self):
+        answer = ["pending"]
+        self.tool.road_lookup = lambda *args: answer[0]
+        a = math.radians(30.0)
+        p1, p2 = (-2.0, 9.0), (-2.0 + 6.0 * math.cos(a), 9.0 - 6.0 * math.sin(a))
+        m = self.measure("road", [click(p1 + (0.0,)), click(p2 + (0.0,))])
+        self.assertNotAlmostEqual(m.result["value"], 6.0, places=2)  # axe de la caméra (0°) en attendant
+        self.assertIn("(séquence, lecture de la BD TOPO…)", m.status().replace("axe 0° (", "("))
+        answer[0] = {"axis": 30.0, "source": "BD TOPO"}
+        self.assertEqual(self.tool.recompute_roads(), 1)
+        self.assertValue(m, 6.0)
+        answer[0] = None  # rien de lisible : axe de la caméra, sans attente annoncée
+        self.tool.recompute_roads()
+        self.assertNotIn("lecture", m.status())
+
+
+class Recorrect(Base):
+    def test_tilt_arrived_after_clicks(self):
+        """Inclinaison automatique arrivée après les clics : ils sont corrigés, la mesure aussi."""
+        from test_calibration import seen
+
+        up = calibration.up_from_components(2.0, 1.0, 0.0)
+        clicks = []
+        for target in ((-3.0, 8.0, 0.0), (4.0, 8.0, 0.0)):
+            c = click(target)
+            c["yaw"], c["elev"] = seen(up, c["yaw"], c["elev"])  # vu par la caméra inclinée
+            c["raw"] = [c["yaw"], c["elev"]]
+            clicks.append(c)
+        m = self.measure("road", clicks)
+        self.assertGreater(abs(m.result["value"] - 7.0), 0.1)  # faussée par l'inclinaison
+        before = m.result["value"]
+        n = self.tool.recorrect("p1", lambda c: calibration.untilt(up, *c["raw"]))
+        self.assertEqual(n, 1)
+        self.assertValue(m, 7.0)
+        self.assertNotEqual(m.result["value"], before)
+        self.assertEqual(self.tool.recorrect("p3", lambda c: (0.0, 0.0)), 0)  # autre photo : rien
 
 
 if __name__ == "__main__":

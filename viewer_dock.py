@@ -41,7 +41,7 @@ import math
 import os
 import re
 
-from . import altitude, api, precision
+from . import altitude, api, autotilt, precision
 from .calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
@@ -136,6 +136,7 @@ class PanoramaxDock(QDockWidget):
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
     filterChanged = pyqtSignal(object)  # filtre des photos modifié (filters.PhotoFilter)
+    tiltChanged = pyqtSignal(str)  # inclinaison automatique d'une photo rangée dans le calage
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -153,6 +154,7 @@ class PanoramaxDock(QDockWidget):
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
         self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
         self._quality = None  # résultat de la vérification pour la photo affichée
+        self.tilts = autotilt.TiltChecker()  # inclinaison automatique des photos (mesure activée)
         self._warn_pending = False  # mesure activée : avertir du mode dégradé dès que la photo est vérifiée
         self._no_degraded_popup = False  # « Ne plus afficher pendant cette session »
 
@@ -399,6 +401,8 @@ class PanoramaxDock(QDockWidget):
         self.measure_box.reset_heights()
         self.measure_box.setVisible(checked)
         self._warn_pending = checked
+        if checked:
+            self._check_tilt()
         self._update_quality()
         self._update_measure_widgets()
         self.measureToggled.emit(checked)
@@ -507,12 +511,38 @@ class PanoramaxDock(QDockWidget):
         self._update_quality()
 
     def _update_quality(self):
-        """Ligne d'état sous les mesures (précision de la position, LiDAR HD), et avertissement du
-        mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
+        """Ligne d'état sous les mesures (précision de la position, LiDAR HD, inclinaison), et
+        avertissement du mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
         item = self._current_item
-        self.measure_box.set_quality_text(precision.state_text(self._quality, api.item_accuracy(item)) if item else "")
+        self.measure_box.set_quality_text(
+            precision.state_text(self._quality, api.item_accuracy(item), self._tilt_state()) if item else "")
         self.measure_box.set_camera_suggestion(precision.camera_suggestion(self._quality) if item else None)
         self._warn_if_degraded()
+
+    # Inclinaison automatique (voir autotilt.py) ----------------------------------
+    def _check_tilt(self):
+        item = self._current_item
+        if item and item.get("id") == self._current_pic:
+            self.tilts.check(item, self.calibration, lambda pid=self._current_pic: self._on_tilt(pid))
+
+    def _on_tilt(self, pic):
+        self.tiltChanged.emit(pic)
+        if pic == self._current_pic:
+            self.update_calibration_label()
+            self._update_quality()
+
+    def _tilt_state(self):
+        """(texte, manquante) : inclinaison de la photo affichée, pour la ligne d'état."""
+        pic = self._current_pic
+        tilt = self.calibration.tilt(pic) if pic else None
+        if tilt:
+            if tilt["source"] == "clics":
+                return "inclinaison calée à la main", False
+            how = "verticales de la photo" if tilt["source"] == "verticales" else "pente et dévers LiDAR HD"
+            return "inclinaison calée ({}, ±{:.1f}°)".format(how, max(tilt["sigma"], 0.1)).replace(".", ","), False
+        if pic and self.tilts.pending(pic):
+            return "inclinaison en cours de calcul…", False
+        return "inclinaison non calée", True
 
     def _warn_if_degraded(self):
         """À l'activation de la mesure, sur une photo en mode dégradé : fenêtre d'avertissement,
@@ -964,6 +994,8 @@ class PanoramaxDock(QDockWidget):
         self._quality = self.precision.known(item)
         self._update_quality()
         self.precision.check(item, lambda res, pid=pic_id: self._on_precision(pid, res))
+        if self.btn_measure.isChecked():
+            self._check_tilt()
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
         self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):

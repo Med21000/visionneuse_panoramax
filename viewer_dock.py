@@ -864,7 +864,8 @@ class PanoramaxDock(QDockWidget):
     # Synchronisation
     # ------------------------------------------------------------------
     def _poll_url(self):
-        if self.isVisible() and self.web is not None:
+        # Fenêtre de QGIS réduite : la vue ne change pas, inutile d'interroger la page
+        if self.isVisible() and self.web is not None and not self.window().isMinimized():
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
             # Filtrage anisotrope : une lecture sur dix (toutes les secondes) suffit. Décoché,
@@ -948,11 +949,13 @@ class PanoramaxDock(QDockWidget):
             if self.web is None:
                 self.native.show_error(error)
             return
+        pic_id = item.get("id", "")
+        if pic_id != api.requested_id():
+            return  # fiche arrivée après qu'une autre photo a été demandée : périmée
         try:
             lon, lat = item["geometry"]["coordinates"][:2]
         except (KeyError, TypeError, ValueError):
             return
-        pic_id = item.get("id", "")
         heading = api.item_heading(item)
         self._current_item = item
         self._current_pic = pic_id

@@ -137,6 +137,7 @@ class Measure:
         self.incidence = None  # angle d'incidence le plus rasant sur un plan (degrés)
         self.item = None
         self.fid = None  # entité de la couche des mesures, une fois enregistrée
+        self.layer_id = None  # couche de cette entité : un fid ne vaut que dans sa couche
         self.saved = None  # résultat au moment de l'enregistrement (voir _snapshot)
 
     def needed(self):
@@ -785,15 +786,19 @@ class MeasureTool:
         if layer is None:
             return False, error
         added = updated = 0
+        managed = output.field_names(LAYER_FIELDS)
         for m in todo:
-            fid = output.write_feature(layer, m.feature(layer), m.fid)
+            # Couche changée depuis l'enregistrement (retirée du projet, autre GeoPackage) : son
+            # ancien fid désignerait une autre entité, la mesure est ajoutée
+            old_fid = m.fid if m.layer_id == layer.id() else None
+            fid = output.write_feature(layer, m.feature(layer), old_fid, managed)
             if fid is None:
                 return False, "Impossible d'enregistrer la mesure dans la couche « {} ».".format(layer.name())
-            if m.fid is not None and fid == m.fid:
+            if old_fid is not None and fid == old_fid:
                 updated += 1
             else:
                 added += 1
-            m.fid, m.saved = fid, m._snapshot()
+            m.fid, m.layer_id, m.saved = fid, layer.id(), m._snapshot()
         parts = []
         if added:
             parts.append("{} mesure{} ajoutée{}".format(added, *(("s", "s") if added > 1 else ("", ""))))

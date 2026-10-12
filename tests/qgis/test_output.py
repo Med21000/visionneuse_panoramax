@@ -128,6 +128,39 @@ class WriteFeature(Base):
         self.assertTrue(layer.commitChanges())
         self.assertEqual(layer.featureCount(), 2)
 
+    def check_kept(self, layer):
+        """Mise à jour : le commentaire de l'utilisateur et les champs non calculés sont conservés."""
+        fid = output.write_feature(layer, feature(layer, 1.0))
+        index = layer.fields().indexOf("commentaire")
+        if layer.isEditable():
+            self.assertTrue(layer.changeAttributeValue(fid, index, "à vérifier"))
+        else:
+            self.assertTrue(layer.dataProvider().changeAttributeValues({fid: {index: "à vérifier"}}))
+        new = feature(layer, 2.0)
+        new.setAttribute("nom", "b")
+        self.assertEqual(output.write_feature(layer, new, fid, managed=["valeur"]), fid)
+        updated = layer.getFeature(fid)
+        self.assertEqual(updated["valeur"], 2.0)
+        self.assertEqual(updated["nom"], "a")  # champ hors de `managed` : inchangé
+        self.assertEqual(updated["commentaire"], "à vérifier")
+        self.assertEqual(output.write_feature(layer, new, fid), fid)  # tous les champs calculés…
+        self.assertEqual(layer.getFeature(fid)["nom"], "b")
+        self.assertEqual(layer.getFeature(fid)["commentaire"], "à vérifier")  # … sauf le commentaire
+
+    def test_comment_kept(self):
+        fields = FIELDS + "&field=commentaire:string"
+        self.check_kept(self.ensure(new_path(), fields=fields)[0])
+        QgsProject.instance().clear()
+        self.check_kept(self.ensure("", fields=fields)[0])
+        QgsProject.instance().clear()
+        layer, _ = self.ensure(new_path(), fields=fields)
+        layer.startEditing()
+        self.check_kept(layer)
+        self.assertTrue(layer.commitChanges())
+
+    def test_field_names(self):
+        self.assertEqual(output.field_names("field=a:string&field=b_m:double&crs=EPSG:4326"), ["a", "b_m"])
+
 
 class AskStorage(unittest.TestCase):
     """Boîte de dialogue du choix : bouton cliqué et fenêtre de fichier simulés."""
@@ -198,6 +231,44 @@ class EndToEnd(Base):
         self.assertEqual(tool.save(), (True, "1 mise à jour dans « Panoramax – mesures »."))
         self.assertEqual(layer.featureCount(), 1)
         self.assertEqual(next(layer.getFeatures())["recales"], 1)
+
+    def measure_tool(self, far=12.0):
+        tool = measure_tool.MeasureTool(self.canvas)
+        tool.set_mode("width")
+        for target in ((-3.0, 8.0), (4.0, far)):
+            tool.add_click(self.click(target))
+        return tool
+
+    def test_comment_kept_on_update(self):
+        tool = self.measure_tool()
+        self.assertTrue(tool.save()[0])
+        layer = output.find_layer("measures")
+        fid = next(layer.getFeatures()).id()
+        index = layer.fields().indexOf("commentaire")
+        self.assertTrue(layer.dataProvider().changeAttributeValues({fid: {index: "bordure abîmée"}}))
+        tool.current.relocate(1, *point(4.0, 20.0))
+        self.assertEqual(tool.save(), (True, "1 mise à jour dans « Panoramax – mesures »."))
+        f = layer.getFeature(fid)
+        self.assertEqual(f["commentaire"], "bordure abîmée")
+        self.assertEqual(f["recales"], 1)
+
+    def test_other_layer_not_overwritten(self):
+        """Mesure enregistrée, couche retirée, puis enregistrée à nouveau dans un autre GeoPackage
+        dont la table a déjà une entité de même fid : celle-ci n'est pas écrasée."""
+        tool = self.measure_tool()
+        self.assertTrue(tool.save()[0])
+        QgsProject.instance().clear()
+        other_path = new_path("autre.gpkg")
+        with mock.patch.object(output, "_ask_storage", return_value=other_path):
+            other = self.measure_tool(far=30.0)
+            self.assertTrue(other.save()[0])
+            other_layer = output.find_layer("measures")
+            before = {f.id(): f["valeur_m"] for f in other_layer.getFeatures()}
+            self.assertIn(tool.current.fid, before)  # même fid que la mesure de l'autre fichier
+            tool.current.relocate(1, *point(4.0, 20.0))
+            self.assertEqual(tool.save(), (True, "1 mesure ajoutée dans « Panoramax – mesures »."))
+        self.assertEqual(other_layer.featureCount(), 2)
+        self.assertEqual(other_layer.getFeature(next(iter(before)))["valeur_m"], next(iter(before.values())))
 
     def test_triangulated_point(self):
         tri = measure.Triangulator(self.canvas)

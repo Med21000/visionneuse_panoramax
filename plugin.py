@@ -11,6 +11,7 @@ from qgis.core import (
     Qgis,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsCsException,
     QgsPointXY,
     QgsProject,
     QgsSettings,
@@ -143,6 +144,7 @@ class PanoramaxPlugin:
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
         self.terrain = TerrainProvider()
+        self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -180,6 +182,8 @@ class PanoramaxPlugin:
         layers.watch_opacity(QgsProject.instance().mapLayers().values())
 
     def unload(self):
+        self._unloaded = True
+        api.abort_all()  # requêtes en cours abandonnées : leurs callbacks ne seront pas appelés
         for signal, slot in ((QgsProject.instance().readProject, self._import_project_calibration),
                              (QgsProject.instance().layersAdded, layers.watch_opacity)):
             try:
@@ -360,7 +364,11 @@ class PanoramaxPlugin:
             return
         to_wgs = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), WGS84,
                                         QgsProject.instance())
-        p = to_wgs.transform(point)
+        try:
+            p = to_wgs.transform(point)
+        except QgsCsException:  # point hors du domaine du SCR de la carte
+            self.iface.statusBarIface().showMessage("Panoramax : point hors du domaine du SCR de la carte.", 5000)
+            return
         lon, lat = p.x(), p.y()
         # Rayon de recherche adapté à l'échelle (≈ 15 pixels, entre 10 et 150 m)
         radius = min(150.0, max(10.0, self.canvas.mapUnitsPerPixel() * 15 *
@@ -376,9 +384,11 @@ class PanoramaxPlugin:
         self.iface.statusBarIface().showMessage("Panoramax : recherche de la photo la plus proche…", 3000)
 
         def done(data, error):
+            if self._unloaded:
+                return
             if error or not data:
                 self.iface.messageBar().pushMessage(
-                    "Panoramax", "Recherche impossible : {}".format(error),
+                    "Panoramax", "Recherche impossible : {}".format(error or "réponse vide"),
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
             features = data.get("features", [])
@@ -610,7 +620,7 @@ class PanoramaxPlugin:
         mode = tool.mode
 
         def done(profile, label, warning):
-            if self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
+            if self._unloaded or self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
             click.update(profile=profile, terrain=label, precise_ground=label in PRECISE_LABELS)
             self._show_measure(tool.add_click(click, warning))

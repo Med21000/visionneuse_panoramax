@@ -145,11 +145,29 @@ def fetch_json(url, callback, prefer_cache=False, timeout_ms=None):
             callback(None, error)
             return
         try:
-            callback(json.loads(data.decode("utf-8")), None)
+            parsed = json.loads(data.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as exc:
             callback(None, "Réponse JSON invalide : {}".format(exc))
+            return
+        callback(parsed, None)  # hors du try : une erreur du callback n'est pas prise pour un JSON invalide
 
     return fetch(url, done, prefer_cache, timeout_ms)
+
+
+def abort_all():
+    """Abandonne les requêtes en cours sans appeler leurs callbacks (déchargement du plugin)."""
+    for reply in list(_pending):
+        try:
+            reply.finished.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            reply.abort()
+            reply.deleteLater()
+        except RuntimeError:  # objet Qt déjà détruit
+            pass
+    _pending.clear()
+    clear_cache()
 
 
 def search_url(lon, lat, radius_m=25, limit=20, collection=None):
@@ -282,12 +300,18 @@ INSTANCES_TTL = 7 * 24 * 3600
 
 _items = OrderedDict()        # id photo -> fiche STAC (3 au maximum)
 _waiting = {}                 # id photo -> callbacks en attente (requête déjà partie)
+_state = {"generation": 0,    # change avec l'instance : les réponses d'avant sont ignorées
+          "requested": None}  # dernière photo demandée par get_item (la photo courante)
 stats = {"api_calls": 0, "cache_hits": 0}
 
 
 def clear_cache():
+    """Vide le cache ; les fiches demandées avant (autre instance) ne seront ni rangées ni
+    délivrées."""
     _items.clear()
     _waiting.clear()
+    _state["generation"] += 1
+    _state["requested"] = None
 
 
 def remember_items(features):
@@ -325,13 +349,18 @@ def _set_current(item):
 
 
 def _fetch_item(pic_id, callback):
-    _waiting[pic_id] = [callback] if callback else []
+    waiting = [callback] if callback else []
+    _waiting[pic_id] = waiting
+    generation = _state["generation"]
 
     def done(data, error):
-        callbacks = _waiting.pop(pic_id, [])
+        if generation != _state["generation"]:
+            return  # cache vidé entre-temps (changement d'instance) : réponse périmée
+        if _waiting.get(pic_id) is waiting:
+            del _waiting[pic_id]
         if data:
             _items[pic_id] = data
-        for cb in callbacks:
+        for cb in waiting:
             cb(data, error)
 
     stats["api_calls"] += 1
@@ -342,10 +371,13 @@ def get_item(pic_id, callback):
     """Fiche d'une photo : cache d'abord, API seulement si nécessaire.
 
     callback(item | None, erreur | None). La photo devient la photo courante :
-    seules elle et ses deux voisines (avant/après) restent en cache.
+    seules elle et ses deux voisines (avant/après) restent en cache. Une fiche arrivée
+    après qu'une autre photo a été demandée est délivrée, mais ne change pas le cache.
     """
+    _state["requested"] = pic_id
+
     def deliver(item, error):
-        if item is not None and item.get("id") == pic_id:
+        if item is not None and item.get("id") == pic_id and _state["requested"] == pic_id:
             _set_current(item)
         callback(item, error)
 
@@ -357,6 +389,11 @@ def get_item(pic_id, callback):
         _waiting[pic_id].append(deliver)
     else:
         _fetch_item(pic_id, deliver)
+
+
+def requested_id():
+    """Dernière photo demandée par get_item : une fiche d'une autre photo est périmée."""
+    return _state["requested"]
 
 
 def get_instances(callback, force=False):

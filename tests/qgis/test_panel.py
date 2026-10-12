@@ -76,6 +76,7 @@ class Base(unittest.TestCase):
                 (viewer_dock, "HAS_WEBENGINE", False),
                 (api, "get_instances", lambda done, force=False: done(None, "hors ligne")),
                 (api, "get_item", self._get_item),
+                (api, "requested_id", lambda: self.requests[-1] if self.requests else None),
                 (api, "fetch", lambda url, cb, prefer_cache=False, timeout_ms=None: cb(IMAGE, None))):
             patcher = mock.patch.object(target, attr, value)
             patcher.start()

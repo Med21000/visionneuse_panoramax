@@ -146,7 +146,7 @@ def _build_renderer():
     seq.setMinZoomLevel(6)
     styles.append(seq)
 
-    # Photos, visibles en grande échelle, orientées selon leur cap
+    # Photos, visibles en grande échelle
     pics = QgsVectorTileBasicRendererStyle("Photos", "pictures", Qgis.GeometryType.Point)
     symbol = QgsMarkerSymbol.createSimple(
         {"name": "circle", "color": ORANGE, "outline_color": "white", "outline_width": "0.2", "size": "1.8"})

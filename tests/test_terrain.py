@@ -212,5 +212,56 @@ class Provider(unittest.TestCase):
         self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"])
 
 
+
+class Cache(unittest.TestCase):
+    """Profils gardés pour la session et sources sans données plus interrogées dans la zone."""
+
+    def profile(self, provider, services, yaw=0.0, lon=LON0, lat=LAT0):
+        results = []
+        with mock.patch.object(terrain.api, "fetch_json", services):
+            provider.profile(lon, lat, yaw, lambda *r: results.append(r))
+        return results
+
+    def test_same_view_once(self):
+        provider, services = terrain.TerrainProvider(), FakeServices(lidar=True)
+        first = self.profile(provider, services)
+        again = self.profile(provider, services, yaw=0.03)  # même direction au dixième de degré près
+        self.assertEqual(first, again)
+        self.assertEqual(services.calls, ["lidar"])
+        self.profile(provider, services, yaw=0.5)  # 0,5° : 5 cm à 6 m, autre profil près d'une bordure
+        self.assertEqual(services.calls, ["lidar", "lidar"])
+
+    def test_concurrent_requests_shared(self):
+        provider, pending, results = terrain.TerrainProvider(), [], []
+        services = FakeServices(lidar=True)
+        with mock.patch.object(terrain.api, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
+            provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
+            provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
+        self.assertEqual(len(pending), 1)
+        url, callback = pending[0]
+        services(url, callback)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+
+    def test_lidar_not_published_skipped_nearby(self):
+        provider, services = terrain.TerrainProvider(), FakeServices()
+        self.profile(provider, services)
+        self.profile(provider, services, yaw=90.0, lon=LON0 + 0.00005)  # autre clic, même zone
+        self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "data.geopf.fr"])
+        far = LON0 + 0.01  # à 750 m : le LiDAR HD y est à nouveau demandé
+        self.profile(provider, services, lon=far)
+        self.assertEqual(services.calls[-2:], ["lidar", "data.geopf.fr"])
+
+    def test_services_down_retried(self):
+        provider = terrain.TerrainProvider()
+        down = FakeServices(down={"data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"})
+        (prof, label, warning), = self.profile(provider, down)
+        self.assertEqual(label, ground.FLAT)
+        services = FakeServices(lidar=True)
+        (prof, label, warning), = self.profile(provider, services)  # services revenus : pas de sol plat gardé
+        self.assertEqual(label, terrain.LIDAR_LABEL)
+        self.assertEqual(services.calls, ["lidar"])  # un service injoignable n'est pas « sans données »
+
+
 if __name__ == "__main__":
     unittest.main()

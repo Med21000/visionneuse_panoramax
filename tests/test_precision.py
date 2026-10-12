@@ -148,6 +148,46 @@ class Check(unittest.TestCase):
         item["properties"]["exif"]["Exif.GPSInfo.GPSAltitude"] = "{:.0f}/100".format((GROUND + 8 + GEOID) * 100)
         self.assertIsNone(precision.camera_suggestion(self.check(item, FakeServices([]))))  # invraisemblable
 
+    def test_service_down_not_kept(self):
+        """Résultat obtenu malgré un service injoignable : la vérification est refaite ensuite."""
+        photos = [photo(i) for i in range(20)]
+        checker = precision.PrecisionChecker()
+        res = self.check(photos[0], FakeServices(photos, down={"data.geopf.fr"}), checker)
+        self.assertTrue(res["transient"])
+        self.assertIsNone(checker.known(photos[0]))
+        res = self.check(photos[1], FakeServices(photos), checker)  # service revenu
+        self.assertTrue(res["precise"])
+        self.assertTrue(checker.known(photos[0])["precise"])
+
+    def test_search_down_not_kept(self):
+        photos = [photo(i) for i in range(20)]
+        checker = precision.PrecisionChecker()
+        services = FakeServices(photos, down={"api.panoramax.xyz"})
+        res = self.check(photos[0], services, checker)
+        self.assertFalse(res["precise"])
+        self.assertTrue(res["transient"])
+        self.assertIsNone(checker.known(photos[0]))
+
+    def test_photos_without_sequence(self):
+        """Deux photos sans séquence vérifiées en même temps : chacune son résultat."""
+        declared = photo(0, differential=False, sequence=None)
+        declared["properties"]["exif"]["Exif.GPSInfo.GPSHPositioningError"] = "5/100"
+        simple = photo(1, differential=False, sequence=None)
+        pending = []
+        checker, out = precision.PrecisionChecker(), {}
+
+        def fake(url, callback, **kwargs):
+            pending.append(callback)
+
+        with mock.patch.object(precision.api, "fetch_json", fake):
+            checker.check(declared, lambda res: out.setdefault("declared", res))
+            checker.check(simple, lambda res: out.setdefault("simple", res))
+        self.assertEqual(len(pending), 2)  # deux vérifications, pas une seule partagée
+        for callback in pending:
+            callback({"elevations": [{"z": GROUND}]}, None)
+        self.assertTrue(out["declared"]["precise"])
+        self.assertFalse(out["simple"]["precise"])
+
 
 class Texts(unittest.TestCase):
     def test_full_mode(self):

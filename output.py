@@ -119,12 +119,26 @@ def ensure_layer(kind, name, table, geometry, fields, style, parent=None):
     return layer, None
 
 
-def write_feature(layer, feature, fid=None):
+PRESERVED_FIELDS = ("fid", "commentaire")  # jamais réécrits à la mise à jour d'une entité
+
+
+def field_names(fields):
+    """Noms des champs d'une définition au format des URI "memory" (field=nom:type&...)."""
+    return [part[len("field="):].split(":", 1)[0] for part in fields.split("&") if part.startswith("field=")]
+
+
+def write_feature(layer, feature, fid=None, managed=None):
     """Ajoute l'entité à la couche, ou remplace celle d'identifiant fid si elle y est
-    encore. Retourne l'identifiant de l'entité écrite, ou None en cas d'échec."""
+    encore. Retourne l'identifiant de l'entité écrite, ou None en cas d'échec.
+
+    Une mise à jour ne réécrit que les champs calculés par le plugin (`managed`, noms ;
+    par défaut tous) : le commentaire saisi par l'utilisateur et les champs qu'il a
+    ajoutés à la table sont conservés."""
     if fid is not None and layer.getFeature(fid).isValid():
-        attrs = {i: feature.attribute(i) for i in range(layer.fields().count())
-                 if layer.fields().at(i).name() != "fid"}
+        fields = layer.fields()
+        attrs = {i: feature.attribute(i) for i in range(fields.count())
+                 if fields.at(i).name() not in PRESERVED_FIELDS
+                 and (managed is None or fields.at(i).name() in managed)}
         if layer.isEditable():
             ok = layer.changeGeometry(fid, feature.geometry())
             ok = all([layer.changeAttributeValue(fid, i, v) for i, v in attrs.items()]) and ok

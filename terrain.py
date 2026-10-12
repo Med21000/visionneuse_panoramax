@@ -33,6 +33,7 @@ ses conditions interdisent l'usage des données hors d'une carte Google.
 """
 
 import math
+from collections import OrderedDict
 from urllib.parse import urlencode
 
 from . import api, ground, triangulation
@@ -63,10 +64,28 @@ OPENMETEO_LABEL = "Copernicus 90 m (Open-Meteo), pente générale"
 MAX_COARSE_SLOPE = 0.12
 BRIDGE_LABEL = "sol plat (mesure sur un pont)"
 
+# Cache de la session, pour limiter les appels aux services : profils déjà calculés (même
+# point de vue, même direction au degré près : visée reprise, point recalé, clics voisins)
+# et sources sans données autour d'un point (LiDAR HD pas encore publié, hors de France),
+# qui ne sont plus interrogées dans cette zone. Un service injoignable n'est pas mémorisé.
+CACHE_SIZE = 64
+COVERAGE_CELL = 0.001  # degré (~100 m) : maille des zones sans données mémorisées
+
+
+def _profile_key(lon, lat, yaw):
+    return round(lon, 6), round(lat, 6), int(round(yaw)) % 360
+
+
+def _cell(lon, lat):
+    return int(math.floor(lon / COVERAGE_CELL)), int(math.floor(lat / COVERAGE_CELL))
+
 
 class TerrainProvider:
     def __init__(self):
         self.bridge = False  # mesure sur un pont : sol plat, sans interroger les services
+        self._profiles = OrderedDict()  # clé (voir _profile_key) -> (profil, libellé, avertissement)
+        self._waiting = {}  # clé -> rappels en attente (même profil déjà demandé)
+        self._uncovered = set()  # (source, maille) : source sans données dans cette zone
 
     def profile(self, lon, lat, yaw, callback):
         """Profil le long de la visée. callback(profil, libellé de la source, avertissement | None).
@@ -76,19 +95,43 @@ class TerrainProvider:
         if self.bridge:
             callback(ground.flat_profile(), BRIDGE_LABEL, None)
             return
-        steps = [self._lidar_step, self._ign_step, self._opentopodata_step, self._openmeteo_step]
+        key = _profile_key(lon, lat, yaw)
+        if key in self._profiles:
+            self._profiles.move_to_end(key)
+            callback(*self._profiles[key])
+            return
+        if key in self._waiting:
+            self._waiting[key].append(callback)
+            return
+        self._waiting[key] = [callback]
+        cell = _cell(lon, lat)
+        steps = [(name, step) for name, step in (("lidar", self._lidar_step), ("ign", self._ign_step),
+                                                  ("opentopodata", self._opentopodata_step),
+                                                  ("openmeteo", self._openmeteo_step))
+                 if (name, cell) not in self._uncovered]
         reasons = []
+
+        def finish(prof, label, cache):
+            res = (prof, label, "; ".join(reasons) or None)
+            if cache:
+                self._profiles[key] = res
+                while len(self._profiles) > CACHE_SIZE:
+                    self._profiles.popitem(last=False)
+            for cb in self._waiting.pop(key, []):
+                cb(*res)
 
         def next_step():
             if not steps:
-                callback(ground.flat_profile(), ground.FLAT, "; ".join(reasons) or None)
+                finish(ground.flat_profile(), ground.FLAT, False)  # à retenter : un service peut revenir
                 return
-            step = steps.pop(0)
+            name, step = steps.pop(0)
 
             def ok(prof, label):
-                callback(prof, label, "; ".join(reasons) or None)
+                finish(prof, label, True)
 
-            def failed(reason=None):
+            def failed(reason=None, uncovered=False):
+                if uncovered:  # pas de données ici : source inutile dans cette zone pour la session
+                    self._uncovered.add((name, cell))
                 if reason:  # LiDAR HD pas encore publié ici : repli silencieux sur le RGE ALTI
                     reasons.append(reason)
                 next_step()
@@ -101,12 +144,12 @@ class TerrainProvider:
     # Service d'altimétrie IGN
     # ------------------------------------------------------------------
     def _lidar_step(self, lon, lat, yaw, ok, failed):
-        self._ign_line(lon, lat, yaw, ok, lambda error: failed(), LIDAR_RESOURCE, LIDAR_LABEL)
+        self._ign_line(lon, lat, yaw, ok, lambda error: failed(uncovered=error is None), LIDAR_RESOURCE, LIDAR_LABEL)
 
     def _ign_step(self, lon, lat, yaw, ok, failed):
         def no_data(error):
             failed("service d'altimétrie IGN indisponible ({})".format(error) if error else
-                   "pas d'altitude IGN à cet endroit (hors de France ?)")
+                   "pas d'altitude IGN à cet endroit (hors de France ?)", uncovered=error is None)
 
         self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, IGN_LABEL)
 
@@ -191,7 +234,7 @@ class TerrainProvider:
             return
         prof = robust_profile(dists, values)
         if prof is None:
-            failed("pas d'altitude {} à cet endroit".format(name))
+            failed("pas d'altitude {} à cet endroit".format(name), uncovered=True)
             return
         slope = (prof[1][1] - prof[0][1]) / (prof[1][0] - prof[0][0])
         if abs(slope) > MAX_COARSE_SLOPE:

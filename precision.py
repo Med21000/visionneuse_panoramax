@@ -63,8 +63,9 @@ def _ground(data):
 
 def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, height=None):
     """Résultat d'une vérification : precise, accuracy (m, ou None : celle de la photo), lidar (LiDAR
-    HD publié sous la photo, None si inconnu), reason (texte), count, spread et height (hauteur de
-    caméra médiane) pour une séquence vérifiée."""
+    HD publié sous la photo, None si inconnu), reason (texte), count et spread pour une séquence
+    vérifiée, height : hauteur de caméra calculée (altitude GPS moins sol LiDAR HD ; médiane de la
+    séquence vérifiée, ou celle de la photo de précision déclarée), None si inconnue."""
     return {"precise": precise, "accuracy": accuracy, "lidar": lidar, "reason": reason, "count": count,
             "spread": spread, "height": height}
 
@@ -85,6 +86,18 @@ def degraded_reasons(res):
     elif res["lidar"] is None:
         out.append("présence du LiDAR HD non vérifiée (service d'altimétrie indisponible)")
     return out
+
+
+def camera_suggestion(res):
+    """Hauteur de caméra calculée à proposer dans le panneau : (hauteur, explication), ou None."""
+    if not res or not res["precise"] or res["lidar"] is not True or res.get("height") is None:
+        return None
+    if res["count"]:
+        how = "médiane de {} photos de la séquence, écart-type {:.0f} cm".format(res["count"], res["spread"] * 100)
+    else:
+        how = "photo de précision déclarée ±{:.0f} cm".format(res["accuracy"] * 100)
+    return res["height"], ("Hauteur de caméra calculée : altitude GPS de la caméra (NGF) moins le sol LiDAR HD "
+                           "({}). Cliquer pour remplir le champ « Caméra à ».".format(how))
 
 
 def state_text(res, accuracy=None):
@@ -137,18 +150,25 @@ class PrecisionChecker:
             return
         accuracy = api.exif_accuracy(item)
         if accuracy is not None and accuracy <= PRECISE_ACCURACY:
-            self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy)
+            self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy,
+                              altitude.ngf_altitude(lon, lat, api.item_altitude(item)))
         elif api.gps_differential(item) and sequence:
             self._check_sequence(item, sequence, lon, lat, done)
         else:
             self._check_lidar(lon, lat, done, "pas de correction différentielle déclarée")
 
-    def _check_lidar(self, lon, lat, done, reason, accuracy=None):
-        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None."""
+    def _check_lidar(self, lon, lat, done, reason, accuracy=None, camera_alt=None):
+        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None ;
+        camera_alt : altitude NGF de la caméra, pour la hauteur de caméra d'une photo précise."""
         def got(data, error):
             ground = _ground(data) if not error else []
             lidar = None if error else bool(ground and ground[0] is not None)
-            done(result(accuracy is not None, accuracy, lidar, reason))
+            height = None
+            if lidar and accuracy is not None and camera_alt is not None:
+                height = camera_alt - ground[0]
+                if not CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]:
+                    height = None
+            done(result(accuracy is not None, accuracy, lidar, reason, height=height))
 
         api.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 

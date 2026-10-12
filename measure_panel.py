@@ -159,6 +159,12 @@ class MeasurePanel(QWidget):
         self.chk_bridge.toggled.connect(self.terrainChanged)
         tlay.addWidget(self.chk_bridge)
         tlay.addStretch(1)
+        # Hauteur de caméra calculée, proposée sur cette ligne (la première est pleine)
+        self.btn_camera_auto = QPushButton("")
+        self.btn_camera_auto.clicked.connect(self._use_camera_suggestion)
+        self._camera_suggestion = None
+        tlay.addWidget(self.btn_camera_auto)
+        self.terrain_row.setMinimumHeight(self.btn_camera_auto.sizeHint().height())  # pas de saut à son apparition
         mbox.addWidget(self.terrain_row)
         self.free_row = QWidget(self)
         flay = QHBoxLayout(self.free_row)
@@ -234,7 +240,29 @@ class MeasurePanel(QWidget):
 
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
+        self._update_camera_button()
         self.cameraHeightChanged.emit(float(value))
+
+    def set_camera_suggestion(self, suggestion):
+        """Hauteur de caméra calculée pour la photo affichée, (hauteur, explication) ou None : un
+        bouton la propose à côté du champ tant qu'elle en diffère (voir precision.camera_suggestion)."""
+        self._camera_suggestion = None
+        if suggestion is not None:
+            height, tip = suggestion
+            self._camera_suggestion = round(height, 2)
+            self.btn_camera_auto.setText("Caméra à {:.2f} m d'après l'altitude GPS : utiliser".format(
+                self._camera_suggestion).replace(".", ","))
+            self.btn_camera_auto.setToolTip(tip)
+        self._update_camera_button()
+
+    def _use_camera_suggestion(self):
+        if self._camera_suggestion is not None:
+            self.spin_camera.setValue(self._camera_suggestion)
+
+    def _update_camera_button(self):
+        h = self._camera_suggestion
+        self.btn_camera_auto.setVisible(self.measure_mode() in GROUND_MODES and h is not None and
+                                        abs(self.spin_camera.value() - h) >= 0.005)
 
     def _on_reference(self, *args):
         kind, length = self.reference()
@@ -258,6 +286,7 @@ class MeasurePanel(QWidget):
                                      "(une mesure déjà enregistrée puis recalée y est mise à jour)")
         for w in (self.lbl_camera, self.spin_camera):
             w.setVisible(mode in GROUND_MODES)
+        self._update_camera_button()
         self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
         for w in (self.cmb_reference, self.spin_reference):
             w.setVisible(mode == "camera")

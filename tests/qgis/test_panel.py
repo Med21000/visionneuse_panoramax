@@ -49,7 +49,7 @@ def item(pid, sequence="seq", prev=None, nxt=None, producer=("prod-1", "CD21")):
 
 ITEMS = {"p1": item("p1", nxt="p2"), "p2": item("p2", prev="p1"), "q1": item("q1", sequence="rtk")}
 QUALITY = {"seq": precision.result(False, lidar=True, reason="pas de correction différentielle déclarée"),
-           "rtk": precision.result(True, 0.1, True, "position vérifiée")}
+           "rtk": precision.result(True, 0.1, True, "position vérifiée", 20, 0.02, 1.874)}
 
 
 class FakeChecker:
@@ -311,6 +311,32 @@ class DegradedMode(Base):
         self.assertEqual(self.popups, [])
         dock.precision.later.pop()()  # résultat arrivé
         self.assertEqual(len(self.popups), 1)
+
+    def test_camera_height_suggested(self):
+        dock = self.dock
+        box = dock.measure_box
+        btn = box.btn_camera_auto
+        box.spin_camera.setValue(1.9)
+        dock.btn_measure.setChecked(True)
+        dock.show_picture("p1", 5.0415, 47.322)
+        self.assertFalse(self.visible(btn))  # position non vérifiée : rien à proposer
+        row = box.terrain_row.height()
+        dock.show_picture("q1", 5.0415, 47.322)
+        self.assertTrue(self.visible(btn))
+        self.assertEqual(box.terrain_row.height(), row)  # le bouton ne fait pas sauter l'image
+        self.assertEqual(btn.text(), "Caméra à 1,87 m d'après l'altitude GPS : utiliser")
+        self.assertIn("médiane de 20 photos", btn.toolTip())
+        box.cmb_measure.setCurrentIndex(box.cmb_measure.findData("tri"))
+        self.assertFalse(self.visible(btn))  # triangulation : pas de hauteur de caméra
+        box.cmb_measure.setCurrentIndex(box.cmb_measure.findData("road"))
+        self.assertTrue(self.visible(btn))
+        btn.click()
+        self.assertAlmostEqual(box.spin_camera.value(), 1.87)
+        self.assertAlmostEqual(self.emitted("cameraHeightChanged")[-1][0], 1.87)
+        self.assertFalse(self.visible(btn))  # champ rempli : plus rien à proposer
+        dock.show_picture("p1", 5.0415, 47.322)
+        self.assertAlmostEqual(box.spin_camera.value(), 1.87)  # le champ n'est jamais changé sans clic
+        self.assertFalse(self.visible(btn))
 
 
 if __name__ == "__main__":

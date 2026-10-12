@@ -50,6 +50,48 @@ class RobustProfile(unittest.TestCase):
         self.assertIsNone(terrain.robust_profile(dists, None))
 
 
+def at(profile, d):
+    """Altitude du profil (linéaire par morceaux) à la distance d."""
+    for (s1, z1), (s2, z2) in zip(profile, profile[1:]):
+        if s1 <= d <= s2:
+            return z1 + (z2 - z1) * (d - s1) / (s2 - s1)
+    raise ValueError(d)
+
+
+class RealProfile(unittest.TestCase):
+    dists = [-10.0 + 0.5 * i for i in range(71)]
+
+    def test_curb_followed(self):
+        # Chaussée plate, trottoir 15 cm plus haut à partir de 4 m : suivi par le profil réel
+        values = [200.0 + (0.15 if s >= 4.0 else 0.0) for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        self.assertEqual(prof[0], (0.0, 200.0))
+        self.assertAlmostEqual(at(prof, 2.0), 200.0)
+        self.assertAlmostEqual(at(prof, 6.0), 200.15)
+        line = terrain.robust_profile(self.dists, values)
+        self.assertGreater(abs(at(line, 2.0) - 200.0), 0.1)  # la droite de pente place la chaussée trop haut
+
+    def test_isolated_spikes_removed(self):
+        # Points isolés aberrants (objet mal classé dans le MNT) : écartés par la médiane glissante
+        spikes = {3.0: 0.6, 6.0: -0.5, 10.0: 0.8}
+        values = [100.0 + 0.02 * s + spikes.get(s, 0.0) for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        for d in spikes:
+            self.assertAlmostEqual(at(prof, d), 100.0 + 0.02 * d, delta=0.011)
+
+    def test_extended_beyond_the_data(self):
+        values = [50.0 + 0.04 * s for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        self.assertEqual(prof[-1][0], ground.MAX_DISTANCE)
+        self.assertAlmostEqual(at(prof, 40.0), 50.0 + 0.04 * 40.0, delta=0.02)
+
+    def test_unusable(self):
+        gaps = [None if i % 3 == 0 else 100.0 for i in range(71)]  # un tiers des altitudes manque
+        self.assertIsNone(terrain.real_profile(self.dists, gaps))
+        behind = [100.0 if s > 0.5 else None for s in self.dists]  # rien sous la photo
+        self.assertIsNone(terrain.real_profile(self.dists, behind))
+
+
 class FakeServices:
     """Remplace api.fetch_json : réponses synthétiques des services, terrain de pente `slope`.
     Le LiDAR HD n'est publié que si `lidar` est vrai (sinon le service renvoie -99999)."""
@@ -141,6 +183,19 @@ class Provider(unittest.TestCase):
         self.assertEqual(label, terrain.IGN_LABEL)
         at6 = prof[0][1] + (prof[1][1] - prof[0][1]) / prof[1][0] * 6.0
         self.assertAlmostEqual(at6, 200.0, delta=0.06)  # sol à 6 m : 0,3 m trop haut sur 120 m
+
+    def test_lidar_real_profile(self):
+        services = FakeServices(lidar=True, relief=lambda s: 200.0 + (0.15 if s >= 4.0 else 0.0))
+        prof, label, _ = self.run_profile(services)
+        self.assertEqual(label, terrain.LIDAR_LABEL)
+        self.assertAlmostEqual(at(prof, 6.0), 200.15, delta=0.01)
+
+    def test_lidar_incomplete(self):
+        # Profil LiDAR à trous : droite de pente
+        services = FakeServices(lidar=True, relief=lambda s: 200.0 + 0.05 * s if int(s * 2) % 3 else -99999.0)
+        prof, label, _ = self.run_profile(services)
+        self.assertEqual(label, terrain.LIDAR_LINE_LABEL)
+        self.assertEqual(len(prof), 2)
 
     def test_bridge(self):
         services = FakeServices()

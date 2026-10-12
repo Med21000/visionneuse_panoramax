@@ -73,6 +73,7 @@ class Check(unittest.TestCase):
         self.assertFalse(res["precise"])
         self.assertTrue(res["lidar"])
         self.assertTrue(precision.degraded(res))  # LiDAR publié, mais position non vérifiée
+        self.assertIsNone(precision.camera_suggestion(res))
 
     def test_degraded_without_lidar(self):
         photos = [photo(i) for i in range(20)]
@@ -88,11 +89,13 @@ class Check(unittest.TestCase):
         item["properties"]["exif"]["Exif.GPSInfo.GPSHPositioningError"] = "5/100"
         res = self.check(item, FakeServices([], lidar=True))
         self.assertEqual((res["precise"], res["accuracy"], res["lidar"]), (True, 0.05, True))
+        self.assertAlmostEqual(res["height"], CAMERA, places=6)  # hauteur de caméra de la photo
         self.assertFalse(precision.degraded(res))
         services = FakeServices([], lidar=False)
         res = self.check(item, services)
         self.assertTrue(res["precise"])
         self.assertTrue(precision.degraded(res))  # précise, mais sans LiDAR HD
+        self.assertIsNone(res["height"])
         self.assertEqual(services.calls, ["data.geopf.fr"])  # LiDAR sous la photo seulement
 
     def test_too_few_photos_or_altitudes(self):
@@ -131,6 +134,19 @@ class Check(unittest.TestCase):
         self.assertTrue(precision.degraded(res))  # position non vérifiée
         self.assertIn("non vérifiée (service d'altimétrie indisponible)", precision.degraded_reasons(res)[-1])
 
+
+    def test_camera_suggestion(self):
+        photos = [photo(i) for i in range(20)]
+        height, tip = precision.camera_suggestion(self.check(photos[0], FakeServices(photos)))
+        self.assertAlmostEqual(height, CAMERA, delta=0.01)
+        self.assertIn("médiane de 20 photos de la séquence, écart-type 0 cm", tip)
+        item = photo(0, differential=False)
+        item["properties"]["exif"]["Exif.GPSInfo.GPSHPositioningError"] = "5/100"
+        height, tip = precision.camera_suggestion(self.check(item, FakeServices([])))
+        self.assertAlmostEqual(height, CAMERA, places=6)
+        self.assertIn("précision déclarée ±5 cm", tip)
+        item["properties"]["exif"]["Exif.GPSInfo.GPSAltitude"] = "{:.0f}/100".format((GROUND + 8 + GEOID) * 100)
+        self.assertIsNone(precision.camera_suggestion(self.check(item, FakeServices([]))))  # invraisemblable
 
 
 class Texts(unittest.TestCase):

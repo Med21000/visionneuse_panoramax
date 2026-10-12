@@ -511,6 +511,7 @@ class PanoramaxDock(QDockWidget):
         mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
         item = self._current_item
         self.measure_box.set_quality_text(precision.state_text(self._quality, api.item_accuracy(item)) if item else "")
+        self.measure_box.set_camera_suggestion(precision.camera_suggestion(self._quality) if item else None)
         self._warn_if_degraded()
 
     def _warn_if_degraded(self):

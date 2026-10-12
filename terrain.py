@@ -44,8 +44,10 @@ IGN_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevationLine.j
 IGN_RESOURCE = "ign_rge_alti_wld"
 IGN_LABEL = "RGE ALTI (IGN), pente de la route"
 LIDAR_RESOURCE = "ign_lidar_hd_mnt_mono_wld"  # MNT LiDAR HD 50 cm, publié département par département
-LIDAR_LABEL = "LiDAR HD (IGN), pente de la route"
-PRECISE_LABELS = (LIDAR_LABEL, IGN_LABEL)  # sol au décimètre près sous la caméra (voir measure_tool.camera_info)
+LIDAR_LABEL = "LiDAR HD (IGN), profil de la chaussée"
+LIDAR_LINE_LABEL = "LiDAR HD (IGN), pente de la route"  # profil incomplet : droite de pente
+PRECISE_LABELS = (LIDAR_LABEL, LIDAR_LINE_LABEL, IGN_LABEL)  # sol au décimètre près sous la caméra
+MIN_COVERAGE = 0.8  # part minimale d'altitudes valides pour suivre le profil réel
 NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
 TIMEOUT_MS = 5000  # au-delà, on passe à la source suivante
 
@@ -101,17 +103,30 @@ class TerrainProvider:
     # Service d'altimétrie IGN
     # ------------------------------------------------------------------
     def _lidar_step(self, lon, lat, yaw, ok, failed):
-        self._ign_line(lon, lat, yaw, ok, lambda error: failed(), LIDAR_RESOURCE, LIDAR_LABEL)
+        """MNT LiDAR HD : profil réel de la chaussée (voir real_profile), ou à défaut droite de pente."""
+        def parsed(dists, values):
+            prof = real_profile(dists, values)
+            if prof is not None:
+                return prof, LIDAR_LABEL
+            prof = robust_profile(dists, values)
+            return (prof, LIDAR_LINE_LABEL) if prof is not None else None
+
+        self._ign_line(lon, lat, yaw, ok, lambda error: failed(), LIDAR_RESOURCE, parsed)
 
     def _ign_step(self, lon, lat, yaw, ok, failed):
         def no_data(error):
             failed("service d'altimétrie IGN indisponible ({})".format(error) if error else
                    "pas d'altitude IGN à cet endroit (hors de France ?)")
 
-        self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, IGN_LABEL)
+        def parsed(dists, values):
+            prof = robust_profile(dists, values)
+            return (prof, IGN_LABEL) if prof is not None else None
 
-    def _ign_line(self, lon, lat, yaw, ok, no_data, resource, label):
-        """Profil d'une ressource du service IGN ; no_data(erreur ou None) si rien d'exploitable."""
+        self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, parsed)
+
+    def _ign_line(self, lon, lat, yaw, ok, no_data, resource, parse):
+        """Profil d'une ressource du service IGN ; parse(distances, altitudes) → (profil, libellé)
+        ou None ; no_data(erreur ou None) si rien d'exploitable."""
         start = triangulation.offset(lon, lat, yaw, LINE_FROM)
         end = triangulation.offset(lon, lat, yaw, LINE_TO)
         params = {
@@ -124,9 +139,10 @@ class TerrainProvider:
         url = IGN_URL + "?" + urlencode(params, safe="|")
 
         def done(data, error):
-            prof = self._parse_ign(data, lon, lat, yaw) if not error and isinstance(data, dict) else None
-            if prof is not None:
-                ok(prof, label)
+            samples = self._ign_samples(data, lon, lat, yaw) if not error and isinstance(data, dict) else None
+            res = parse(*samples) if samples else None
+            if res is not None:
+                ok(*res)
             else:
                 no_data(error)
 
@@ -135,6 +151,12 @@ class TerrainProvider:
     @staticmethod
     def _parse_ign(data, lon, lat, yaw):
         """Altitudes IGN → droite de pente (None si hors couverture)."""
+        samples = TerrainProvider._ign_samples(data, lon, lat, yaw)
+        return robust_profile(*samples) if samples else None
+
+    @staticmethod
+    def _ign_samples(data, lon, lat, yaw):
+        """Altitudes IGN → (distances signées le long de la visée, altitudes), ou None."""
         dx, dy = math.sin(math.radians(yaw)), math.cos(math.radians(yaw))
         dists, values = [], []
         for pt in data.get("elevations") or []:
@@ -145,7 +167,7 @@ class TerrainProvider:
                 return None
             dists.append(x * dx + y * dy)  # position signée le long de la visée
             values.append(z)
-        return robust_profile(dists, values)
+        return dists, values
 
     # ------------------------------------------------------------------
     # Services de secours (mailles de 25 à 90 m) : pente générale
@@ -224,6 +246,42 @@ def robust_profile(dists, values):
     slope = _median(slopes) if slopes else 0.0
     z0 = _median([z - slope * s for s, z in pts])
     return [(0.0, z0), (ground.MAX_DISTANCE, z0 + slope * ground.MAX_DISTANCE)]
+
+
+def real_profile(dists, values):
+    """Profil réel le long de la visée, depuis la photo (MNT LiDAR HD) : bordures, caniveau et
+    dévers y figurent, contrairement à la droite de pente.
+
+    Altitudes lissées par une médiane glissante sur trois échantillons (1,5 m) contre le bruit,
+    profil commençant sous la caméra (altitude interpolée à 0), prolongé au-delà des données par
+    la droite de pente jusqu'à MAX_DISTANCE. None s'il manque plus de 20 % des altitudes, ou
+    s'il n'y en a pas de part et d'autre de la photo.
+    """
+    pts = []
+    for s, z in zip(dists, values or []):
+        try:
+            z = float(z)
+        except (TypeError, ValueError):
+            continue
+        if z == z and z > NODATA_BELOW:
+            pts.append((float(s), z))
+    line = robust_profile(dists, values)
+    if line is None or len(pts) < MIN_COVERAGE * len(dists):
+        return None
+    pts.sort()
+    zs = [z for _, z in pts]
+    smooth = [(s, _median(zs[max(0, i - 1):i + 2])) for i, (s, _) in enumerate(pts)]
+    before = [p for p in smooth if p[0] <= 0.0]
+    after = [p for p in smooth if p[0] > 0.0]
+    if not before or not after or after[0][0] - before[-1][0] > 2.0:
+        return None
+    (s1, z1), (s2, z2) = before[-1], after[0]
+    prof = [(0.0, z1 + (z2 - z1) * (0.0 - s1) / (s2 - s1))] + after
+    last_s, last_z = prof[-1]
+    if last_s < ground.MAX_DISTANCE:
+        slope = (line[1][1] - line[0][1]) / (line[1][0] - line[0][0])
+        prof.append((ground.MAX_DISTANCE, last_z + slope * (ground.MAX_DISTANCE - last_s)))
+    return prof
 
 
 def _median(values):

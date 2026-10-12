@@ -28,6 +28,7 @@ from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
+from .buildings import BuildingProvider
 from .roads import RoadAxisProvider
 from .terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
@@ -147,6 +148,8 @@ class PanoramaxPlugin:
         self.terrain = TerrainProvider()
         self.roads = RoadAxisProvider()  # axe de la route au point mesuré (largeur perpendiculaire)
         self.roads.ready = self._on_road_axis
+        self.buildings = BuildingProvider()  # façade du cadastre visée (hauteur, mesure libre)
+        self.buildings.ready = self._on_buildings
         self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
     # ------------------------------------------------------------------
@@ -249,6 +252,8 @@ class PanoramaxPlugin:
             self.dock.referenceChanged.connect(self._on_reference_changed)
             self.dock.surfaceChanged.connect(self._on_surface_changed)
             self.dock.facadeRequested.connect(self._on_facade_requested)
+            self.dock.wallFacadeRequested.connect(self._on_wall_facade_requested)
+            self.dock.wallChanged.connect(self._on_wall_changed)
             self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
             self.dock.tiltChanged.connect(self._on_tilt_changed)
@@ -472,6 +477,8 @@ class PanoramaxPlugin:
             self.measures.plane_height = self.dock.spin_plane.value()
             self.measures.surface = self.dock.surface()
             self.measures.road_lookup = self.roads.lookup
+            self.measures.wall_lookup = self.buildings.lookup
+            self.measures.use_wall = self.dock.measure_box.chk_wall.isChecked()
         return self.measures
 
     def _ensure_calibrator(self):
@@ -640,6 +647,25 @@ class PanoramaxPlugin:
             tool.new_camera = None
             spin = self.dock.spin_camera
             spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
+
+    def _on_buildings(self):
+        """Cadastre ou LiDAR lu : hauteurs sur la façade du cadastre recalculées, façade en
+        attente définie."""
+        if self._unloaded or self.measures is None or self.dock is None:
+            return
+        self.measures.recompute_walls()
+        if self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_wall_changed(self, checked):
+        self._ensure_measures().set_use_wall(checked)
+        if self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_wall_facade_requested(self):
+        self._end_landmark_tool()
+        self._ensure_measures().start_wall_facade()
+        self._show_measure(self.measures.status())
 
     def _on_road_axis(self):
         """Axe de la route lu (BD TOPO ou trajectoire) : largeurs perpendiculaires recalculées."""

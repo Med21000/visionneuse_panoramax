@@ -102,7 +102,7 @@ class Base(unittest.TestCase):
         for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoClicked", "aimRequested",
                      "measureSaveRequested", "measureClearRequested", "measureClearAllRequested",
                      "cameraHeightChanged", "surfaceChanged", "planeHeightChanged", "terrainChanged",
-                     "filterChanged", "message", "tiltChanged"):
+                     "filterChanged", "message", "tiltChanged", "wallChanged", "wallFacadeRequested"):
             getattr(self.dock, name).connect(lambda *args, n=name: self.signals.append((n, args)))
         self.dock.resize(1092, 990)
         self.dock.show()
@@ -167,6 +167,22 @@ class MeasureModes(Base):
                              ("Enregistrer les mesures", "measureSaveRequested")):
             self.button(text).click()
             self.assertEqual(len(self.emitted(signal)), 1, text)
+
+
+class CadastreWall(Base):
+    def test_controls(self):
+        box = self.dock.measure_box
+        self.dock.btn_measure.setChecked(True)
+        for mode, surface, chk, btn in (("road", None, False, False), ("height", None, True, False),
+                                        ("free", "facade", False, True), ("free", "ground", False, False)):
+            box.cmb_measure.setCurrentIndex(box.cmb_measure.findData(mode))
+            if surface:
+                box.cmb_surface.setCurrentIndex(box.cmb_surface.findData(surface))
+            self.assertEqual((self.visible(box.chk_wall), self.visible(box.btn_wall_facade)), (chk, btn), mode)
+        box.chk_wall.setChecked(True)
+        self.assertEqual(self.emitted("wallChanged"), [(True,)])
+        box.btn_wall_facade.click()
+        self.assertEqual(len(self.emitted("wallFacadeRequested")), 1)
 
 
 class Compact(Base):

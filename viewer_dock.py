@@ -132,6 +132,8 @@ class PanoramaxDock(QDockWidget):
     # Mesure libre 3D : surface choisie, façade à (re)définir, hauteur du plan horizontal
     surfaceChanged = pyqtSignal(str)
     facadeRequested = pyqtSignal()
+    wallFacadeRequested = pyqtSignal()
+    wallChanged = pyqtSignal(bool)
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
@@ -249,7 +251,7 @@ class PanoramaxDock(QDockWidget):
         mp.modeChanged.connect(self._on_measure_mode)
         mp.surfaceChanged.connect(self._on_surface)
         for signal in ("cameraHeightChanged", "facadeRequested", "planeHeightChanged", "referenceChanged",
-                       "terrainChanged"):
+                       "terrainChanged", "wallFacadeRequested", "wallChanged"):
             getattr(mp, signal).connect(getattr(self, signal))
         self.measure_box.setVisible(False)
         self._update_measure_widgets()

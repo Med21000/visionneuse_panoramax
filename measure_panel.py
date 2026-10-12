@@ -89,6 +89,8 @@ class MeasurePanel(QWidget):
     cameraHeightChanged = pyqtSignal(float)
     surfaceChanged = pyqtSignal(str)
     facadeRequested = pyqtSignal()
+    wallFacadeRequested = pyqtSignal()  # façade du cadastre, d'un clic sur le mur (mesure libre)
+    wallChanged = pyqtSignal(bool)  # hauteur sur la façade du cadastre
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
@@ -164,6 +166,14 @@ class MeasurePanel(QWidget):
             "puis services de secours (OpenTopoData, Open-Meteo), puis sol plat.")
         self.chk_bridge.toggled.connect(self.terrainChanged)
         tlay.addWidget(self.chk_bridge)
+        self.chk_wall = QCheckBox("Façade du cadastre")
+        self.chk_wall.setToolTip(
+            "Hauteur d'un bâtiment dont le pied est caché (voiture, haie, muret) : le mur est le premier bâtiment "
+            "du cadastre traversé par la visée, contrôlé par le LiDAR HD. Le pied est pris au bas du mur, à "
+            "l'altitude du sol, même si le clic tombe devant ; la façade s'affiche sur la carte. Quand le pied "
+            "est visible, le cliquer reste le plus précis.")
+        self.chk_wall.toggled.connect(self.wallChanged)
+        tlay.addWidget(self.chk_wall)
         tlay.addStretch(1)
         # Hauteur de caméra calculée, proposée sur cette ligne (la première est pleine)
         self.btn_camera_auto = QPushButton("")
@@ -190,6 +200,12 @@ class MeasurePanel(QWidget):
                                    "extrémités se recalent ensuite en les glissant sur la carte")
         self.btn_facade.clicked.connect(self.facadeRequested)
         flay.addWidget(self.btn_facade)
+        self.btn_wall_facade = QPushButton("Façade du cadastre")
+        self.btn_wall_facade.setToolTip("Cliquer ensuite sur le mur dans la photo : la façade est celle du bâtiment "
+                                        "du cadastre traversé par la visée, contrôlée par le LiDAR HD ; ses "
+                                        "extrémités se recalent en les glissant sur la carte")
+        self.btn_wall_facade.clicked.connect(self.wallFacadeRequested)
+        flay.addWidget(self.btn_wall_facade)
         self.lbl_plane = QLabel("à")
         flay.addWidget(self.lbl_plane)
         self.spin_plane = QDoubleSpinBox()
@@ -299,6 +315,8 @@ class MeasurePanel(QWidget):
         surface = self.surface()
         self.free_row.setVisible(mode == "free")
         self.btn_facade.setVisible(surface == "facade")
+        self.btn_wall_facade.setVisible(surface == "facade")
+        self.chk_wall.setVisible(mode == "height")
         for w in (self.lbl_plane, self.spin_plane):
             w.setVisible(surface == "horizontal")
 

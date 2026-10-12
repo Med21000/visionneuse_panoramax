@@ -103,6 +103,38 @@ def _ground_z(clicks):
     return out
 
 
+def _profile_z(profile, s):
+    """Altitude du terrain à la distance horizontale s le long d'un profil [(distance, z)]."""
+    for (s0, z0), (s1, z1) in zip(profile, profile[1:]):
+        if s <= s1 or (s1, z1) == profile[-1]:
+            k = (s - s0) / (s1 - s0) if s1 > s0 else 0.0
+            return z0 + k * (z1 - z0)
+    return profile[-1][1]
+
+
+def _wall_foot(click, camera_height, origin, ground_z, plane):
+    """Pied du mur visé : là où la visée horizontale du clic coupe le plan vertical du mur,
+    à l'altitude du sol (profil de terrain du clic)."""
+    cam, u = geometry.camera(click, camera_height, origin, ground_z)
+    (px, py, _), (nx, ny, _) = plane
+    hx, hy = u[0], u[1]
+    den = nx * hx + ny * hy
+    if abs(den) < 1e-6:
+        raise geometry.GeometryError("Visée parallèle à la façade du cadastre : visez-la plus de face.")
+    t = (nx * (px - cam[0]) + ny * (py - cam[1])) / den
+    norm = math.hypot(hx, hy)
+    if t <= 0:
+        raise geometry.GeometryError("La façade du cadastre est derrière la visée.")
+    s = t * norm  # distance horizontale
+    profile = ground.anchored(click.get("profile") or ground.flat_profile(), ground_z)
+    return (cam[0] + t * hx, cam[1] + t * hy, _profile_z(profile, s))
+
+
+def _empty(measure):
+    """Pas de mesure, ou mesure sans clic."""
+    return measure is None or not measure.clicks
+
+
 class Facade:
     """Façade : plan vertical passant par deux points (lon, lat, altitude) au pied du mur.
 
@@ -140,6 +172,9 @@ class Measure:
         self.layer_id = None  # couche de cette entité : un fid ne vaut que dans sa couche
         self.saved = None  # résultat au moment de l'enregistrement (voir _snapshot)
         self.road = None  # axe de la route au point mesuré (largeur perpendiculaire, voir roads.py)
+        self.wall = None  # façade du cadastre visée (hauteur, voir buildings.py)
+        self.wall_pending = False
+        self.wall_item = None
         self.road_pending = False  # lecture de cet axe en cours
 
     def needed(self):
@@ -270,6 +305,13 @@ class Measure:
                 if not facade:
                     raise geometry.GeometryError("Façade non définie : définissez-la dans la photo ou sur la carte.")
                 plane = geometry.vertical_plane(*(geometry.to_local(*p, origin) for p in facade))
+            elif self.surface == "vertical" and self.wall and 0 not in anchors:
+                # Façade du cadastre : pied au bas du mur, à l'altitude du sol (même si le clic
+                # tombe sur une voiture devant), sommet sur le mur
+                plane = geometry.vertical_plane(*(geometry.to_local(lon, lat, 0.0, origin)
+                                                  for lon, lat in self.wall["points"]))
+                first = _wall_foot(clicks[0], h(clicks[0]), origin, zof(clicks[0]), plane)
+                planar, pts, sources = clicks[1:], [first], [clicks[0]]
             elif self.surface == "vertical":
                 first = fixed(0, geometry.on_ground(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0], clicks[0])
                 cam = geometry.camera(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0]
@@ -296,6 +338,21 @@ class Measure:
             return self.road["source"]
         source = self.clicks[0].get("axis_source")
         return source + ", lecture de la BD TOPO…" if self.road_pending and source else source
+
+    def _wall_changed(self):
+        """Façade du cadastre visée par le pied (hauteur, voir buildings.py), si l'outil la
+        demande. Retourne True si elle a changé (les points sont à recalculer)."""
+        lookup = self.tool.wall_lookup if self.tool.use_wall else None
+        old = self.wall
+        self.wall, self.wall_pending = None, False
+        if lookup is not None:
+            c = self.clicks[0]
+            res = lookup(c["lon"], c["lat"], c["yaw"])
+            if isinstance(res, dict):
+                self.wall = res
+            else:
+                self.wall_pending = res == "pending"
+        return self.wall != old
 
     def _road_axis(self, pts, origin):
         """Axe de la route au milieu des deux bords (voir roads.py), si l'outil sait le lire."""
@@ -384,6 +441,8 @@ class Measure:
                 raise geometry.GeometryError("Le pied et le sommet doivent être cliqués sur la même photo.")
             pts, self.incidence, origin, sources = self.points()
             if len(pts) == 2 and len(self.clicks) == self.needed():
+                if self.kind == "height" and self._wall_changed():
+                    pts, self.incidence, origin, sources = self.points()
                 if self.kind == "road":
                     self._road_axis(pts, origin)
                 d = geometry.decompose(pts[0], pts[1], self.axis)
@@ -513,11 +572,19 @@ class Measure:
             self.item = MeasureItem(self.tool.canvas)
         if self.item is not None:
             self.item.set_data(points, label, extra)
+        wall = self.wall["points"] if self.wall else []
+        if self.wall_item is None and wall:
+            self.wall_item = MeasureItem(self.tool.canvas, wall=True)
+        if self.wall_item is not None:
+            self.wall_item.set_data(wall, "façade du cadastre" if wall else "")
 
     def remove(self):
         if self.item is not None:
             self.item.remove()
             self.item = None
+        if self.wall_item is not None:
+            self.wall_item.remove()
+            self.wall_item = None
 
     def point_of_click(self, i):
         """N° du point auquel contribue le clic n° i."""
@@ -554,6 +621,11 @@ class Measure:
                 text += " · dénivelé {} m".format(_num(d["vertical"], 2))
         elif self.kind == "height":
             text = "Hauteur : {} m (±{} m) · objet à {} m".format(value, unc, _num(r["ranges"][0]))
+            if self.wall:
+                text += " · façade du cadastre à {} m ({})".format(_num(self.wall["distance"]), self.wall["check"])
+            elif self.tool.use_wall:
+                text += (" · lecture du cadastre…" if self.wall_pending else
+                         " · aucune façade du cadastre dans la visée : pied cliqué")
         else:
             if self.surface == "vertical":
                 text = "Hauteur : {} m (±{} m) · distance 3D {} · horizontale {}".format(
@@ -597,11 +669,16 @@ class MeasureTool:
         self.surface = "ground"  # surface de la mesure libre
         self.camera_height = DEFAULT_CAMERA_HEIGHT  # hauteur saisie dans le panneau
         self.road_lookup = None  # roads.RoadAxisProvider.lookup : axe de la route au point mesuré
+        self.wall_lookup = None  # buildings.BuildingProvider.lookup : façade du cadastre visée
+        self.use_wall = False  # hauteur : pied et sommet sur la façade du cadastre
         self.calibration = None  # calibration.Calibration : hauteur calée par séquence
         self.plane_height = 1.0  # hauteur du plan horizontal au-dessus du sol (m)
         self.facade = None  # Facade en cours (voir Facade)
         self.defining = False  # les prochains clics dans la photo définissent la façade
         self.facade_clicks = []
+        self.wall_facade = False  # le prochain clic prend la façade dans le cadastre
+        self.wall_click = None  # clic en attente de la lecture du cadastre
+        self.notice_facade = None  # façade du cadastre retenue (texte), jusqu'au premier clic de mesure
         self.facade_item = None
         self.error = None
         self.current = None
@@ -663,6 +740,34 @@ class MeasureTool:
         """Les deux prochains clics dans la photo, au pied du mur, définissent la façade."""
         self.finish()
         self.defining, self.facade_clicks, self.error = True, [], None
+        self.wall_facade, self.wall_click, self.notice_facade = False, None, None
+
+    def start_wall_facade(self):
+        """Le prochain clic sur un mur, dans la photo, prend sa façade dans le cadastre."""
+        self.start_facade()
+        self.wall_facade = True
+
+    def _try_wall_facade(self):
+        """Façade du cadastre visée par le clic en attente (voir buildings.py)."""
+        c = self.wall_click
+        res = self.wall_lookup(c["lon"], c["lat"], c["yaw"]) if self.wall_lookup else None
+        if res == "pending":
+            return
+        self.wall_click = None
+        if not res:
+            self.error = ("Aucune façade du cadastre dans la visée : cliquez sur le mur, ou définissez la façade "
+                          "au pied du mur (« Définir la façade »).")
+            return
+        z = (c.get("profile") or ground.flat_profile())[0][1]
+        self.facade = Facade([(lon, lat, z) for lon, lat in res["points"]])
+        self.facade.check = res["check"]
+        self.defining, self.wall_facade = False, False
+        self.notice_facade = "Façade du cadastre à {} m : {}.".format(_num(res["distance"]), res["check"])
+        for m in self.measures():
+            if m.surface == "facade":
+                m.facade = self.facade
+                m.compute()
+        self._draw_facade()
 
     def facade_from(self, clicks):
         """Façade (deux points lon, lat, altitude) à partir de deux clics au pied du mur."""
@@ -695,7 +800,7 @@ class MeasureTool:
     def _draw_facade(self):
         if self.facade and self._surface() == "facade":
             if self.facade_item is None:
-                self.facade_item = MeasureItem(self.canvas)
+                self.facade_item = MeasureItem(self.canvas, wall=True)
             self.facade_item.set_data([p[:2] for p in self.facade.points], "façade")
         elif self.facade_item is not None:
             self.facade_item.set_data([], "")
@@ -746,6 +851,10 @@ class MeasureTool:
             if measure.error:
                 return measure.error + " " + (measure.status() if measure.result else "")
             return measure.status()
+        if self.defining and self.wall_facade:
+            self.error, self.wall_click = None, click
+            self._try_wall_facade()
+            return self.status()
         if self.defining:
             self.facade_clicks.append(click)
             if len(self.facade_clicks) == 2:
@@ -801,6 +910,21 @@ class MeasureTool:
     def measures(self):
         """Toutes les mesures affichées (terminées, puis en cours)."""
         return self.done + ([self.current] if self.current is not None else [])
+
+    def set_use_wall(self, value):
+        """Hauteur sur la façade du cadastre (case du panneau) : mesures de hauteur recalculées."""
+        self.use_wall = bool(value)
+        return self.recompute_walls()
+
+    def recompute_walls(self):
+        """Façades du cadastre arrivées ou demandées : hauteurs recalculées, façade en attente
+        définie. Retourne le nombre de mesures concernées."""
+        if self.wall_click is not None:
+            self._try_wall_facade()
+        heights = [m for m in self.measures() if m.kind == "height" and len(m.clicks) == m.needed()]
+        for m in heights:
+            m.compute()
+        return len(heights)
 
     def recompute_roads(self):
         """Axe de la route arrivé (voir roads.py) : largeurs perpendiculaires recalculées.
@@ -912,6 +1036,12 @@ class MeasureTool:
                      " : il sera replacé sur la {}".format(SURFACE_NAMES[measure.surface]))
             return ("Point {} sélectionné{}. Cliquez sa position exacte dans la photo (zoomez pour être précis), "
                     "ou « Effacer » pour annuler.").format(index + 1, where)
+        if self.defining and self.wall_facade:
+            if self.wall_click is not None:
+                return "Façade du cadastre : lecture du cadastre et du LiDAR HD…"
+            return prefix + "Façade du cadastre : cliquez sur le mur dans la photo."
+        if self.notice_facade and _empty(self.current):
+            return prefix + self.notice_facade + " Cliquez maintenant les points à mesurer sur la façade."
         if self.defining:
             if not self.facade_clicks:
                 return prefix + ("Façade : cliquez au pied du mur dans la photo, à une extrémité. Ses extrémités "

@@ -238,6 +238,24 @@ Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplace
 - **Clics.** Pied de l'objet, **exactement au contact du sol**, puis sommet, sur la même photo.
 - **Calcul.** Le pied est un point au sol ; le sommet est pris dans le **plan vertical face à la caméra qui passe par le pied**. À l'écart de cap `Δ` entre pied et sommet, il est à la distance horizontale `d / cos Δ`. Pour un objet fin (poteau, `Δ ≈ 0`), c'est la distance du pied ; pour un mur face à la caméra, le sommet peut être cliqué un peu de côté sans fausser la hauteur. Un sommet à plus de 45° de côté, ou sous le pied, est refusé. La hauteur affichée est la composante verticale.
 - **Sensibilité.** Sur sol plat, `H = h · (1 + tan e_sommet / tan(−e_pied))` : la hauteur est proportionnelle à la hauteur de caméra, et très sensible au clic du pied. Quand le pied est caché, le recalage sur la carte (section 5) la rend indépendante de l'un et de l'autre.
+- **Façade du cadastre** (case du même nom, `buildings.py`), pour un bâtiment dont le pied est caché (voiture, haie, muret). Le mur est le premier bord de bâtiment du cadastre (Parcellaire Express, service WFS de la Géoplateforme) coupé par la visée horizontale du pied ; le pied est pris **au bas de ce mur, à l'altitude du sol** (profil de terrain), même si le clic tombe sur la voiture devant, et le sommet sur le plan du mur. La façade s'affiche sur la carte (tirets violets « façade du cadastre ») ; glisser le pied sur la carte reprend la main. Le résultat indique la distance du mur et son contrôle par le LiDAR HD (ci-dessous).
+- **Façade du cadastre en mesure libre** : bouton « Façade du cadastre », puis un clic sur le mur dans la photo ; ses extrémités se recalent ensuite sur la carte comme une façade définie au pied du mur.
+
+#### Validation des façades (12/10/2026)
+
+Référence : points de façades triangulés entre deux photos RTK consécutives du CD21 (5 m d'écart, inclinaison automatique calée), appariés automatiquement (SIFT) et regroupés en plans verticaux ; erreur sur la distance au mur, en médiane (90 % des points sous) :
+
+| | Pouilly-en-Auxois (14 façades) | Autour de Dijon (21) | Nuits-Saint-Georges et Semur-en-Auxois (90) |
+|---|---|---|---|
+| Cadastre | 0,79 m (1,3 m) | 0,08 m (0,85 m) | **0,18 m (0,83 m)** |
+| MNS du LiDAR HD, visée prolongée | 0,87 m trop près | LiDAR non publié | 0,83 m trop près (0 à 2,2 m selon le débord de toit) |
+| BD TOPO bâtiments | 0,65 m (2,5 m) | 0,59 m (1,1 m) | 0,70 m (1,2 m) |
+
+Sur la hauteur d'un point de façade à 7–16 m de la photo, le cadastre donne 3 cm en médiane (90 % sous 19 cm) en ville. Il a aussi des erreurs grossières (2 à 18 m) quand le mur visé n'y figure pas (annexe, clôture, autre bâtiment) : d'où le contrôle par le LiDAR et l'affichage sur la carte. Un pied bien visible et bien cliqué reste plus sûr (environ 10 à 20 cm).
+
+#### Contrôle de la façade par le LiDAR HD
+
+Le MNS du LiDAR HD (surface, bâti compris ; WMS de la Géoplateforme, grille de 0,5 m lue en flottants) marque le bord du toit, pas la façade. Le long de la visée, à partir de 3 m avant la façade du cadastre (un arbre, une haie ou un véhicule plus proche est ignoré), le bâti commence là où le MNS dépasse le MNT de 2 m. La façade est **confirmée** si le cadastre est de 0,5 m avant à 2 m après ce point (débord de toit) ; sinon « cadastre et LiDAR HD divergent de … m : contrôlez la façade sur la carte ». Sans LiDAR publié (agglomération dijonnaise en 2026), la façade est utilisée sans contrôle, et c'est signalé. À Nuits et Semur, 145 visées sur 153 sont confirmées.
 
 ### 4.4 Triangulation d'un objet
 
@@ -268,7 +286,7 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 **Surfaces** (liste « Surface ») :
 
 - **Sol** : comme les largeurs ;
-- **Façade (plan vertical)** : « Définir la façade », puis deux clics au pied du mur ; on mesure ensuite n'importe quoi sur la façade (fenêtres, portes, portails), y compris depuis d'autres photos. Ses extrémités se recalent sur la carte (section 5.5) ;
+- **Façade (plan vertical)** : « Définir la façade », puis deux clics au pied du mur, ou « Façade du cadastre » et un clic sur le mur (section 4.3) ; on mesure ensuite n'importe quoi sur la façade (fenêtres, portes, portails), y compris depuis d'autres photos. Ses extrémités se recalent sur la carte (section 5.5) ;
 - **Plan vertical face à la caméra** : premier point au sol, second dans le plan qui passe par lui ; la grandeur affichée est alors la **hauteur**, comme le préréglage ;
 - **Plan horizontal** : à la hauteur saisie au-dessus du sol (dessus d'un muret, d'un quai) ;
 - **Triangulation 3D (deux photos)** : chaque point cliqué sur deux photos différentes ; mesure indépendante du sol et de la hauteur de caméra.
@@ -617,6 +635,8 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | `MIN_ANGLE`, `MAX_DISTANCE` | 3°, 500 m | croisement minimal et distance maximale d'un point triangulé | `triangulation.py` |
 | `MAX_TILT`, `MIN_SPAN`, `MAX_LEAN` | 10°, 3°, 30° | contrôles du calage d'inclinaison | `calibration.py` |
 | `MAX_DISTANCE`, `MIN_CROSSING`, `TANGENT` | 15 m, 45°, ±10 m | choix du tronçon BD TOPO et direction locale | `roads.py` |
+| `MIN_RANGE`, `MAX_RANGE` | 1 m, 60 m | façades du cadastre cherchées le long de la visée | `buildings.py` |
+| `BUILT`, `LIDAR_BEFORE`, `LIDAR_AFTER`, `SEARCH_BEFORE` | 2 m, 0,5 m, 2 m, 3 m | bâti du LiDAR et contrôle de la façade | `buildings.py` |
 | `CELL`, `TRACK_RADIUS`, `RETRY` | 0,001° (~100 m), 20 m, 30 s | maille de lecture des tronçons, photos de la trajectoire, nouvel essai après une panne | `roads.py` |
 | `ELEV_MIN`, `ELEV_MAX`, `BAND_DEG` | 3°, 45°, 2,5° | bande et bandes d'analyse des verticales | `autotilt.py` |
 | `MAX_SLOPE`, `EDGE_BIN` | 0,12 (6,8°), 0,3° | pente maximale d'une verticale dans l'image ; segments d'une même arête | `autotilt.py` |

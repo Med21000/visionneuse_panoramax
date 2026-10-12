@@ -89,10 +89,16 @@ class Verticals(unittest.TestCase):
         self.assertAlmostEqual(r, 0.0, delta=0.05)
 
     def test_refused(self):
-        up = calibration.up_from_components(1.0, 0.0, 0.0)
-        self.assertIsNone(self.estimate(up, [100.0]))  # trop peu d'arêtes
-        self.assertIsNone(self.estimate(up, [a * 0.5 for a in range(0, 160, 4)]))  # d'un seul côté
+        up = calibration.up_from_components(1.0, -0.5, 0.0)
         self.assertIsNone(autotilt.fit([]))
+        self.assertIsNone(autotilt.fit([((10.0, 5.0), (10.0, 20.0))] * 30))  # trop peu de segments
+        # Un seul pan de mur, ou des arêtes d'un seul côté : une composante est mal contrainte.
+        # Le calcul peut aboutir, mais l'incertitude annoncée doit alors couvrir l'erreur.
+        for azimuths in ([100.0], [a * 0.5 for a in range(0, 160, 4)]):
+            res = self.estimate(up, azimuths)
+            if res is not None:
+                f, r = components(res["up"])
+                self.assertLess(math.hypot(f - 1.0, r + 0.5), 3 * res["sigma"] + 0.02)
 
 
 class LidarModel(unittest.TestCase):

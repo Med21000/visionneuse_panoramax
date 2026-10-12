@@ -436,7 +436,7 @@ Le calage à la main l'emporte sur l'inclinaison automatique (section 6.1 bis) ;
 
 **Quand.** Dès que la mesure est active, pour chaque photo 360° affichée qui n'a pas d'inclinaison calée à la main : le plugin télécharge la photo HD (7 à 8 Mo pour l'imajbox) et calcule en arrière-plan (3 à 4 s). Le résultat est conservé dans le profil QGIS avec les autres calages : une photo n'est analysée qu'une fois. Les clics faits sur la photo avant la fin du calcul sont corrigés à son arrivée, et leurs mesures recalculées.
 
-**1. Verticales de la photo** (`autotilt.py`). Sur une photo de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent verticales dans l'image équirectangulaire ; la caméra penchée, elles s'inclinent selon une loi connue. La photo est décodée à 6 144 px de large, dans la bande de 3 à 45° au-dessus de l'horizon (le sol, les véhicules et la voiture de prise de vue sont en dessous). Par bandes de 4° : sommes du gradient horizontal le long de droites de pentes variées (transformée de Radon locale) pour repérer les arêtes rectilignes, puis position de l'arête sur chaque ligne (centre du gradient) et droite des moindres carrés. Chaque segment est traité comme un objet vertical cliqué (6.1) ; moindres carrés sur toutes, avec rejet itératif à 3 écarts-types (arbres, toits, objets penchés). Résultat retenu avec au moins 40 segments, répartis sur au moins trois quarts de l'horizon, et une incertitude de moins de 0,25°.
+**1. Verticales de la photo** (`autotilt.py`). Sur une photo de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent verticales dans l'image équirectangulaire ; la caméra penchée, elles s'inclinent selon une loi connue. La photo est décodée à 6 144 px de large, dans la bande de 3 à 45° au-dessus de l'horizon (le sol, les véhicules et la voiture de prise de vue sont en dessous). Par bandes de 2,5° : sommes du gradient horizontal le long de droites de pentes variées (transformée de Radon locale) pour repérer les arêtes rectilignes, puis position de l'arête sur chaque ligne (centre du gradient) et droite des moindres carrés. Chaque segment est traité comme un objet vertical cliqué (6.1) ; moindres carrés sur toutes, avec rejet itératif à 3 écarts-types (arbres, toits, objets penchés). Pentes cherchées jusqu'à ±6,8° : une verticale vue à 45° au-dessus de l'horizon penche de deux fois l'inclinaison de la caméra. Résultat retenu avec au moins 40 segments et une incertitude de moins de 0,25°, calculée dans la direction la moins contrainte (verticales toutes du même côté : une composante mal connue) et en comptant les arêtes distinctes, une même arête donnant un segment par bande.
 
 **2. Pente et dévers du LiDAR HD**, faute de verticales (campagne). Plan du sol ajusté sur 15 points du LiDAR HD sous le véhicule (1,5 m devant et derrière, 0,8 m de chaque côté, sous les roues) : le tangage suit la pente, le roulis le dévers. Cette estimation n'est utilisée que sur une séquence où **au moins trois photos calées par leurs verticales** confirment que la caméra suit le véhicule (écart-type de moins de 0,8°) : une caméra portée à pied ou stabilisée n'est pas concernée. Le décalage moyen entre verticales et LiDAR (fixation de la caméra) est ajouté.
 
@@ -445,8 +445,8 @@ Le calage à la main l'emporte sur l'inclinaison automatique (section 6.1 bis) ;
 | | Résultat |
 |---|---|
 | Inclinaison imposée à une photo réelle (1° en long, 1° en travers) | retrouvée à 0,05–0,2° près |
-| Photos calées par leurs verticales | 18 sur 28 (centre-ville) ; ±0,03 à 0,17° annoncés |
-| Comparaison avec un détecteur de segments de référence (OpenCV LSD) | 0,1 à 0,3° d'écart, 0,6° au plus |
+| Photos calées par leurs verticales | 19 sur 28 à Pouilly (centre-ville), 21 sur 28 autour de Dijon (bourgs et quartiers pavillonnaires, ciel couvert) ; ±0,05 à 0,24° annoncés |
+| Comparaison avec un détecteur de segments de référence (OpenCV LSD) | 0,11° d'écart médian, 0,48° au plus |
 | LiDAR comparé aux verticales, en validation croisée (18 photos) | 0,4° en long, 0,5° en travers ; décalage de fixation +0,2° et −0,2° |
 | Photos de campagne (10 sur 28) | estimées par le LiDAR, ±0,5° |
 
@@ -618,9 +618,10 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | `MAX_TILT`, `MIN_SPAN`, `MAX_LEAN` | 10°, 3°, 30° | contrôles du calage d'inclinaison | `calibration.py` |
 | `MAX_DISTANCE`, `MIN_CROSSING`, `TANGENT` | 15 m, 45°, ±10 m | choix du tronçon BD TOPO et direction locale | `roads.py` |
 | `CELL`, `TRACK_RADIUS`, `RETRY` | 0,001° (~100 m), 20 m, 30 s | maille de lecture des tronçons, photos de la trajectoire, nouvel essai après une panne | `roads.py` |
-| `ELEV_MIN`, `ELEV_MAX`, `BAND_DEG` | 3°, 45°, 4° | bande et bandes d'analyse des verticales | `autotilt.py` |
+| `ELEV_MIN`, `ELEV_MAX`, `BAND_DEG` | 3°, 45°, 2,5° | bande et bandes d'analyse des verticales | `autotilt.py` |
+| `MAX_SLOPE`, `EDGE_BIN` | 0,12 (6,8°), 0,3° | pente maximale d'une verticale dans l'image ; segments d'une même arête | `autotilt.py` |
 | `WIDTH` | 6 144 px | largeur de décodage de la photo | `autotilt.py` |
-| `MIN_SEGMENTS`, `MIN_QUADRANTS`, `MAX_SIGMA` | 40, 3, 0,25° | conditions pour retenir l'inclinaison des verticales | `autotilt.py` |
+| `MIN_SEGMENTS`, `MAX_SIGMA` | 40, 0,25° | conditions pour retenir l'inclinaison des verticales | `autotilt.py` |
 | `LIDAR_ALONG`, `LIDAR_ACROSS` | 1,5 m, 0,8 m | grille LiDAR sous le véhicule | `calibration.py` |
 | `LIDAR_MIN_PHOTOS`, `LIDAR_MAX_SIGMA` | 3, 0,8° | validation du modèle LiDAR d'une séquence | `calibration.py` |
 | `SURVEY_PRIOR`, `PRIOR` | 0,5°, 3° | précision a priori du cap | `calibration.py` |

@@ -33,15 +33,16 @@ from . import api, calibration, precision
 HAS_NUMPY = importlib.util.find_spec("numpy") is not None  # calcul des verticales
 
 ELEV_MIN, ELEV_MAX = 3.0, 45.0  # bande analysée (degrés au-dessus de l'horizon)
-BAND_DEG = 4.0  # hauteur d'une bande d'analyse (degrés)
-MAX_SLOPE = 0.06  # pente maximale retenue (pixels par pixel, ~3,4°)
-SLOPE_RANGE = 0.1  # pentes calculées, de part et d'autre (marge pour le test de netteté)
-SLOPES = 101
+BAND_DEG = 2.5  # hauteur d'une bande d'analyse (degrés) : arêtes courtes ou coupées comprises
+# Pente maximale retenue (pixels par pixel, ~6,8°) : une verticale vue à 45° au-dessus de
+# l'horizon penche de deux fois l'inclinaison de la caméra (jusqu'à 3° sur l'imajbox)
+MAX_SLOPE = 0.12
+SLOPE_RANGE = 0.13  # pentes calculées, de part et d'autre
+SLOPES = 131
 WIDTH = 6144  # largeur de travail (photo HD imajbox : 12 288, décodée au demi)
 MIN_SEGMENTS = 40
-MIN_QUADRANTS = 3  # quarts d'horizon avec au moins QUADRANT_SEGMENTS segments
-QUADRANT_SEGMENTS = 5
 MAX_SIGMA = 0.25  # incertitude maximale acceptée (degrés)
+EDGE_BIN = 0.3  # degrés de cap : segments d'une même arête (incertitude)
 FLOOR = math.radians(0.05)  # dispersion minimale des segments retenus (radians)
 
 
@@ -188,15 +189,13 @@ def fit(pairs):
         keep = new
     if len(keep) < MIN_SEGMENTS:
         return None
-    # Répartition autour de la photo : sinon une composante de l'inclinaison est mal connue
-    quadrants = [0] * 4
-    for i in keep:
-        quadrants[int(yaws[i] % 360 // 90)] += 1
-    if sum(q >= QUADRANT_SEGMENTS for q in quadrants) < MIN_QUADRANTS:
-        return None
-    # Incertitude : écart-type des segments sur l'information apportée (plus grand axe)
+    # Incertitude : écart-type des segments sur l'information apportée, dans la direction la
+    # moins contrainte (segments mal répartis autour de la photo : une composante mal connue)
+    # Une arête donne un segment par bande qu'elle traverse : leurs erreurs ne sont pas
+    # indépendantes, on compte les arêtes distinctes (cap à EDGE_BIN° près).
     lam = (a11 + a22) / 2 - math.sqrt(((a11 - a22) / 2) ** 2 + a12 * a12)
-    sigma_deg = math.degrees(sigma / math.sqrt(max(lam, 1e-12)))
+    edges = len({round(yaws[i] / EDGE_BIN) for i in keep})
+    sigma_deg = math.degrees(sigma / math.sqrt(max(lam, 1e-12))) * math.sqrt(len(keep) / max(edges, 1))
     if sigma_deg > MAX_SIGMA:
         return None
     tilt = math.degrees(math.acos(min(1.0, up[2])))

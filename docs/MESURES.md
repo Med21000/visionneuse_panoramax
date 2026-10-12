@@ -278,7 +278,7 @@ Les mesures au sol et les hauteurs reposent sur le point où le rayon touche le 
 - **hauteur de caméra** fausse ou **inclinaison** non calée : toutes les distances sont faussées en proportion ;
 - **terrain** mal décrit (bordure, trottoir surélevé).
 
-Sur la carte QGIS, ces erreurs se voient immédiatement : les points rouges tombent dans les bâtiments ou les jardins au lieu d'être sur le bord du bâti.
+Sur la carte QGIS, ces erreurs se voient immédiatement : les croix jaunes des points tombent dans les bâtiments ou les jardins au lieu d'être sur le bord du bâti.
 
 ### 5.2 Le principe : la carte fixe le plan, la photo place le point
 
@@ -293,7 +293,7 @@ Le recalage combine les deux en deux gestes, que l'on peut alterner librement :
 
 **Outil de la carte.** Pendant les largeurs, les hauteurs et la mesure libre, un outil propre est actif sur la carte QGIS :
 
-- **glisser un point rouge** d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ;
+- **glisser un point** (croix jaune) d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ;
 - **glisser une extrémité de façade** déplace la façade (section 5.5) ;
 - **glisser ailleurs** déplace la carte, la molette zoome ;
 - un **simple clic** ailleurs ouvre la photo la plus proche.
@@ -461,7 +461,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 - **Effacer.** Supprime la mesure en cours (ou annule la sélection d'un point, ou supprime le calage du mode affiché). **Tout effacer** supprime toutes les mesures affichées, la façade et les visées de triangulation.
 - **Enregistrer les mesures.** Ajoute les mesures terminées affichées à la couche « Panoramax – mesures » (segment mesuré et attributs du résultat, dont la décomposition et l'incertitude) ; une mesure déjà enregistrée puis recalée y est mise à jour. Effacer une mesure de l'écran ne la retire pas de la couche.
 - **Visionneuse.** Croix jaune vif (`#ffeb00`) aux points cliqués, bien visibles sur la peinture routière, trait de mesure rouge (`#ff5f52`, 2,5 px) devant les croix, étiquette de la valeur (à côté du trait pour une hauteur), cercle jaune autour d'un point sélectionné.
-- **Carte.** Points rouges, trait de la mesure et étiquette ; pointillés vers les deux bords cliqués pour la largeur perpendiculaire ; trait « façade » au pied du mur.
+- **Carte.** Mêmes croix jaunes aux points cliqués, cernées de sombre pour rester lisibles sur l'orthophoto, trait rouge de la mesure et étiquette. Pour la largeur perpendiculaire, le trait tracé perpendiculairement à la route, à mi-chemin des deux bords, est bleu clair : il ne relie pas les points cliqués, contrairement au trait rouge de la visionneuse, et porte l'étiquette « perpendiculaire à la route » (masquée quand le trait est trop court à l'échelle de la carte) ; des pointillés le relient aux deux bords cliqués. Trait « façade » au pied du mur.
 - **Couches.** Mesures et points triangulés s'enregistrent dans « Panoramax – mesures » et « Panoramax – points triangulés » : au premier enregistrement, dans un fichier GeoPackage choisi (tables `mesures` et `points_triangules`, conservé à la fermeture de QGIS) ou en couche temporaire (à sauvegarder).
 
 ---

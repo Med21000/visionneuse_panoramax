@@ -12,6 +12,7 @@
   appliqués ensuite à toutes les mesures.
 """
 
+import math
 from datetime import datetime
 
 from qgis.core import (
@@ -25,12 +26,17 @@ from qgis.core import (
 )
 from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
-from qgis.PyQt.QtGui import QBrush, QColor, QFontMetricsF, QPainter, QPen
+from qgis.PyQt.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen
 
 from . import calibration, output, triangulation
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
+CROSS = QColor(255, 235, 0)  # croix jaune vif des points cliqués, comme dans la visionneuse (#ffeb00)
+# Trait perpendiculaire à la route (largeur perpendiculaire) : il ne relie pas les points
+# cliqués, d'où une autre couleur que le trait rouge de la visionneuse
+TRACE = QColor(0, 188, 230)
+TRACE_LABEL = "perpendiculaire à la route"
 LAYER_NAME = "Panoramax – points triangulés"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
@@ -227,6 +233,15 @@ def _style_points(layer):
 # --------------------------------------------------------------------------
 # Largeur et hauteur
 # --------------------------------------------------------------------------
+def _draw_cross(painter, p, size=6.0):
+    """Croix jaune d'un point cliqué, comme dans la visionneuse, cernée de sombre pour rester
+    lisible sur l'orthophoto."""
+    for pen in (QPen(QColor(0, 0, 0, 170), 4), QPen(CROSS, 2)):
+        painter.setPen(pen)
+        painter.drawLine(QPointF(p.x() - size, p.y()), QPointF(p.x() + size, p.y()))
+        painter.drawLine(QPointF(p.x(), p.y() - size), QPointF(p.x(), p.y() + size))
+
+
 class MeasureItem(QgsMapCanvasItem):
     """Points mesurés au sol, segment éventuel et étiquette du résultat."""
 
@@ -267,7 +282,9 @@ class MeasureItem(QgsMapCanvasItem):
         if self._screen:
             pts = self._screen + [e for _, e in self._extras]
             xs, ys = [p.x() for p in pts], [p.y() for p in pts]
-            rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(-10, -10, 10, 10)
+            margin = 30 if self._extras else 10  # étiquette « perpendiculaire à la route » le long du trait
+            rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(
+                -margin, -margin, margin, margin)
             self._rect = rect.united(self._label_rect())
         else:
             self._rect = QRectF()
@@ -280,30 +297,63 @@ class MeasureItem(QgsMapCanvasItem):
         if not self._screen:
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Largeur perpendiculaire : trait tracé à mi-chemin des bords cliqués (couleur TRACE),
+        # bords cliqués reliés en pointillés. Sinon le trait relie les points cliqués, en rouge
+        # comme dans la visionneuse.
+        trace = bool(self._extras)
+        color = TRACE if trace else COLOR
         if len(self._screen) == 2:
             painter.setPen(QPen(QColor(255, 255, 255, 220), 5))
             painter.drawLine(*self._screen)
-            painter.setPen(QPen(COLOR, 2.5))
+            painter.setPen(QPen(color, 2.5))
             painter.drawLine(*self._screen)
-        painter.setPen(QPen(QColor(255, 255, 255), 2))
-        painter.setBrush(QBrush(COLOR))
-        for p in self._screen:
-            painter.drawEllipse(p, 5, 5)
         for i, extra in self._extras:
-            # Bord cliqué, relié en pointillés au bout du trait perpendiculaire
-            painter.setPen(QPen(COLOR, 1.5, Qt.PenStyle.DotLine))
+            painter.setPen(QPen(color, 1.5, Qt.PenStyle.DotLine))
             painter.drawLine(self._screen[i], extra)
-            painter.setPen(QPen(COLOR, 2))
-            painter.setBrush(QColor(255, 255, 255))
-            painter.drawEllipse(extra, 4, 4)
+        if trace:
+            painter.setPen(QPen(QColor(255, 255, 255), 1.5))
+            painter.setBrush(QBrush(color))
+            for p in self._screen:
+                painter.drawEllipse(p, 3.5, 3.5)
+        if trace and len(self._screen) == 2:
+            self._paint_trace_label(painter, color)
+        clicked = [e for _, e in self._extras] if trace else self._screen
+        for p in clicked:
+            _draw_cross(painter, p)
         rect = self._label_rect()
         if not rect.isNull():
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(255, 255, 255, 230))
             painter.drawRoundedRect(rect, 4, 4)
-            painter.setPen(QPen(COLOR.darker(130)))
+            painter.setPen(QPen(color.darker(150 if trace else 130)))
             painter.setFont(self._canvas.font())
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.label)
+
+    def _paint_trace_label(self, painter, color):
+        """« perpendiculaire à la route » le long du trait de la largeur perpendiculaire, du côté
+        opposé à l'étiquette de la valeur, lisible de gauche à droite."""
+        a, b = self._screen
+        if a.x() > b.x():
+            a, b = b, a
+        length = math.hypot(b.x() - a.x(), b.y() - a.y())
+        font = QFont(self._canvas.font())
+        font.setPointSizeF(max(6.0, font.pointSizeF() * 0.85))
+        font.setItalic(True)
+        width = QFontMetricsF(font).horizontalAdvance(TRACE_LABEL)
+        if length < width + 16:
+            return  # trait trop court à cette échelle
+        painter.save()
+        painter.translate((a.x() + b.x()) / 2, (a.y() + b.y()) / 2)
+        painter.rotate(math.degrees(math.atan2(b.y() - a.y(), b.x() - a.x())))
+        height = QFontMetricsF(font).height()
+        rect = QRectF(-width / 2 - 4, 4, width + 8, height + 2)  # sous le trait
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 230))
+        painter.drawRoundedRect(rect, 3, 3)
+        painter.setPen(QPen(color.darker(150)))
+        painter.setFont(font)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, TRACE_LABEL)
+        painter.restore()
 
     def remove(self):
         scene = self._canvas.scene()

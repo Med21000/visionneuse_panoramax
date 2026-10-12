@@ -1,10 +1,11 @@
 # Tests automatiques
 
 Ces tests vérifient les calculs du plugin : triangulation, points 3D, mesures au sol,
-calage des photos, profil du terrain, mesures et leur recalage sur la carte, filtre des
-photos. Une seconde série, avec le vrai QGIS, vérifie l'enregistrement des mesures dans
-les couches et le GeoPackage, ainsi que la conservation du calage. Ils ne testent pas
-l'interface (panneau, visionneuse web, dessin sur la carte).
+calage des photos, profil du terrain, précision GPS, mesures et leur recalage sur la carte,
+filtre des photos. Une seconde série, avec le vrai QGIS, vérifie l'enregistrement des
+mesures dans les couches et le GeoPackage, la conservation du calage, l'altitude NGF,
+l'opacité du filaire et le panneau, avec la visionneuse de secours. La visionneuse web
+(QtWebEngine ne fonctionne pas hors écran) et le dessin sur la carte ne sont pas testés.
 
 Ils ne sont pas livrés avec le plugin : le dossier `tests/` est exclu du zip de release
 (`.gitattributes`).
@@ -101,6 +102,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |
 | `test_precision.py` | 11 | Précision GPS vérifiée sur la séquence (services simulés) : séquence RTK reconnue, DGPS non reconnu, correction différentielle exigée, précision déclarée dans l'EXIF (LiDAR contrôlé quand même), trop peu d'altitudes, une vérification par séquence, service en panne ; mode dégradé dès qu'il manque la position vérifiée ou le LiDAR HD, raisons et ligne d'état. |
 | `test_measure_panel.py` | 4 | Texte du calage rappelé sous les mesures : inclinaison, hauteur de caméra, cap et position recalés, recalage hors de portée. |
+| `qgis/test_panel.py` | 12 | Avec QGIS, panneau hors écran (visionneuse de secours, services simulés) : widgets de chaque mode de mesure et de chaque surface, réglages et boutons (signaux émis), mode compact (icônes, lignes masquées, aide dans la bulle, boutons alignés), filtre réglé puis remis à zéro, photo affichée et navigation, clic de mesure et visée, rappel du calage, image qui ne bouge pas (résultat long, consigne suivante, rappel du calage), fenêtre du mode dégradé (à l'activation de la mesure, pas au changement de photo, « ne plus afficher », vérification en cours). |
 | `qgis/test_output.py` | 12 | Avec QGIS : couche temporaire ou GeoPackage, deux tables dans le même fichier, table existante réutilisée ou de structure incompatible, annulation ; ajout et mise à jour d'entités (couche en édition ou non) ; boîte de dialogue du choix (boutons et fenêtre de fichier simulés) ; enregistrement de bout en bout d'une mesure, puis mise à jour après recalage, et d'un point triangulé. |
 | `qgis/test_altitude.py` | 2 | Avec QGIS : altitude GPS ellipsoïdale convertie en altitude NGF par la grille RAF20 (Pouilly-en-Auxois : géoïde 47,59 m, caméra à 1,88 m du sol LiDAR HD ; test sauté si la grille ne peut pas être téléchargée), rien hors de France. |
 | `qgis/test_layers.py` | 4 | Avec QGIS : couche filaire créée à 60 % d'opacité, puis à la dernière opacité choisie ; opacité conservée par le filtre ; couche chargée avec un projet : opacité du projet gardée, changement mémorisé ; réglage abîmé. |

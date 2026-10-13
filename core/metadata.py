@@ -130,3 +130,28 @@ def item_link(item, rel):
 def id_from_href(href):
     """Dernier segment d'une URL d'item STAC (= identifiant de la photo)."""
     return urlsplit(href).path.rstrip("/").rsplit("/", 1)[-1] if href else None
+
+
+def sequence_axis(item, prev_item, next_item):
+    """Direction de déplacement le long de la séquence (cap en degrés), ou None.
+
+    Calculée entre les photos voisines (précédente et suivante, fiches STAC ou None) pour
+    suivre l'axe de la voie, plutôt que l'orientation de la caméra.
+    """
+    def position(feat):
+        try:
+            return [float(v) for v in feat["geometry"]["coordinates"][:2]]
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    here = position(item)
+    a = position(prev_item) if prev_item else None
+    b = position(next_item) if next_item else None
+    a, b = (a or here), (b or here)
+    if a is None or b is None or a == b:
+        return None
+    dx = (b[0] - a[0]) * math.cos(math.radians((a[1] + b[1]) / 2))
+    dy = b[1] - a[1]
+    if math.hypot(dx, dy) * 111320.0 < 0.5:  # photos quasi confondues (arrêt) : direction peu fiable
+        return None
+    return math.degrees(math.atan2(dx, dy)) % 360

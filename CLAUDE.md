@@ -12,8 +12,11 @@ Historique des décisions, revue de code et feuille de route : `docs/feuille-de-
 - **Cœur de calcul sans QGIS** (`core/`) : aucun import de `qgis` (vérifié par
   `tests/test_core.py`) ; il sert aussi à l'application web web-measures (Pyodide). Ce qui
   dépend de l'hôte passe par `core/host.py` (réseau, altitude NGF, décodage d'une photo,
-  tâches de fond), rempli par `qgis_host.py`. Le dessin et l'enregistrement restent dans le
-  plugin (`measure_tool.py`, `measure.py`, `output.py`).
+  tâches de fond), rempli par `qgis_host.py`. Les outils (`measures.MeasureTool`,
+  `tools.Triangulator`, `tools.CalibrationTool`) et la conversion d'un clic dans la photo
+  (`tools.photo_click`, `tools.photo_sighting`), le filtre des photos (`filters`) et le calcul
+  de la capture HD (`capture`) y sont aussi : le plugin les sous-classe pour
+  le dessin (`new_item`) et l'enregistrement (`measure_tool.py`, `measure.py`, `output.py`).
 
 - Nom : « Visionneuse Panoramax » partout. Jamais « Panoramax Viewer » (nom d'un autre plugin).
 - QGIS 4.0 minimum, Qt6 : énumérations qualifiées (`Qt.MouseButton.LeftButton`,

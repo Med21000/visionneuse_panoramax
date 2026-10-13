@@ -99,7 +99,8 @@ def solve(sightings):
 
     sightings : liste de dicts avec au moins "lon", "lat", "heading", et
     éventuellement "accuracy" (précision de la position GPS en m, None si inconnue)
-    "precise" (cap au centième de degré) et "heading_error" (voir heading_error).
+    "precise" (cap au centième de degré), "heading_error" (voir heading_error) et
+    "sequence" (erreurs communes aux photos d'une même séquence).
     Retourne un dict : lon, lat, distances (m, une par visée), angle (° de
     croisement le plus favorable), rms (écart moyen des visées au point, m),
     uncertainty (rayon d'incertitude en m pour l'erreur de visée de chaque photo et la
@@ -165,6 +166,16 @@ def solve(sightings):
         uncertainty = 1.0 / math.sqrt(smallest) if smallest > 0 else float("inf")
     else:
         uncertainty = float("inf")
+
+    # Photos d'une même séquence : leur décalage de position GPS et leur erreur de cap (fixation
+    # de la caméra) sont presque les mêmes ; ils déplacent le point d'un bloc et ne se compensent
+    # pas entre visées. L'incertitude ne descend pas sous cette part commune.
+    sequences = {s.get("sequence") for s in sightings}
+    if len(sequences) == 1 and None not in sequences:
+        n = len(sightings)
+        common = math.hypot(sum(accuracies) / n,
+                            sum(distances) / n * math.tan(math.radians(sum(errors) / n)))
+        uncertainty = max(uncertainty, common)
 
     lon, lat = _geographic(x, y, lon0, lat0)
     return {

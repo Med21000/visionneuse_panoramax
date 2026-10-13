@@ -131,6 +131,33 @@ class CameraHeight(unittest.TestCase):
         with self.assertRaises(CalibrationError):
             calibration.camera_height("height", [self.click(-10.0), self.click(10.0, pic="p2")], 3.0)
 
+    def test_recomputed_with_current_tilt(self):
+        """Hauteur calée sur une photo penchée, avant que son inclinaison soit connue : biaisée ;
+        une fois l'inclinaison connue, la hauteur est recalculée à partir des clics bruts."""
+        h, up = 2.1, tilted_up(1.5, 0.0)  # caméra penchée de 1,5° vers l'avant (nord)
+        clicks = []
+        for d in (8.0, 11.0):
+            yaw, elev = seen(up, 0.0, math.degrees(math.atan2(-h, d)))
+            clicks.append(dict(self.click(elev, yaw), raw=[yaw, elev], sequence="s"))
+        cal = calibration.Calibration()
+        cal.add_camera_height("s", "ground", clicks, 3.0)
+        biased = cal.camera("s")["height"]
+        self.assertGreater(abs(biased - h), 0.05)
+        cal.add_vertical("p1", *vertical_object(up, 90, 8))  # inclinaison calée ensuite
+        cal.add_vertical("p1", *vertical_object(up, 180, 8))
+        self.assertAlmostEqual(cal.camera("s")["height"], h, delta=0.01)
+        other = calibration.Calibration()  # enregistrement et relecture : clics bruts conservés
+        other.load(cal.to_dict())
+        self.assertAlmostEqual(other.camera("s")["height"], h, delta=0.01)
+        self.assertEqual(other.camera("s")["legacy"], 0)
+
+    def test_legacy_values(self):
+        cal = calibration.Calibration()
+        cal.load({"format": 1, "heights": {"s": [[2.0, 0.1], [2.2, -1]], "t": [{"kind": "ground"}]}})
+        self.assertEqual(cal.heights["s"], [(2.0, 0.1)])  # incertitude invalide ignorée
+        self.assertEqual(cal.camera("s")["legacy"], 1)
+        self.assertNotIn("t", cal.heights)  # calage illisible ignoré
+
     def test_weighted_mean(self):
         cal = calibration.Calibration()
         cal.heights["s"] = [(2.0, 0.1), (2.3, 0.2)]

@@ -23,6 +23,7 @@ Une vérification par séquence (deux requêtes : fiches des photos voisines, al
 LiDAR), en arrière-plan ; le résultat est gardé pour la session.
 """
 
+import math
 import statistics
 from urllib.parse import urlencode
 
@@ -34,6 +35,8 @@ CHECK_RADIUS = 60.0  # m autour de la photo pour les photos voisines de la séqu
 CHECK_PHOTOS = 20
 MIN_PHOTOS = 8
 MAX_SPREAD = 0.10  # m : écart-type maximal de la hauteur de caméra entre photos voisines
+OUTLIER = 4.0  # photos écartées au-delà de OUTLIER écarts médians absolus (corrigés)
+MIN_MAD = 0.02  # m : écart médian minimal (photos très régulières)
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m)
 ELEVATION_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
 DEGRADED_ADVICE = ("Les mesures dépendent alors de la hauteur de caméra, de l'inclinaison de la caméra et, sans "
@@ -61,12 +64,14 @@ def _ground(data):
     return out
 
 
-def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, height=None):
+def result(precise, accuracy=None, lidar=None, reason="", count=0, spread=None, height=None, transient=False):
     """Résultat d'une vérification : precise, accuracy (m, ou None : celle de la photo), lidar (LiDAR
-    HD publié sous la photo, None si inconnu), reason (texte), count, spread et height (hauteur de
-    caméra médiane) pour une séquence vérifiée."""
+    HD publié sous la photo, None si inconnu), reason (texte), count et spread pour une séquence
+    vérifiée, height : hauteur de caméra calculée (altitude GPS moins sol LiDAR HD ; médiane de la
+    séquence vérifiée, ou celle de la photo de précision déclarée), None si inconnue. transient :
+    obtenu malgré un service injoignable, donc pas gardé pour la session (vérification refaite)."""
     return {"precise": precise, "accuracy": accuracy, "lidar": lidar, "reason": reason, "count": count,
-            "spread": spread, "height": height}
+            "spread": spread, "height": height, "transient": transient}
 
 
 def degraded(res):
@@ -87,10 +92,26 @@ def degraded_reasons(res):
     return out
 
 
-def state_text(res, accuracy=None):
-    """Ligne d'état du panneau : précision de la position et présence du LiDAR HD."""
+def camera_suggestion(res):
+    """Hauteur de caméra calculée à proposer dans le panneau : (hauteur, explication), ou None."""
+    if not res or not res["precise"] or res["lidar"] is not True or res.get("height") is None:
+        return None
+    if res["count"]:
+        how = "médiane de {} photos de la séquence, écart-type {:.0f} cm".format(res["count"], res["spread"] * 100)
+    else:
+        how = "photo de précision déclarée ±{:.0f} cm".format(res["accuracy"] * 100)
+    return res["height"], ("Hauteur de caméra calculée : altitude GPS de la caméra (NGF) moins le sol LiDAR HD "
+                           "({}). Cliquer pour remplir le champ « Caméra à ».".format(how))
+
+
+def state_text(res, accuracy=None, tilt=None):
+    """Ligne d'état du panneau : précision de la position, présence du LiDAR HD et, si
+    `tilt` (texte, manquante) est donné, inclinaison de la photo."""
+    tilt_text, tilt_missing = tilt or ("", False)
     if not res:
-        return "Position GPS et LiDAR HD : vérification en cours…"
+        text = "Position GPS et LiDAR HD : vérification en cours…"
+        return "⚠ {} · {}".format(text, tilt_text) if tilt_missing else (
+            "{} · {}".format(text, tilt_text) if tilt_text else text)
     if res["precise"]:
         position = "Position GPS vérifiée (±{} m)".format("{:.2f}".format(res["accuracy"]).replace(".", ","))
     elif accuracy is not None:
@@ -98,8 +119,56 @@ def state_text(res, accuracy=None):
     else:
         position = "Position GPS non vérifiée"
     lidar = {True: "LiDAR HD", False: "pas de LiDAR HD", None: "LiDAR HD non vérifié"}[res["lidar"]]
-    text = "{} · {}".format(position, lidar)
-    return "⚠ " + text + " : mode de mesure dégradé" if degraded(res) else text
+    text = " · ".join(t for t in (position, lidar, tilt_text) if t)
+    if degraded(res):
+        return "⚠ " + text + " : mode de mesure dégradé"
+    if tilt_missing:
+        return "⚠ " + text + " : calez-la sur deux objets verticaux"
+    return text
+
+
+def verify_heights(pts):
+    """Vérification d'une séquence d'après la hauteur de caméra (altitude GPS NGF moins sol
+    LiDAR HD) de photos voisines [(lon, lat, hauteur)] : résultat (voir result).
+
+    Robuste : les photos dont la hauteur s'écarte de plus de OUTLIER écarts (écart médian
+    absolu) sont écartées (pont, défaut du LiDAR, arrêt sous un arbre) ; la dispersion des
+    autres doit rester sous MAX_SPREAD. La hauteur doit aussi être la même sur les deux
+    moitiés de la portion vérifiée (à MAX_SPREAD près) : un GPS non recalé peut être lisse
+    sur quelques photos, mais il dérive."""
+    heights = [h for _, _, h in pts]
+    median = statistics.median(heights)
+    mad = 1.4826 * statistics.median(abs(h - median) for h in heights)
+    kept = [p for p in pts if abs(p[2] - median) <= OUTLIER * max(mad, MIN_MAD)]
+    if len(kept) < MIN_PHOTOS:
+        return result(False, lidar=True, reason="hauteur de caméra trop dispersée ({} photos sur {})".format(
+            len(kept), len(pts)))
+    spread, height = statistics.pstdev([h for _, _, h in kept]), statistics.median([h for _, _, h in kept])
+    # Deux moitiés le long de la trajectoire (axe principal des positions)
+    lon0, lat0 = kept[0][0], kept[0][1]
+    xy = [((lon - lon0) * 111320.0 * math.cos(math.radians(lat0)), (lat - lat0) * 111320.0) for lon, lat, _ in kept]
+    mx, my = sum(x for x, _ in xy) / len(xy), sum(y for _, y in xy) / len(xy)
+    sxx = sum((x - mx) ** 2 for x, _ in xy)
+    syy = sum((y - my) ** 2 for _, y in xy)
+    sxy = sum((x - mx) * (y - my) for x, y in xy)
+    a = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    order = sorted(range(len(kept)), key=lambda i: xy[i][0] * math.cos(a) + xy[i][1] * math.sin(a))
+    half = len(order) // 2
+    drift = abs(statistics.median(kept[i][2] for i in order[:half]) -
+                statistics.median(kept[i][2] for i in order[half:]))
+    precise = spread <= MAX_SPREAD and drift <= MAX_SPREAD and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
+    dropped = len(pts) - len(kept)
+    note = " ({} écartée{})".format(dropped, "s" if dropped > 1 else "") if dropped else ""
+    if precise:
+        reason = "position vérifiée : hauteur de caméra constante à {:.0f} cm près sur {} photos{}".format(
+            spread * 100, len(kept), note)
+    elif drift > MAX_SPREAD and spread <= MAX_SPREAD:
+        reason = "position non vérifiée : hauteur de caméra qui dérive de {:.0f} cm le long de la séquence".format(
+            drift * 100)
+    else:
+        reason = "position non vérifiée : hauteur de caméra variable de {:.0f} cm sur {} photos".format(
+            spread * 100, len(kept))
+    return result(precise, VERIFIED_ACCURACY if precise else None, True, reason, len(kept), spread, height)
 
 
 class PrecisionChecker:
@@ -119,15 +188,17 @@ class PrecisionChecker:
         if sequence in self._results:
             callback(self._results[sequence])
             return
-        if sequence in self._pending:
-            self._pending[sequence].append(callback)
+        # Photo sans séquence : vérifiée seule (deux photos sans séquence ne partagent rien)
+        key = sequence if sequence is not None else ("photo", item.get("id"))
+        if key in self._pending:
+            self._pending[key].append(callback)
             return
-        self._pending[sequence] = [callback]
+        self._pending[key] = [callback]
 
         def done(res):
-            if sequence is not None:
+            if sequence is not None and not res.get("transient"):
                 self._results[sequence] = res
-            for cb in self._pending.pop(sequence, []):
+            for cb in self._pending.pop(key, []):
                 cb(res)
 
         try:
@@ -137,18 +208,27 @@ class PrecisionChecker:
             return
         accuracy = api.exif_accuracy(item)
         if accuracy is not None and accuracy <= PRECISE_ACCURACY:
-            self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy)
+            self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy,
+                              altitude.ngf_altitude(lon, lat, api.item_altitude(item)))
         elif api.gps_differential(item) and sequence:
             self._check_sequence(item, sequence, lon, lat, done)
         else:
             self._check_lidar(lon, lat, done, "pas de correction différentielle déclarée")
 
-    def _check_lidar(self, lon, lat, done, reason, accuracy=None):
-        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None."""
+    def _check_lidar(self, lon, lat, done, reason, accuracy=None, camera_alt=None, transient=False):
+        """Le LiDAR HD est-il publié sous la photo ? accuracy : précision déclarée suffisante, ou None ;
+        camera_alt : altitude NGF de la caméra, pour la hauteur de caméra d'une photo précise ;
+        transient : une étape précédente n'a pas pu joindre son service."""
         def got(data, error):
             ground = _ground(data) if not error else []
             lidar = None if error else bool(ground and ground[0] is not None)
-            done(result(accuracy is not None, accuracy, lidar, reason))
+            height = None
+            if lidar and accuracy is not None and camera_alt is not None:
+                height = camera_alt - ground[0]
+                if not CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]:
+                    height = None
+            done(result(accuracy is not None, accuracy, lidar, reason, height=height,
+                        transient=transient or bool(error)))
 
         api.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 
@@ -163,6 +243,9 @@ class PrecisionChecker:
                 ngf = altitude.ngf_altitude(plon, plat, api.item_altitude(feat))
                 if ngf is not None and feat.get("collection", sequence) == sequence:
                     photos.append((plon, plat, ngf))
+            if error:
+                self._check_lidar(lon, lat, done, "photos voisines indisponibles ({})".format(error), transient=True)
+                return
             if len(photos) < MIN_PHOTOS:
                 self._check_lidar(lon, lat, done, "altitude GPS inexploitable ({} photos voisines)".format(len(photos)))
                 return
@@ -171,18 +254,12 @@ class PrecisionChecker:
 
         def got_ground(photos, data, error):
             if error:
-                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error)))
+                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error), transient=True))
                 return
-            heights = [ngf - g for (_, _, ngf), g in zip(photos, _ground(data)) if g is not None]
-            if len(heights) < MIN_PHOTOS:
+            pts = [(plon, plat, ngf - g) for (plon, plat, ngf), g in zip(photos, _ground(data)) if g is not None]
+            if len(pts) < MIN_PHOTOS:
                 done(result(False, lidar=False, reason="pas de LiDAR HD pour vérifier la position"))
                 return
-            spread, height = statistics.pstdev(heights), statistics.median(heights)
-            precise = spread <= MAX_SPREAD and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
-            reason = ("position vérifiée : hauteur de caméra constante à {:.0f} cm près sur {} photos".format(
-                spread * 100, len(heights)) if precise else
-                "position non vérifiée : hauteur de caméra variable de {:.0f} cm sur {} photos".format(
-                    spread * 100, len(heights)))
-            done(result(precise, VERIFIED_ACCURACY if precise else None, True, reason, len(heights), spread, height))
+            done(verify_heights(pts))
 
         api.fetch_json(api.search_url(lon, lat, CHECK_RADIUS, CHECK_PHOTOS, sequence), got_photos)

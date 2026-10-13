@@ -33,6 +33,7 @@ ses conditions interdisent l'usage des données hors d'une carte Google.
 """
 
 import math
+from collections import OrderedDict
 from urllib.parse import urlencode
 
 from . import api, ground, triangulation
@@ -44,8 +45,13 @@ IGN_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevationLine.j
 IGN_RESOURCE = "ign_rge_alti_wld"
 IGN_LABEL = "RGE ALTI (IGN), pente de la route"
 LIDAR_RESOURCE = "ign_lidar_hd_mnt_mono_wld"  # MNT LiDAR HD 50 cm, publié département par département
-LIDAR_LABEL = "LiDAR HD (IGN), pente de la route"
-PRECISE_LABELS = (LIDAR_LABEL, IGN_LABEL)  # sol au décimètre près sous la caméra (voir measure_tool.camera_info)
+LIDAR_LABEL = "LiDAR HD (IGN), profil de la chaussée"
+LIDAR_LINE_LABEL = "LiDAR HD (IGN), pente de la route"  # profil incomplet : droite de pente
+# Sol sous la caméra assez exact pour en déduire la hauteur de caméra par l'altitude GPS : LiDAR
+# HD seulement (le RGE ALTI, au mètre et plus ancien, peut être décalé de 0,2 à 0,5 m, soit 10 à
+# 25 % d'erreur sur toutes les distances)
+PRECISE_LABELS = (LIDAR_LABEL, LIDAR_LINE_LABEL)
+MIN_COVERAGE = 0.8  # part minimale d'altitudes valides pour suivre le profil réel
 NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
 TIMEOUT_MS = 5000  # au-delà, on passe à la source suivante
 
@@ -63,10 +69,29 @@ OPENMETEO_LABEL = "Copernicus 90 m (Open-Meteo), pente générale"
 MAX_COARSE_SLOPE = 0.12
 BRIDGE_LABEL = "sol plat (mesure sur un pont)"
 
+# Cache de la session, pour limiter les appels aux services : profils déjà calculés (même
+# point de vue, même direction au dixième de degré près : visée reprise, point recalé ; plus
+# grossier, le profil réel du LiDAR HD pourrait passer de l'autre côté d'une bordure)
+# et sources sans données autour d'un point (LiDAR HD pas encore publié, hors de France),
+# qui ne sont plus interrogées dans cette zone. Un service injoignable n'est pas mémorisé.
+CACHE_SIZE = 64
+COVERAGE_CELL = 0.001  # degré (~100 m) : maille des zones sans données mémorisées
+
+
+def _profile_key(lon, lat, yaw):
+    return round(lon, 6), round(lat, 6), int(round(yaw * 10)) % 3600
+
+
+def _cell(lon, lat):
+    return int(math.floor(lon / COVERAGE_CELL)), int(math.floor(lat / COVERAGE_CELL))
+
 
 class TerrainProvider:
     def __init__(self):
         self.bridge = False  # mesure sur un pont : sol plat, sans interroger les services
+        self._profiles = OrderedDict()  # clé (voir _profile_key) -> (profil, libellé, avertissement)
+        self._waiting = {}  # clé -> rappels en attente (même profil déjà demandé)
+        self._uncovered = set()  # (source, maille) : source sans données dans cette zone
 
     def profile(self, lon, lat, yaw, callback):
         """Profil le long de la visée. callback(profil, libellé de la source, avertissement | None).
@@ -76,19 +101,43 @@ class TerrainProvider:
         if self.bridge:
             callback(ground.flat_profile(), BRIDGE_LABEL, None)
             return
-        steps = [self._lidar_step, self._ign_step, self._opentopodata_step, self._openmeteo_step]
+        key = _profile_key(lon, lat, yaw)
+        if key in self._profiles:
+            self._profiles.move_to_end(key)
+            callback(*self._profiles[key])
+            return
+        if key in self._waiting:
+            self._waiting[key].append(callback)
+            return
+        self._waiting[key] = [callback]
+        cell = _cell(lon, lat)
+        steps = [(name, step) for name, step in (("lidar", self._lidar_step), ("ign", self._ign_step),
+                                                  ("opentopodata", self._opentopodata_step),
+                                                  ("openmeteo", self._openmeteo_step))
+                 if (name, cell) not in self._uncovered]
         reasons = []
+
+        def finish(prof, label, cache):
+            res = (prof, label, "; ".join(reasons) or None)
+            if cache:
+                self._profiles[key] = res
+                while len(self._profiles) > CACHE_SIZE:
+                    self._profiles.popitem(last=False)
+            for cb in self._waiting.pop(key, []):
+                cb(*res)
 
         def next_step():
             if not steps:
-                callback(ground.flat_profile(), ground.FLAT, "; ".join(reasons) or None)
+                finish(ground.flat_profile(), ground.FLAT, False)  # à retenter : un service peut revenir
                 return
-            step = steps.pop(0)
+            name, step = steps.pop(0)
 
             def ok(prof, label):
-                callback(prof, label, "; ".join(reasons) or None)
+                finish(prof, label, True)
 
-            def failed(reason=None):
+            def failed(reason=None, uncovered=False):
+                if uncovered:  # pas de données ici : source inutile dans cette zone pour la session
+                    self._uncovered.add((name, cell))
                 if reason:  # LiDAR HD pas encore publié ici : repli silencieux sur le RGE ALTI
                     reasons.append(reason)
                 next_step()
@@ -101,17 +150,30 @@ class TerrainProvider:
     # Service d'altimétrie IGN
     # ------------------------------------------------------------------
     def _lidar_step(self, lon, lat, yaw, ok, failed):
-        self._ign_line(lon, lat, yaw, ok, lambda error: failed(), LIDAR_RESOURCE, LIDAR_LABEL)
+        """MNT LiDAR HD : profil réel de la chaussée (voir real_profile), ou à défaut droite de pente."""
+        def parsed(dists, values):
+            prof = real_profile(dists, values)
+            if prof is not None:
+                return prof, LIDAR_LABEL
+            prof = robust_profile(dists, values)
+            return (prof, LIDAR_LINE_LABEL) if prof is not None else None
+
+        self._ign_line(lon, lat, yaw, ok, lambda error: failed(uncovered=error is None), LIDAR_RESOURCE, parsed)
 
     def _ign_step(self, lon, lat, yaw, ok, failed):
         def no_data(error):
             failed("service d'altimétrie IGN indisponible ({})".format(error) if error else
-                   "pas d'altitude IGN à cet endroit (hors de France ?)")
+                   "pas d'altitude IGN à cet endroit (hors de France ?)", uncovered=error is None)
 
-        self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, IGN_LABEL)
+        def parsed(dists, values):
+            prof = robust_profile(dists, values)
+            return (prof, IGN_LABEL) if prof is not None else None
 
-    def _ign_line(self, lon, lat, yaw, ok, no_data, resource, label):
-        """Profil d'une ressource du service IGN ; no_data(erreur ou None) si rien d'exploitable."""
+        self._ign_line(lon, lat, yaw, ok, no_data, IGN_RESOURCE, parsed)
+
+    def _ign_line(self, lon, lat, yaw, ok, no_data, resource, parse):
+        """Profil d'une ressource du service IGN ; parse(distances, altitudes) → (profil, libellé)
+        ou None ; no_data(erreur ou None) si rien d'exploitable."""
         start = triangulation.offset(lon, lat, yaw, LINE_FROM)
         end = triangulation.offset(lon, lat, yaw, LINE_TO)
         params = {
@@ -124,9 +186,10 @@ class TerrainProvider:
         url = IGN_URL + "?" + urlencode(params, safe="|")
 
         def done(data, error):
-            prof = self._parse_ign(data, lon, lat, yaw) if not error and isinstance(data, dict) else None
-            if prof is not None:
-                ok(prof, label)
+            samples = self._ign_samples(data, lon, lat, yaw) if not error and isinstance(data, dict) else None
+            res = parse(*samples) if samples else None
+            if res is not None:
+                ok(*res)
             else:
                 no_data(error)
 
@@ -135,6 +198,12 @@ class TerrainProvider:
     @staticmethod
     def _parse_ign(data, lon, lat, yaw):
         """Altitudes IGN → droite de pente (None si hors couverture)."""
+        samples = TerrainProvider._ign_samples(data, lon, lat, yaw)
+        return robust_profile(*samples) if samples else None
+
+    @staticmethod
+    def _ign_samples(data, lon, lat, yaw):
+        """Altitudes IGN → (distances signées le long de la visée, altitudes), ou None."""
         dx, dy = math.sin(math.radians(yaw)), math.cos(math.radians(yaw))
         dists, values = [], []
         for pt in data.get("elevations") or []:
@@ -145,7 +214,7 @@ class TerrainProvider:
                 return None
             dists.append(x * dx + y * dy)  # position signée le long de la visée
             values.append(z)
-        return robust_profile(dists, values)
+        return dists, values
 
     # ------------------------------------------------------------------
     # Services de secours (mailles de 25 à 90 m) : pente générale
@@ -191,7 +260,7 @@ class TerrainProvider:
             return
         prof = robust_profile(dists, values)
         if prof is None:
-            failed("pas d'altitude {} à cet endroit".format(name))
+            failed("pas d'altitude {} à cet endroit".format(name), uncovered=True)
             return
         slope = (prof[1][1] - prof[0][1]) / (prof[1][0] - prof[0][0])
         if abs(slope) > MAX_COARSE_SLOPE:
@@ -224,6 +293,42 @@ def robust_profile(dists, values):
     slope = _median(slopes) if slopes else 0.0
     z0 = _median([z - slope * s for s, z in pts])
     return [(0.0, z0), (ground.MAX_DISTANCE, z0 + slope * ground.MAX_DISTANCE)]
+
+
+def real_profile(dists, values):
+    """Profil réel le long de la visée, depuis la photo (MNT LiDAR HD) : bordures, caniveau et
+    dévers y figurent, contrairement à la droite de pente.
+
+    Altitudes lissées par une médiane glissante sur trois échantillons (1,5 m) contre le bruit,
+    profil commençant sous la caméra (altitude interpolée à 0), prolongé au-delà des données par
+    la droite de pente jusqu'à MAX_DISTANCE. None s'il manque plus de 20 % des altitudes, ou
+    s'il n'y en a pas de part et d'autre de la photo.
+    """
+    pts = []
+    for s, z in zip(dists, values or []):
+        try:
+            z = float(z)
+        except (TypeError, ValueError):
+            continue
+        if z == z and z > NODATA_BELOW:
+            pts.append((float(s), z))
+    line = robust_profile(dists, values)
+    if line is None or len(pts) < MIN_COVERAGE * len(dists):
+        return None
+    pts.sort()
+    zs = [z for _, z in pts]
+    smooth = [(s, _median(zs[max(0, i - 1):i + 2])) for i, (s, _) in enumerate(pts)]
+    before = [p for p in smooth if p[0] <= 0.0]
+    after = [p for p in smooth if p[0] > 0.0]
+    if not before or not after or after[0][0] - before[-1][0] > 2.0:
+        return None
+    (s1, z1), (s2, z2) = before[-1], after[0]
+    prof = [(0.0, z1 + (z2 - z1) * (0.0 - s1) / (s2 - s1))] + after
+    last_s, last_z = prof[-1]
+    if last_s < ground.MAX_DISTANCE:
+        slope = (line[1][1] - line[0][1]) / (line[1][0] - line[0][0])
+        prof.append((ground.MAX_DISTANCE, last_z + slope * (ground.MAX_DISTANCE - last_s)))
+    return prof
 
 
 def _median(values):

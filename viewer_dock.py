@@ -41,7 +41,7 @@ import math
 import os
 import re
 
-from . import altitude, api, precision
+from . import altitude, api, autotilt, precision
 from .calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
@@ -132,10 +132,13 @@ class PanoramaxDock(QDockWidget):
     # Mesure libre 3D : surface choisie, façade à (re)définir, hauteur du plan horizontal
     surfaceChanged = pyqtSignal(str)
     facadeRequested = pyqtSignal()
+    wallFacadeRequested = pyqtSignal()
+    wallChanged = pyqtSignal(bool)
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
     filterChanged = pyqtSignal(object)  # filtre des photos modifié (filters.PhotoFilter)
+    tiltChanged = pyqtSignal(str)  # inclinaison automatique d'une photo rangée dans le calage
 
     def __init__(self, parent=None):
         super().__init__("Visionneuse Panoramax", parent)
@@ -153,6 +156,7 @@ class PanoramaxDock(QDockWidget):
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
         self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
         self._quality = None  # résultat de la vérification pour la photo affichée
+        self.tilts = autotilt.TiltChecker()  # inclinaison automatique des photos (mesure activée)
         self._warn_pending = False  # mesure activée : avertir du mode dégradé dès que la photo est vérifiée
         self._no_degraded_popup = False  # « Ne plus afficher pendant cette session »
 
@@ -247,7 +251,7 @@ class PanoramaxDock(QDockWidget):
         mp.modeChanged.connect(self._on_measure_mode)
         mp.surfaceChanged.connect(self._on_surface)
         for signal in ("cameraHeightChanged", "facadeRequested", "planeHeightChanged", "referenceChanged",
-                       "terrainChanged"):
+                       "terrainChanged", "wallFacadeRequested", "wallChanged"):
             getattr(mp, signal).connect(getattr(self, signal))
         self.measure_box.setVisible(False)
         self._update_measure_widgets()
@@ -399,6 +403,8 @@ class PanoramaxDock(QDockWidget):
         self.measure_box.reset_heights()
         self.measure_box.setVisible(checked)
         self._warn_pending = checked
+        if checked:
+            self._check_tilt()
         self._update_quality()
         self._update_measure_widgets()
         self.measureToggled.emit(checked)
@@ -507,11 +513,41 @@ class PanoramaxDock(QDockWidget):
         self._update_quality()
 
     def _update_quality(self):
-        """Ligne d'état sous les mesures (précision de la position, LiDAR HD), et avertissement du
-        mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
+        """Ligne d'état sous les mesures (précision de la position, LiDAR HD, inclinaison), et
+        avertissement du mode dégradé si la mesure vient d'être activée (voir _warn_if_degraded)."""
         item = self._current_item
-        self.measure_box.set_quality_text(precision.state_text(self._quality, api.item_accuracy(item)) if item else "")
+        self.measure_box.set_quality_text(
+            precision.state_text(self._quality, api.item_accuracy(item), self._tilt_state()) if item else "")
+        self.measure_box.set_camera_suggestion(precision.camera_suggestion(self._quality) if item else None)
         self._warn_if_degraded()
+
+    # Inclinaison automatique (voir autotilt.py) ----------------------------------
+    def _check_tilt(self):
+        item = self._current_item
+        if item and item.get("id") == self._current_pic:
+            self.tilts.check(item, self.calibration, lambda pid=self._current_pic: self._on_tilt(pid))
+
+    def _on_tilt(self, pic):
+        self.tiltChanged.emit(pic)
+        if pic == self._current_pic:
+            self.update_calibration_label()
+            self._update_quality()
+
+    def _tilt_state(self):
+        """(texte, manquante) : inclinaison de la photo affichée, pour la ligne d'état."""
+        pic = self._current_pic
+        tilt = self.calibration.tilt(pic) if pic else None
+        if tilt:
+            if tilt["source"] == "clics":
+                return "inclinaison calée à la main", False
+            if tilt["source"].startswith("clics + "):
+                return "inclinaison calée à la main et automatiquement (±{:.1f}°)".format(
+                    max(tilt["sigma"], 0.1)).replace(".", ","), False
+            how = "verticales de la photo" if tilt["source"] == "verticales" else "pente et dévers LiDAR HD"
+            return "inclinaison calée ({}, ±{:.1f}°)".format(how, max(tilt["sigma"], 0.1)).replace(".", ","), False
+        if pic and self.tilts.pending(pic):
+            return "inclinaison en cours de calcul…", False
+        return "inclinaison non calée", True
 
     def _warn_if_degraded(self):
         """À l'activation de la mesure, sur une photo en mode dégradé : fenêtre d'avertissement,
@@ -578,7 +614,11 @@ class PanoramaxDock(QDockWidget):
         except ValueError:
             return
         item = self._current_item or {}
-        azimuth = api.precise_heading(item) or api.item_heading(item) or 0.0
+        precise, rounded = api.precise_heading(item), api.item_heading(item)
+        azimuth = precise if precise is not None else (rounded if rounded is not None else 0.0)
+        # La visionneuse s'oriente sur view:azimuth (arrondi au degré) : une direction calculée
+        # depuis l'écran est ramenée au cap précis, comme celles qu'elle fournit (voir pos)
+        screen_offset = precise - rounded if precise is not None and rounded is not None else 0.0
         for c in clicks:
             try:
                 vfov = float(c.get("vfov") or 0)
@@ -587,6 +627,7 @@ class PanoramaxDock(QDockWidget):
                     vfov = math.degrees(2 * math.atan(math.tan(hfov / 2) * c["h"] / max(c["w"], 1)))
                 yaw, elev = view_direction(float(c["x"]), float(c["y"]), vfov,
                                            float(c["dx"]), float(c["dy"]), float(c["h"]))
+                yaw = (yaw + screen_offset) % 360
             except (KeyError, TypeError, ValueError, ZeroDivisionError):
                 continue
             pos = None
@@ -643,7 +684,7 @@ class PanoramaxDock(QDockWidget):
         lon, lat = float(lon), float(lat)
         heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch, lon, lat)
         clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        return {"pic": pic_id, "lon": clon, "lat": clat, "heading": heading,
+        return {"pic": pic_id, "sequence": sequence, "lon": clon, "lat": clat, "heading": heading,
                 "accuracy": accuracy, "precise": precise is not None,
                 "heading_error": self.calibration.heading_error(sequence, lon, lat)}
 
@@ -748,8 +789,10 @@ class PanoramaxDock(QDockWidget):
         is360 = (fov or 0) >= 360 or src.width() >= 1.9 * src.height()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            tilt = self.calibration.tilt(item.get("id")) if item.get("id") else None
             out = capture.render_view(capture.qimage_to_array(src), api.item_heading(item) or 0.0,
-                                      is360, heading, pitch, vfov, fov if not is360 else None)
+                                      is360, heading, pitch, vfov, fov if not is360 else None,
+                                      up=tilt["up"] if tilt else None)  # vue redressée
             img = capture.add_caption(capture.array_to_qimage(out), capture.caption_for(item, heading))
             props = item.get("properties", {}) or {}
             date = re.sub(r"[^0-9]", "", (props.get("datetime") or ""))[:8] or "sansdate"
@@ -864,7 +907,8 @@ class PanoramaxDock(QDockWidget):
     # Synchronisation
     # ------------------------------------------------------------------
     def _poll_url(self):
-        if self.isVisible() and self.web is not None:
+        # Fenêtre de QGIS réduite : la vue ne change pas, inutile d'interroger la page
+        if self.isVisible() and self.web is not None and not self.window().isMinimized():
             page = self.web.page()
             page.runJavaScript(LIVE_VIEW_JS, self._on_live_view)
             # Filtrage anisotrope : une lecture sur dix (toutes les secondes) suffit. Décoché,
@@ -948,11 +992,13 @@ class PanoramaxDock(QDockWidget):
             if self.web is None:
                 self.native.show_error(error)
             return
+        pic_id = item.get("id", "")
+        if pic_id != api.requested_id():
+            return  # fiche arrivée après qu'une autre photo a été demandée : périmée
         try:
             lon, lat = item["geometry"]["coordinates"][:2]
         except (KeyError, TypeError, ValueError):
             return
-        pic_id = item.get("id", "")
         heading = api.item_heading(item)
         self._current_item = item
         self._current_pic = pic_id
@@ -960,6 +1006,8 @@ class PanoramaxDock(QDockWidget):
         self._quality = self.precision.known(item)
         self._update_quality()
         self.precision.check(item, lambda res, pid=pic_id: self._on_precision(pid, res))
+        if self.btn_measure.isChecked():
+            self._check_tilt()
         self.pictureChanged.emit(pic_id, float(lon), float(lat), heading)
         self.update_calibration_label()
         if self.web is None and hasattr(self, "img"):

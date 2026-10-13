@@ -50,6 +50,48 @@ class RobustProfile(unittest.TestCase):
         self.assertIsNone(terrain.robust_profile(dists, None))
 
 
+def at(profile, d):
+    """Altitude du profil (linéaire par morceaux) à la distance d."""
+    for (s1, z1), (s2, z2) in zip(profile, profile[1:]):
+        if s1 <= d <= s2:
+            return z1 + (z2 - z1) * (d - s1) / (s2 - s1)
+    raise ValueError(d)
+
+
+class RealProfile(unittest.TestCase):
+    dists = [-10.0 + 0.5 * i for i in range(71)]
+
+    def test_curb_followed(self):
+        # Chaussée plate, trottoir 15 cm plus haut à partir de 4 m : suivi par le profil réel
+        values = [200.0 + (0.15 if s >= 4.0 else 0.0) for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        self.assertEqual(prof[0], (0.0, 200.0))
+        self.assertAlmostEqual(at(prof, 2.0), 200.0)
+        self.assertAlmostEqual(at(prof, 6.0), 200.15)
+        line = terrain.robust_profile(self.dists, values)
+        self.assertGreater(abs(at(line, 2.0) - 200.0), 0.1)  # la droite de pente place la chaussée trop haut
+
+    def test_isolated_spikes_removed(self):
+        # Points isolés aberrants (objet mal classé dans le MNT) : écartés par la médiane glissante
+        spikes = {3.0: 0.6, 6.0: -0.5, 10.0: 0.8}
+        values = [100.0 + 0.02 * s + spikes.get(s, 0.0) for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        for d in spikes:
+            self.assertAlmostEqual(at(prof, d), 100.0 + 0.02 * d, delta=0.011)
+
+    def test_extended_beyond_the_data(self):
+        values = [50.0 + 0.04 * s for s in self.dists]
+        prof = terrain.real_profile(self.dists, values)
+        self.assertEqual(prof[-1][0], ground.MAX_DISTANCE)
+        self.assertAlmostEqual(at(prof, 40.0), 50.0 + 0.04 * 40.0, delta=0.02)
+
+    def test_unusable(self):
+        gaps = [None if i % 3 == 0 else 100.0 for i in range(71)]  # un tiers des altitudes manque
+        self.assertIsNone(terrain.real_profile(self.dists, gaps))
+        behind = [100.0 if s > 0.5 else None for s in self.dists]  # rien sous la photo
+        self.assertIsNone(terrain.real_profile(self.dists, behind))
+
+
 class FakeServices:
     """Remplace api.fetch_json : réponses synthétiques des services, terrain de pente `slope`.
     Le LiDAR HD n'est publié que si `lidar` est vrai (sinon le service renvoie -99999)."""
@@ -142,6 +184,19 @@ class Provider(unittest.TestCase):
         at6 = prof[0][1] + (prof[1][1] - prof[0][1]) / prof[1][0] * 6.0
         self.assertAlmostEqual(at6, 200.0, delta=0.06)  # sol à 6 m : 0,3 m trop haut sur 120 m
 
+    def test_lidar_real_profile(self):
+        services = FakeServices(lidar=True, relief=lambda s: 200.0 + (0.15 if s >= 4.0 else 0.0))
+        prof, label, _ = self.run_profile(services)
+        self.assertEqual(label, terrain.LIDAR_LABEL)
+        self.assertAlmostEqual(at(prof, 6.0), 200.15, delta=0.01)
+
+    def test_lidar_incomplete(self):
+        # Profil LiDAR à trous : droite de pente
+        services = FakeServices(lidar=True, relief=lambda s: 200.0 + 0.05 * s if int(s * 2) % 3 else -99999.0)
+        prof, label, _ = self.run_profile(services)
+        self.assertEqual(label, terrain.LIDAR_LINE_LABEL)
+        self.assertEqual(len(prof), 2)
+
     def test_bridge(self):
         services = FakeServices()
         prof, label, warning = self.run_profile(services, bridge=True)
@@ -155,6 +210,66 @@ class Provider(unittest.TestCase):
         self.assertEqual(prof, ground.flat_profile())
         self.assertIn("invraisemblable", warning)
         self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"])
+
+
+
+class Cache(unittest.TestCase):
+    """Profils gardés pour la session et sources sans données plus interrogées dans la zone."""
+
+    def profile(self, provider, services, yaw=0.0, lon=LON0, lat=LAT0):
+        results = []
+        with mock.patch.object(terrain.api, "fetch_json", services):
+            provider.profile(lon, lat, yaw, lambda *r: results.append(r))
+        return results
+
+    def test_same_view_once(self):
+        provider, services = terrain.TerrainProvider(), FakeServices(lidar=True)
+        first = self.profile(provider, services)
+        again = self.profile(provider, services, yaw=0.03)  # même direction au dixième de degré près
+        self.assertEqual(first, again)
+        self.assertEqual(services.calls, ["lidar"])
+        self.profile(provider, services, yaw=0.5)  # 0,5° : 5 cm à 6 m, autre profil près d'une bordure
+        self.assertEqual(services.calls, ["lidar", "lidar"])
+
+    def test_concurrent_requests_shared(self):
+        provider, pending, results = terrain.TerrainProvider(), [], []
+        services = FakeServices(lidar=True)
+        with mock.patch.object(terrain.api, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
+            provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
+            provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
+        self.assertEqual(len(pending), 1)
+        url, callback = pending[0]
+        services(url, callback)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0], results[1])
+
+    def test_lidar_not_published_skipped_nearby(self):
+        provider, services = terrain.TerrainProvider(), FakeServices()
+        self.profile(provider, services)
+        self.profile(provider, services, yaw=90.0, lon=LON0 + 0.00005)  # autre clic, même zone
+        self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "data.geopf.fr"])
+        far = LON0 + 0.01  # à 750 m : le LiDAR HD y est à nouveau demandé
+        self.profile(provider, services, lon=far)
+        self.assertEqual(services.calls[-2:], ["lidar", "data.geopf.fr"])
+
+    def test_services_down_retried(self):
+        provider = terrain.TerrainProvider()
+        down = FakeServices(down={"data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"})
+        (prof, label, warning), = self.profile(provider, down)
+        self.assertEqual(label, ground.FLAT)
+        services = FakeServices(lidar=True)
+        (prof, label, warning), = self.profile(provider, services)  # services revenus : pas de sol plat gardé
+        self.assertEqual(label, terrain.LIDAR_LABEL)
+        self.assertEqual(services.calls, ["lidar"])  # un service injoignable n'est pas « sans données »
+
+
+
+class PreciseGround(unittest.TestCase):
+    def test_lidar_only(self):
+        # Hauteur de caméra par l'altitude GPS : sol LiDAR HD seulement (le RGE ALTI peut être décalé)
+        self.assertIn(terrain.LIDAR_LABEL, terrain.PRECISE_LABELS)
+        self.assertIn(terrain.LIDAR_LINE_LABEL, terrain.PRECISE_LABELS)
+        self.assertNotIn(terrain.IGN_LABEL, terrain.PRECISE_LABELS)
 
 
 if __name__ == "__main__":

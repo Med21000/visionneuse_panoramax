@@ -97,5 +97,21 @@ class HeadingError(unittest.TestCase):
         self.assertEqual(triangulation.heading_error({"precise": True, "accuracy": 1, "heading_error": 0.2}), 0.2)
 
 
+
+class CommonErrors(unittest.TestCase):
+    def test_same_sequence(self):
+        """Visées d'une même séquence : erreurs de position et de cap communes, qui ne se
+        compensent pas ; plus incertain que les mêmes visées depuis des séquences différentes."""
+        target = point(0, 30)
+        photos = [point(x, 0) for x in range(-20, 21, 5)]  # neuf photos le long d'une rue
+        def sightings(seqs):
+            return [{"lon": p[0], "lat": p[1], "heading": bearing(p, target), "accuracy": 2.0, "sequence": s}
+                    for p, s in zip(photos, seqs)]
+        independent = triangulation.solve(sightings("abcdefghi"))["uncertainty"]
+        same = triangulation.solve(sightings("a" * 9))["uncertainty"]
+        self.assertGreater(same, independent)
+        self.assertGreaterEqual(same, 2.0)  # au moins le décalage GPS commun
+
+
 if __name__ == "__main__":
     unittest.main()

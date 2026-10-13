@@ -9,8 +9,10 @@ import os
 
 from qgis.core import (
     Qgis,
+    QgsApplication,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
+    QgsCsException,
     QgsPointXY,
     QgsProject,
     QgsSettings,
@@ -27,6 +29,8 @@ from .calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
+from .buildings import BuildingProvider
+from .roads import RoadAxisProvider
 from .terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
 
@@ -35,6 +39,12 @@ MENU = "&Panoramax"
 PROJECT_SCOPE = "visionneuse_panoramax"  # section du plugin dans le projet QGIS
 CALIBRATION_KEY = "calibration"  # calage enregistré dans les projets par les versions précédentes
 CALIBRATION_SETTING = "visionneuse_panoramax/calibration"  # calage conservé dans le profil QGIS
+AUTO_TILT_FILE = os.path.join("visionneuse_panoramax", "inclinaisons.json")  # dans le dossier du profil
+
+
+def auto_tilt_path():
+    """Fichier des inclinaisons automatiques, dans le dossier du profil QGIS."""
+    return os.path.join(QgsApplication.qgisSettingsDirPath(), AUTO_TILT_FILE)
 
 
 class LandmarkTool(QgsMapToolPan):
@@ -139,10 +149,16 @@ class PanoramaxPlugin:
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
         self.calibration = Calibration()  # conservé dans le profil QGIS
+        self._saved_auto = None  # inclinaisons automatiques telles qu'enregistrées (texte)
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
         self.terrain = TerrainProvider()
+        self.roads = RoadAxisProvider()  # axe de la route au point mesuré (largeur perpendiculaire)
+        self.roads.ready = self._on_road_axis
+        self.buildings = BuildingProvider()  # façade du cadastre visée (hauteur, mesure libre)
+        self.buildings.ready = self._on_buildings
+        self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
     # ------------------------------------------------------------------
     # Cycle de vie
@@ -180,6 +196,8 @@ class PanoramaxPlugin:
         layers.watch_opacity(QgsProject.instance().mapLayers().values())
 
     def unload(self):
+        self._unloaded = True
+        api.abort_all()  # requêtes en cours abandonnées : leurs callbacks ne seront pas appelés
         for signal, slot in ((QgsProject.instance().readProject, self._import_project_calibration),
                              (QgsProject.instance().layersAdded, layers.watch_opacity)):
             try:
@@ -242,8 +260,11 @@ class PanoramaxPlugin:
             self.dock.referenceChanged.connect(self._on_reference_changed)
             self.dock.surfaceChanged.connect(self._on_surface_changed)
             self.dock.facadeRequested.connect(self._on_facade_requested)
+            self.dock.wallFacadeRequested.connect(self._on_wall_facade_requested)
+            self.dock.wallChanged.connect(self._on_wall_changed)
             self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
+            self.dock.tiltChanged.connect(self._on_tilt_changed)
             self.terrain.bridge = self.dock.on_bridge()
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
@@ -254,8 +275,25 @@ class PanoramaxPlugin:
     # ------------------------------------------------------------------
     def _save_calibration(self):
         """Écrit le calage dans le profil : il est retrouvé aux sessions suivantes, quel que
-        soit le projet, jusqu'à ce qu'il soit refait ou effacé."""
-        QgsSettings().setValue(CALIBRATION_SETTING, json.dumps(self.calibration.to_dict(), separators=(",", ":")))
+        soit le projet, jusqu'à ce qu'il soit refait ou effacé. Les inclinaisons automatiques
+        (une par photo analysée, des milliers à terme) vont dans un fichier à part, réécrit
+        seulement quand elles changent : les réglages de QGIS restent légers."""
+        data = self.calibration.to_dict()
+        auto = data.pop("auto", {})
+        QgsSettings().setValue(CALIBRATION_SETTING, json.dumps(data, separators=(",", ":")))
+        text = json.dumps(auto, separators=(",", ":"))
+        if text != self._saved_auto:
+            path = auto_tilt_path()
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path + ".tmp", "w", encoding="utf-8") as f:
+                    f.write(text)
+                os.replace(path + ".tmp", path)  # remplacement d'un bloc : jamais de fichier à moitié écrit
+                self._saved_auto = text
+            except OSError as exc:
+                self.iface.messageBar().pushMessage(
+                    "Panoramax", "Inclinaisons automatiques non enregistrées : {}".format(exc),
+                    level=Qgis.MessageLevel.Warning, duration=6)
 
     def _load_calibration(self):
         text = QgsSettings().value(CALIBRATION_SETTING, "") or ""
@@ -265,7 +303,21 @@ class PanoramaxPlugin:
             data = None
             self.iface.messageBar().pushMessage("Panoramax", "Calage enregistré illisible : ignoré.",
                                                 level=Qgis.MessageLevel.Warning, duration=6)
+        try:
+            with open(auto_tilt_path(), encoding="utf-8") as f:
+                self._saved_auto = f.read()
+            auto = json.loads(self._saved_auto)
+        except (OSError, ValueError):
+            auto = None
+        if isinstance(data, dict) and isinstance(auto, dict):
+            # Inclinaisons du fichier, complétées par celles qu'une version précédente avait
+            # rangées dans le réglage (reprises au prochain enregistrement)
+            data["auto"] = dict(data.get("auto") or {}, **auto)
+        elif isinstance(auto, dict):
+            data = {"format": Calibration.FORMAT, "auto": auto}
         self.calibration.load(data)
+        if isinstance(data, dict) and "auto" in json.loads(text or "{}"):
+            self._save_calibration()  # migration : inclinaisons sorties du réglage
         self._calibration_updated()
 
     def _import_project_calibration(self, *args):
@@ -360,7 +412,11 @@ class PanoramaxPlugin:
             return
         to_wgs = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), WGS84,
                                         QgsProject.instance())
-        p = to_wgs.transform(point)
+        try:
+            p = to_wgs.transform(point)
+        except QgsCsException:  # point hors du domaine du SCR de la carte
+            self.iface.statusBarIface().showMessage("Panoramax : point hors du domaine du SCR de la carte.", 5000)
+            return
         lon, lat = p.x(), p.y()
         # Rayon de recherche adapté à l'échelle (≈ 15 pixels, entre 10 et 150 m)
         radius = min(150.0, max(10.0, self.canvas.mapUnitsPerPixel() * 15 *
@@ -376,9 +432,11 @@ class PanoramaxPlugin:
         self.iface.statusBarIface().showMessage("Panoramax : recherche de la photo la plus proche…", 3000)
 
         def done(data, error):
+            if self._unloaded:
+                return
             if error or not data:
                 self.iface.messageBar().pushMessage(
-                    "Panoramax", "Recherche impossible : {}".format(error),
+                    "Panoramax", "Recherche impossible : {}".format(error or "réponse vide"),
                     level=Qgis.MessageLevel.Warning, duration=6)
                 return
             features = data.get("features", [])
@@ -457,6 +515,9 @@ class PanoramaxPlugin:
             self.measures.calibration = self.dock.calibration
             self.measures.plane_height = self.dock.spin_plane.value()
             self.measures.surface = self.dock.surface()
+            self.measures.road_lookup = self.roads.lookup
+            self.measures.wall_lookup = self.buildings.lookup
+            self.measures.use_wall = self.dock.measure_box.chk_wall.isChecked()
         return self.measures
 
     def _ensure_calibrator(self):
@@ -610,7 +671,7 @@ class PanoramaxPlugin:
         mode = tool.mode
 
         def done(profile, label, warning):
-            if self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
+            if self._unloaded or self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
                 return  # mesure effacée ou mode changé entre-temps
             click.update(profile=profile, terrain=label, precise_ground=label in PRECISE_LABELS)
             self._show_measure(tool.add_click(click, warning))
@@ -625,6 +686,45 @@ class PanoramaxPlugin:
             tool.new_camera = None
             spin = self.dock.spin_camera
             spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
+
+    def _on_buildings(self):
+        """Cadastre ou LiDAR lu : hauteurs sur la façade du cadastre recalculées, façade en
+        attente définie."""
+        if self._unloaded or self.measures is None or self.dock is None:
+            return
+        self.measures.recompute_walls()
+        if self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_wall_changed(self, checked):
+        self._ensure_measures().set_use_wall(checked)
+        if self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_wall_facade_requested(self):
+        self._end_landmark_tool()
+        self._ensure_measures().start_wall_facade()
+        self._show_measure(self.measures.status())
+
+    def _on_road_axis(self):
+        """Axe de la route lu (BD TOPO ou trajectoire) : largeurs perpendiculaires recalculées."""
+        if self._unloaded or self.measures is None or self.dock is None:
+            return
+        if self.measures.recompute_roads() and self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
+
+    def _on_tilt_changed(self, pic):
+        """Inclinaison automatique arrivée après des clics sur la photo : ils sont corrigés."""
+        if self._unloaded or self.measures is None:
+            return
+        cal = self.dock.calibration
+
+        def correct(c):
+            gps = c.get("gps") or [None, None]
+            return cal.correct(pic, c.get("sequence"), c["raw"][0], c["raw"][1], gps[0], gps[1])
+
+        if self.measures.recorrect(pic, correct) and self.dock.btn_measure.isChecked():
+            self._show_measure(self._active_measure().status())
 
     def _on_terrain_changed(self):
         self.terrain.bridge = self.dock.on_bridge()

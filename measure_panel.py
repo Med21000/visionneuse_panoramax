@@ -46,15 +46,29 @@ def calibration_text(cal, pic, sequence, lon, lat):
     """Calage de la photo et de la séquence affichées (texte, vide sans calage)."""
     parts = []
     tilt = cal.tilt(pic) if pic else None
-    if tilt:
+    if tilt and tilt.get("source", "clics") == "clics":
         parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
             tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
             "s" if tilt["count"] > 1 else "").replace(".", ","))
+    elif tilt and tilt["source"].startswith("clics + "):
+        parts.append("inclinaison {:.1f}° corrigée ({} objet{} cliqué{}, complété{} par {}, ±{:.1f}°)".format(
+            tilt["tilt"], tilt["count"], *(("s", "s", "s") if tilt["count"] > 1 else ("", "", "")),
+            "les verticales de la photo" if tilt["source"].endswith("verticales") else "le LiDAR HD",
+            max(tilt["sigma"], 0.1)).replace(".", ","))
+    elif tilt and tilt["source"] == "verticales":
+        parts.append("inclinaison {:.1f}° corrigée automatiquement ({} verticales de la photo, ±{:.1f}°)".format(
+            tilt["tilt"], tilt["count"], max(tilt["sigma"], 0.1)).replace(".", ","))
+    elif tilt:
+        parts.append("inclinaison {:.1f}° estimée par la pente et le dévers LiDAR HD (±{:.1f}°, modèle vérifié "
+                     "sur {} photos de la séquence)".format(tilt["tilt"], tilt["sigma"], tilt["count"]).replace(".", ","))
     camera = cal.camera(sequence) if sequence else None
     if camera:
-        parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
-            camera["height"], camera["sigma"], camera["count"],
-            "s" if camera["count"] > 1 else "").replace(".", ","))
+        text = "caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
+            camera["height"], camera["sigma"], camera["count"], "s" if camera["count"] > 1 else "").replace(".", ",")
+        if camera.get("legacy"):
+            text += (", dont {} d'une version précédente, sans l'inclinaison automatique : refaites le calage"
+                     .format(camera["legacy"]))
+        parts.append(text)
     pose = cal.pose(sequence, lon, lat) if sequence else None
     if pose:
         text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])
@@ -83,6 +97,8 @@ class MeasurePanel(QWidget):
     cameraHeightChanged = pyqtSignal(float)
     surfaceChanged = pyqtSignal(str)
     facadeRequested = pyqtSignal()
+    wallFacadeRequested = pyqtSignal()  # façade du cadastre, d'un clic sur le mur (mesure libre)
+    wallChanged = pyqtSignal(bool)  # hauteur sur la façade du cadastre
     planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
@@ -158,7 +174,21 @@ class MeasurePanel(QWidget):
             "puis services de secours (OpenTopoData, Open-Meteo), puis sol plat.")
         self.chk_bridge.toggled.connect(self.terrainChanged)
         tlay.addWidget(self.chk_bridge)
+        self.chk_wall = QCheckBox("Façade du cadastre")
+        self.chk_wall.setToolTip(
+            "Hauteur d'un bâtiment dont le pied est caché (voiture, haie, muret) : le mur est le premier bâtiment "
+            "du cadastre traversé par la visée, contrôlé par le LiDAR HD. Le pied est pris au bas du mur, à "
+            "l'altitude du sol, même si le clic tombe devant ; la façade s'affiche sur la carte. Quand le pied "
+            "est visible, le cliquer reste le plus précis.")
+        self.chk_wall.toggled.connect(self.wallChanged)
+        tlay.addWidget(self.chk_wall)
         tlay.addStretch(1)
+        # Hauteur de caméra calculée, proposée sur cette ligne (la première est pleine)
+        self.btn_camera_auto = QPushButton("")
+        self.btn_camera_auto.clicked.connect(self._use_camera_suggestion)
+        self._camera_suggestion = None
+        tlay.addWidget(self.btn_camera_auto)
+        self.terrain_row.setMinimumHeight(self.btn_camera_auto.sizeHint().height())  # pas de saut à son apparition
         mbox.addWidget(self.terrain_row)
         self.free_row = QWidget(self)
         flay = QHBoxLayout(self.free_row)
@@ -178,6 +208,12 @@ class MeasurePanel(QWidget):
                                    "extrémités se recalent ensuite en les glissant sur la carte")
         self.btn_facade.clicked.connect(self.facadeRequested)
         flay.addWidget(self.btn_facade)
+        self.btn_wall_facade = QPushButton("Façade du cadastre")
+        self.btn_wall_facade.setToolTip("Cliquer ensuite sur le mur dans la photo : la façade est celle du bâtiment "
+                                        "du cadastre traversé par la visée, contrôlée par le LiDAR HD ; ses "
+                                        "extrémités se recalent en les glissant sur la carte")
+        self.btn_wall_facade.clicked.connect(self.wallFacadeRequested)
+        flay.addWidget(self.btn_wall_facade)
         self.lbl_plane = QLabel("à")
         flay.addWidget(self.lbl_plane)
         self.spin_plane = QDoubleSpinBox()
@@ -234,7 +270,29 @@ class MeasurePanel(QWidget):
 
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
+        self._update_camera_button()
         self.cameraHeightChanged.emit(float(value))
+
+    def set_camera_suggestion(self, suggestion):
+        """Hauteur de caméra calculée pour la photo affichée, (hauteur, explication) ou None : un
+        bouton la propose à côté du champ tant qu'elle en diffère (voir precision.camera_suggestion)."""
+        self._camera_suggestion = None
+        if suggestion is not None:
+            height, tip = suggestion
+            self._camera_suggestion = round(height, 2)
+            self.btn_camera_auto.setText("Caméra à {:.2f} m d'après l'altitude GPS : utiliser".format(
+                self._camera_suggestion).replace(".", ","))
+            self.btn_camera_auto.setToolTip(tip)
+        self._update_camera_button()
+
+    def _use_camera_suggestion(self):
+        if self._camera_suggestion is not None:
+            self.spin_camera.setValue(self._camera_suggestion)
+
+    def _update_camera_button(self):
+        h = self._camera_suggestion
+        self.btn_camera_auto.setVisible(self.measure_mode() in GROUND_MODES and h is not None and
+                                        abs(self.spin_camera.value() - h) >= 0.005)
 
     def _on_reference(self, *args):
         kind, length = self.reference()
@@ -258,12 +316,15 @@ class MeasurePanel(QWidget):
                                      "(une mesure déjà enregistrée puis recalée y est mise à jour)")
         for w in (self.lbl_camera, self.spin_camera):
             w.setVisible(mode in GROUND_MODES)
+        self._update_camera_button()
         self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
         for w in (self.cmb_reference, self.spin_reference):
             w.setVisible(mode == "camera")
         surface = self.surface()
         self.free_row.setVisible(mode == "free")
         self.btn_facade.setVisible(surface == "facade")
+        self.btn_wall_facade.setVisible(surface == "facade")
+        self.chk_wall.setVisible(mode == "height")
         for w in (self.lbl_plane, self.spin_plane):
             w.setVisible(surface == "horizontal")
 

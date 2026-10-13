@@ -66,6 +66,24 @@ class Check(unittest.TestCase):
         self.assertLess(res["spread"], precision.MAX_SPREAD)
         self.assertFalse(precision.degraded(res))
 
+    def test_one_outlier_ignored(self):
+        # Une photo sous un pont (sol LiDAR faux) : la séquence RTK reste vérifiée
+        rng = random.Random(3)
+        photos = [photo(i, rng.gauss(0, 0.02)) for i in range(20)]
+        photos[7] = photo(7, 1.5)
+        res = self.check(photos[0], FakeServices(photos))
+        self.assertTrue(res["precise"])
+        self.assertEqual(res["count"], 19)
+        self.assertIn("1 écartée", res["reason"])
+
+    def test_slow_drift_refused(self):
+        # GPS lisse mais qui dérive de 1,5 cm par photo (30 cm sur 100 m) : écart-type sous 10 cm,
+        # mais pas une hauteur de caméra constante
+        photos = [photo(i, 0.015 * i) for i in range(20)]
+        res = self.check(photos[0], FakeServices(photos))
+        self.assertFalse(res["precise"])
+        self.assertIn("dérive", res["reason"])
+
     def test_dgps_sequence_not_verified(self):
         rng = random.Random(2)
         photos = [photo(i, rng.gauss(0, 0.5)) for i in range(20)]  # altitude GPS à ±0,5 m

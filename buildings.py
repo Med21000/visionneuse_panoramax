@@ -30,6 +30,7 @@ from . import api, roads, triangulation
 
 WFS_URL = roads.WFS_URL
 LAYER = "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:batiment"
+LIGHT = "Construction légère"  # type des bâtiments légers du cadastre (« Bâtiment en dur » sinon)
 WMS_URL = "https://data.geopf.fr/wms-r/wms"
 MNS = "IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.WGS84G"
 MNT = "IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.WGS84G"
@@ -83,9 +84,11 @@ def wms_url(cell, layer):
 
 
 def parse_edges(data):
-    """Bords des bâtiments d'une réponse WFS (GeoJSON) : [((lon, lat), (lon, lat))]."""
+    """Bords des bâtiments en dur d'une réponse WFS (GeoJSON) : [((lon, lat), (lon, lat))]."""
     out = []
     for feat in (data or {}).get("features") or []:
+        if (feat.get("properties") or {}).get("type") == LIGHT:
+            continue  # abri, appentis, serre : rarement la façade visée, souvent devant elle
         geom = feat.get("geometry") or {}
         if geom.get("type") == "Polygon":
             polys = [geom.get("coordinates") or []]
@@ -118,8 +121,8 @@ class Grid:
 
     def at(self, lon, lat):
         """Altitude au point (plus proche pixel), ou None hors de la grille ou sans données."""
-        c = int((lon - self.lon0) / (self.lon1 - self.lon0) * self.w)
-        r = int((self.lat1 - lat) / (self.lat1 - self.lat0) * self.h)
+        c = math.floor((lon - self.lon0) / (self.lon1 - self.lon0) * self.w)
+        r = math.floor((self.lat1 - lat) / (self.lat1 - self.lat0) * self.h)
         if not (0 <= c < self.w and 0 <= r < self.h):
             return None
         z = self.values[r * self.w + c]
@@ -217,13 +220,16 @@ class BuildingProvider:
 
         def done(data, error):
             self._pending.discard(key)
+            parsed = None
+            if not error:
+                try:
+                    parsed = parse(data)
+                except (ValueError, TypeError):
+                    error = "réponse illisible"  # exception du service (XML) : panne, pas absence de données
             if error:
                 self._failed[key] = time.monotonic()
             else:
-                try:
-                    self._cache[key] = parse(data)
-                except (ValueError, TypeError):
-                    self._cache[key] = None
+                self._cache[key] = parsed
             if self.ready is not None:
                 self.ready()
 

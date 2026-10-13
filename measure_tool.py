@@ -40,8 +40,8 @@ from qgis.core import (
 )
 from qgis.PyQt.QtGui import QColor
 
-from . import geometry, ground, output, triangulation
-from .calibration import MAP_ERROR
+from . import calibration, geometry, ground, output, triangulation
+from .calibration import AIM_ERROR, MAP_ERROR, UNCALIBRATED
 from .measure import COLOR, DEFAULT_CAMERA_HEIGHT, WGS84, MeasureItem, _num
 
 FREE_SURFACES = (
@@ -56,6 +56,12 @@ PRESET_SURFACES = {"road": "ground", "width": "ground", "height": "vertical"}  #
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m) déduite de l'altitude GPS
 CAMERA_SOURCES = {None: 0, "calée": 1, "altitude GPS": 2}  # champ camera_calee de la couche des mesures
 PLANE_HEIGHT_ERROR = 0.05  # incertitude de la hauteur saisie du plan horizontal (m)
+# Incertitude de la hauteur de caméra (m) selon sa source : altitude GPS d'une position vérifiée
+# (écart-type sur la séquence de Pouilly : 2 cm, plus le LiDAR), sinon valeur saisie (1,7 à 2,2 m
+# selon le véhicule) ; une hauteur calée a sa propre incertitude
+CAMERA_ERRORS = {"altitude GPS": 0.05, None: 0.15}
+# Façade du cadastre : écart du mur (m), confirmé par le LiDAR HD ou non (voir buildings.py)
+WALL_ERROR, WALL_ERROR_UNCHECKED = 0.5, 1.0
 SELECT_ANGLE = 1.0  # écart maximal (degrés) entre un clic et le repère d'un point pour le sélectionner
 ERRORS = (geometry.GeometryError, ground.GroundError)
 LAYER_NAME = "Panoramax – mesures"
@@ -239,10 +245,12 @@ class Measure:
             self.error = error
 
     # Calcul -------------------------------------------------------------------
-    def points(self, clicks=None, facade=None, plane_height=None, overrides=None):
+    def points(self, clicks=None, facade=None, plane_height=None, overrides=None, camera_delta=None, wall_shift=0.0):
         """Points 3D (repère local centré sur le premier clic) des clics complets,
         angle d'incidence le plus rasant sur un plan, origine du repère, et pour
-        chaque point le clic dont il vient."""
+        chaque point le clic dont il vient. camera_delta (photo -> écart de hauteur de caméra,
+        m) et wall_shift (décalage de la façade du cadastre vers l'extérieur, m) servent au
+        calcul de l'incertitude."""
         clicks = self.clicks if clicks is None else clicks
         if facade is None and self.facade is not None:
             facade = self.facade.points
@@ -257,28 +265,28 @@ class Measure:
             return ground_z[click.get("pic")]
 
         def h(click):
-            return self.tool.camera_for(click, zof(click))
+            return self.tool.camera_for(click, zof(click)) + (camera_delta or {}).get(click.get("pic"), 0.0)
 
         # Plan calé de la mesure, défini par les points glissés sur la carte : vertical, passant
         # par les deux premiers (le mur tracé sur la carte), ou par le seul glissé, face à la
         # photo qui l'avait visé
         anchors = {k: triangulation._local(v[0], v[1], origin[0], origin[1]) + (v[2],)
                    for k, v in overrides.items()}
-        plane = None
+        anchored = None
         if len(anchors) >= 2:
             (k1, a1), (k2, a2) = sorted(anchors.items())[:2]
             if math.hypot(a2[0] - a1[0], a2[1] - a1[1]) >= 0.2:
-                plane = geometry.vertical_plane((a1[0], a1[1], 0.0), (a2[0], a2[1], 0.0))
-        if plane is None and anchors:
+                anchored = geometry.vertical_plane((a1[0], a1[1], 0.0), (a2[0], a2[1], 0.0))
+        if anchored is None and anchors:
             x, y, azimuth = sorted(anchors.items())[0][1]
             a = math.radians(azimuth)
-            plane = ((x, y, 0.0), (math.sin(a), math.cos(a), 0.0))
+            anchored = ((x, y, 0.0), (math.sin(a), math.cos(a), 0.0))
 
         def fixed(k, p, click):
             """Point k visé à nouveau après un recalage : intersection du rayon et du plan calé.
             Recalé sur la carte : à la position de la carte, à l'altitude du rayon de visée."""
-            if k in self.aimed and plane is not None:
-                return geometry.on_plane(click, h(click), origin, *plane, ground_z=zof(click))[0]
+            if k in self.aimed and anchored is not None:  # plan calé, pas la surface de la mesure
+                return geometry.on_plane(click, h(click), origin, *anchored, ground_z=zof(click))[0]
             if k not in anchors:
                 return p
             x, y, _ = anchors[k]
@@ -286,10 +294,15 @@ class Measure:
             reach = math.hypot(x - cam[0], y - cam[1])
             return (x, y, cam[2] + reach * u[2] / max(math.hypot(u[0], u[1]), 1e-9))
 
-        pts, sources, incidence = [], [], None
+        def recaled(k):
+            """Point k visé à nouveau dans le plan calé : la surface de la mesure ne sert pas."""
+            return k in self.aimed and anchored is not None
+
+        pts, sources, incidence, plane = [], [], None, None
         if self.surface == "ground":
             for c in clicks:
-                pts.append(fixed(len(pts), geometry.on_ground(c, h(c), origin, zof(c))[0], c))
+                k = len(pts)
+                pts.append(fixed(k, None if recaled(k) else geometry.on_ground(c, h(c), origin, zof(c))[0], c))
                 sources.append(c)
         elif self.surface == "tri3d":
             for k in range(0, len(clicks) - 1, 2):
@@ -310,6 +323,10 @@ class Measure:
                 # tombe sur une voiture devant), sommet sur le mur
                 plane = geometry.vertical_plane(*(geometry.to_local(lon, lat, 0.0, origin)
                                                   for lon, lat in self.wall["points"]))
+                if wall_shift:
+                    (px, py, pz), (nx, ny, nz) = plane
+                    k = wall_shift / math.hypot(nx, ny)
+                    plane = ((px + k * nx, py + k * ny, pz), (nx, ny, nz))
                 first = _wall_foot(clicks[0], h(clicks[0]), origin, zof(clicks[0]), plane)
                 planar, pts, sources = clicks[1:], [first], [clicks[0]]
             elif self.surface == "vertical":
@@ -320,6 +337,10 @@ class Measure:
             else:  # horizontal
                 plane = ((0.0, 0.0, zof(clicks[0]) + plane_height), (0.0, 0.0, 1.0))
             for c in planar:
+                if recaled(len(pts)):
+                    pts.append(fixed(len(pts), None, c))
+                    sources.append(c)
+                    continue
                 p, angle = geometry.on_plane(c, h(c), origin, *plane, ground_z=zof(c))
                 pts.append(fixed(len(pts), p, c))
                 sources.append(c)
@@ -388,51 +409,106 @@ class Measure:
         return self.quantity(geometry.decompose(pts[0], pts[1], self.axis))
 
     def _spread(self):
-        """Écart maximal de la mesure quand varient : l'élévation de chaque clic (±PITCH_ERROR),
-        le cap en triangulation 3D (erreur de visée), la position d'un point recalé sur la
-        carte (±MAP_ERROR), les clics de définition de la façade, la hauteur du plan."""
+        """Incertitude de la mesure (m) : somme quadratique des écarts dus à chaque source
+        d'erreur indépendante, chacune prise à ±1 écart-type :
+        - inclinaison de chaque photo, commune à tous ses clics (tangage et roulis) : celle du
+          calage appliqué, ou UNCALIBRATED sans calage ;
+        - hauteur de caméra de chaque photo (CAMERA_ERRORS, ou celle de la hauteur calée) ;
+        - visée de chaque clic (AIM_ERROR), et son cap en triangulation 3D (erreur de visée) ;
+        - position de chaque point recalé sur la carte, des extrémités d'une façade recalée,
+          définition d'une façade cliquée, hauteur du plan horizontal, façade du cadastre."""
         ref = self._value()
-        variants = []
+        groups = []  # par source d'erreur : variantes à ±1 écart-type
+        for pic in dict.fromkeys(c.get("pic") for c in self.clicks):
+            sigma = self._tilt_sigma(pic)
+            for comp in ((sigma, 0.0), (0.0, sigma)):
+                groups.append([{"clicks": self._tilted_clicks(self.clicks, pic, sign * comp[0], sign * comp[1])}
+                               for sign in (-1, 1)])
+            dh = self._camera_sigma(pic)
+            groups.append([{"camera_delta": {pic: sign * dh}} for sign in (-1, 1)])
         for i, c in enumerate(self.clicks):
-            moves = [("elev", ground.PITCH_ERROR)]
+            moves = [("elev", AIM_ERROR), ("yaw", AIM_ERROR)]
             if self.surface == "tri3d":
-                moves.append(("yaw", triangulation.heading_error(c)))
+                moves[1] = ("yaw", math.hypot(triangulation.heading_error(c), AIM_ERROR))
             for key, step in moves:
+                variants = []
                 for sign in (-1, 1):
                     moved = [dict(x) for x in self.clicks]
                     moved[i][key] += sign * step
                     variants.append({"clicks": moved})
+                groups.append(variants)
         for k, (lon, lat, azimuth) in self.overrides.items():
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                moved = dict(self.overrides)
-                moved[k] = triangulation._geographic(dx * MAP_ERROR, dy * MAP_ERROR, lon, lat) + (azimuth,)
-                variants.append({"overrides": moved})
+            for dx, dy in ((1, 0), (0, 1)):
+                variants = []
+                for sign in (-1, 1):
+                    moved = dict(self.overrides)
+                    moved[k] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (azimuth,)
+                    variants.append({"overrides": moved})
+                groups.append(variants)
         if self.surface == "horizontal":
-            variants += [{"plane_height": self.plane_height + s * PLANE_HEIGHT_ERROR} for s in (-1, 1)]
+            groups.append([{"plane_height": self.plane_height + s * PLANE_HEIGHT_ERROR} for s in (-1, 1)])
         source = self.facade.source if self.facade is not None else None
         if self.surface == "facade" and self.facade is not None and not source:
-            for i in range(2):  # façade recalée sur la carte : chaque extrémité à ±MAP_ERROR
+            for i in range(2):  # façade recalée sur la carte ou du cadastre : chaque extrémité à ±MAP_ERROR
                 lon, lat, z = self.facade.points[i]
-                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                    moved = list(self.facade.points)
-                    moved[i] = triangulation._geographic(dx * MAP_ERROR, dy * MAP_ERROR, lon, lat) + (z,)
-                    variants.append({"facade": moved})
+                for dx, dy in ((1, 0), (0, 1)):
+                    variants = []
+                    for sign in (-1, 1):
+                        moved = list(self.facade.points)
+                        moved[i] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (z,)
+                        variants.append({"facade": moved})
+                    groups.append(variants)
         if self.surface == "facade" and source:
             for i in range(2):
+                variants = []
                 for sign in (-1, 1):
                     moved = [dict(x) for x in source]
-                    moved[i]["elev"] += sign * ground.PITCH_ERROR
+                    moved[i]["elev"] += sign * AIM_ERROR
                     try:
                         variants.append({"facade": self.tool.facade_from(moved)})
                     except ERRORS:
                         return float("inf")
-        worst = 0.0
-        for variant in variants:
-            try:
-                worst = max(worst, abs(self._value(**variant) - ref))
-            except ERRORS:
-                return float("inf")
-        return worst
+                groups.append(variants)
+        if self.wall and not self.overrides:
+            err = WALL_ERROR_UNCHECKED if self.wall.get("warning") else WALL_ERROR
+            groups.append([{"wall_shift": s * err} for s in (-1, 1)])
+        total = 0.0
+        for variants in groups:
+            worst = 0.0
+            for variant in variants:
+                try:
+                    worst = max(worst, abs(self._value(**variant) - ref))
+                except ERRORS:
+                    return float("inf")
+            total += worst * worst
+        return math.sqrt(total)
+
+    def _tilt_sigma(self, pic):
+        """Incertitude (degrés) de l'inclinaison appliquée aux clics de la photo."""
+        cal = self.tool.calibration
+        tilt = cal.tilt(pic) if cal is not None and pic else None
+        return tilt["sigma"] if tilt and tilt.get("sigma") is not None else UNCALIBRATED
+
+    def _camera_sigma(self, pic):
+        """Incertitude (m) de la hauteur de caméra de la photo, selon sa source."""
+        c = next(x for x in self.clicks if x.get("pic") == pic)
+        _, source = self.tool.camera_info(c, _ground_z(self.clicks)[pic])
+        if source == "calée":
+            return self.tool.calibration.camera(c.get("sequence"))["sigma"]
+        return CAMERA_ERRORS.get(source, CAMERA_ERRORS[None])
+
+    @staticmethod
+    def _tilted_clicks(clicks, pic, north, east):
+        """Clics de la photo pic vus par une caméra penchée en plus de north° vers le nord et
+        east° vers l'est (variation d'inclinaison commune à tous ses clics)."""
+        up = calibration.up_from_components(north, east, 0.0)
+        out = []
+        for c in clicks:
+            c = dict(c)
+            if c.get("pic") == pic:
+                c["yaw"], c["elev"] = calibration.untilt(up, c["yaw"], c["elev"])
+            out.append(c)
+        return out
 
     def compute(self):
         self.result, self.error, self.incidence = None, None, None
@@ -718,7 +794,7 @@ class MeasureTool:
         """(hauteur de caméra du clic, source) ; source "altitude GPS", "calée" ou None.
 
         Dans l'ordre : altitude NGF de la caméra (position vérifiée précise, voir precision.py)
-        moins l'altitude du sol sous la photo (ground_z, si elle vient de l'IGN), la plus
+        moins l'altitude du sol sous la photo (ground_z, si elle vient du LiDAR HD), la plus
         précise et propre à chaque photo ; hauteur calée pour la séquence ; réglage du panneau."""
         camera_alt = click.get("camera_alt")
         if camera_alt is not None and ground_z is not None and click.get("precise_ground"):

@@ -47,7 +47,10 @@ IGN_LABEL = "RGE ALTI (IGN), pente de la route"
 LIDAR_RESOURCE = "ign_lidar_hd_mnt_mono_wld"  # MNT LiDAR HD 50 cm, publié département par département
 LIDAR_LABEL = "LiDAR HD (IGN), profil de la chaussée"
 LIDAR_LINE_LABEL = "LiDAR HD (IGN), pente de la route"  # profil incomplet : droite de pente
-PRECISE_LABELS = (LIDAR_LABEL, LIDAR_LINE_LABEL, IGN_LABEL)  # sol au décimètre près sous la caméra
+# Sol sous la caméra assez exact pour en déduire la hauteur de caméra par l'altitude GPS : LiDAR
+# HD seulement (le RGE ALTI, au mètre et plus ancien, peut être décalé de 0,2 à 0,5 m, soit 10 à
+# 25 % d'erreur sur toutes les distances)
+PRECISE_LABELS = (LIDAR_LABEL, LIDAR_LINE_LABEL)
 MIN_COVERAGE = 0.8  # part minimale d'altitudes valides pour suivre le profil réel
 NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
 TIMEOUT_MS = 5000  # au-delà, on passe à la source suivante

@@ -255,10 +255,14 @@ class TiltChecker:
     """Inclinaison automatique des photos : verticales de la photo HD (en arrière-plan) et
     pente et dévers du LiDAR HD sous le véhicule. Le résultat est rangé dans le calage
     (Calibration.set_auto), qui le conserve d'une session à l'autre ; une photo déjà
-    analysée ne l'est pas à nouveau."""
+    analysée ne l'est pas à nouveau. Seule la dernière photo demandée est analysée : celle
+    qu'on quitte est abandonnée (téléchargement interrompu, rien d'enregistré), elle sera
+    reprise si on y revient."""
 
     def __init__(self):
         self._pending = {}  # photo -> rappels en attente
+        self._replies = {}  # photo -> téléchargement de la photo HD en cours
+        self.current = None  # dernière photo demandée
         self.run = _run_task  # remplaçable dans les tests
 
     def pending(self, pic):
@@ -266,10 +270,13 @@ class TiltChecker:
 
     def check(self, item, cal, done=None):
         """Lance l'analyse de la photo (fiche STAC) si elle n'a ni inclinaison calée à la main
-        ni inclinaison automatique ; done() quand elle est rangée dans `cal` (ou abandonnée)."""
+        sur deux objets ou plus, ni inclinaison automatique ; done() quand elle est rangée dans `cal` (ou abandonnée)."""
         pic = item.get("id")
         callbacks = [done] if done else []
-        if not pic or pic in cal.verticals or pic in cal.auto:
+        if pic != self.current:
+            self._abandon_others(pic)
+        self.current = pic
+        if not pic or cal.manual_complete(pic) or pic in cal.auto:
             for cb in callbacks:
                 cb()
             return
@@ -290,6 +297,8 @@ class TiltChecker:
         state = {}
 
         def finish():
+            if self.current != pic:
+                return  # photo quittée : abandonnée (voir _abandon_others)
             if "lidar" not in state or "verticals" not in state:
                 return  # l'autre moitié n'est pas encore arrivée
             if state["lidar_error"] and state["verticals"] is None:
@@ -312,6 +321,9 @@ class TiltChecker:
             finish()
 
         def got_image(data, error):
+            self._replies.pop(pic, None)
+            if self.current != pic:
+                return  # photo quittée pendant le téléchargement : pas de calcul
             if error or not data:
                 analysed(None)
             else:
@@ -325,9 +337,21 @@ class TiltChecker:
         api.fetch_json(lidar_url(lon, lat, heading), got_lidar)
         href = ((item.get("assets") or {}).get("hd") or {}).get("href")
         if href and HAS_NUMPY:
-            api.fetch(href, got_image, prefer_cache=True)
+            self._replies[pic] = api.fetch(href, got_image, prefer_cache=True)
         else:
             analysed(None)
+
+    def _abandon_others(self, keep):
+        """Abandonne l'analyse des photos autres que `keep` : téléchargements interrompus,
+        rappels oubliés, rien d'enregistré."""
+        for pic in [p for p in self._pending if p != keep]:
+            self._pending.pop(pic, None)
+            reply = self._replies.pop(pic, None)
+            try:
+                if reply is not None:
+                    reply.abort()
+            except (AttributeError, RuntimeError):  # déjà terminé ou détruit
+                pass
 
 
 def _elevations(data):

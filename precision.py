@@ -23,6 +23,7 @@ Une vérification par séquence (deux requêtes : fiches des photos voisines, al
 LiDAR), en arrière-plan ; le résultat est gardé pour la session.
 """
 
+import math
 import statistics
 from urllib.parse import urlencode
 
@@ -34,6 +35,8 @@ CHECK_RADIUS = 60.0  # m autour de la photo pour les photos voisines de la séqu
 CHECK_PHOTOS = 20
 MIN_PHOTOS = 8
 MAX_SPREAD = 0.10  # m : écart-type maximal de la hauteur de caméra entre photos voisines
+OUTLIER = 4.0  # photos écartées au-delà de OUTLIER écarts médians absolus (corrigés)
+MIN_MAD = 0.02  # m : écart médian minimal (photos très régulières)
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m)
 ELEVATION_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
 DEGRADED_ADVICE = ("Les mesures dépendent alors de la hauteur de caméra, de l'inclinaison de la caméra et, sans "
@@ -124,6 +127,50 @@ def state_text(res, accuracy=None, tilt=None):
     return text
 
 
+def verify_heights(pts):
+    """Vérification d'une séquence d'après la hauteur de caméra (altitude GPS NGF moins sol
+    LiDAR HD) de photos voisines [(lon, lat, hauteur)] : résultat (voir result).
+
+    Robuste : les photos dont la hauteur s'écarte de plus de OUTLIER écarts (écart médian
+    absolu) sont écartées (pont, défaut du LiDAR, arrêt sous un arbre) ; la dispersion des
+    autres doit rester sous MAX_SPREAD. La hauteur doit aussi être la même sur les deux
+    moitiés de la portion vérifiée (à MAX_SPREAD près) : un GPS non recalé peut être lisse
+    sur quelques photos, mais il dérive."""
+    heights = [h for _, _, h in pts]
+    median = statistics.median(heights)
+    mad = 1.4826 * statistics.median(abs(h - median) for h in heights)
+    kept = [p for p in pts if abs(p[2] - median) <= OUTLIER * max(mad, MIN_MAD)]
+    if len(kept) < MIN_PHOTOS:
+        return result(False, lidar=True, reason="hauteur de caméra trop dispersée ({} photos sur {})".format(
+            len(kept), len(pts)))
+    spread, height = statistics.pstdev([h for _, _, h in kept]), statistics.median([h for _, _, h in kept])
+    # Deux moitiés le long de la trajectoire (axe principal des positions)
+    lon0, lat0 = kept[0][0], kept[0][1]
+    xy = [((lon - lon0) * 111320.0 * math.cos(math.radians(lat0)), (lat - lat0) * 111320.0) for lon, lat, _ in kept]
+    mx, my = sum(x for x, _ in xy) / len(xy), sum(y for _, y in xy) / len(xy)
+    sxx = sum((x - mx) ** 2 for x, _ in xy)
+    syy = sum((y - my) ** 2 for _, y in xy)
+    sxy = sum((x - mx) * (y - my) for x, y in xy)
+    a = 0.5 * math.atan2(2 * sxy, sxx - syy)
+    order = sorted(range(len(kept)), key=lambda i: xy[i][0] * math.cos(a) + xy[i][1] * math.sin(a))
+    half = len(order) // 2
+    drift = abs(statistics.median(kept[i][2] for i in order[:half]) -
+                statistics.median(kept[i][2] for i in order[half:]))
+    precise = spread <= MAX_SPREAD and drift <= MAX_SPREAD and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
+    dropped = len(pts) - len(kept)
+    note = " ({} écartée{})".format(dropped, "s" if dropped > 1 else "") if dropped else ""
+    if precise:
+        reason = "position vérifiée : hauteur de caméra constante à {:.0f} cm près sur {} photos{}".format(
+            spread * 100, len(kept), note)
+    elif drift > MAX_SPREAD and spread <= MAX_SPREAD:
+        reason = "position non vérifiée : hauteur de caméra qui dérive de {:.0f} cm le long de la séquence".format(
+            drift * 100)
+    else:
+        reason = "position non vérifiée : hauteur de caméra variable de {:.0f} cm sur {} photos".format(
+            spread * 100, len(kept))
+    return result(precise, VERIFIED_ACCURACY if precise else None, True, reason, len(kept), spread, height)
+
+
 class PrecisionChecker:
     """Vérifications par séquence, gardées pour la session."""
 
@@ -209,16 +256,10 @@ class PrecisionChecker:
             if error:
                 done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error), transient=True))
                 return
-            heights = [ngf - g for (_, _, ngf), g in zip(photos, _ground(data)) if g is not None]
-            if len(heights) < MIN_PHOTOS:
+            pts = [(plon, plat, ngf - g) for (plon, plat, ngf), g in zip(photos, _ground(data)) if g is not None]
+            if len(pts) < MIN_PHOTOS:
                 done(result(False, lidar=False, reason="pas de LiDAR HD pour vérifier la position"))
                 return
-            spread, height = statistics.pstdev(heights), statistics.median(heights)
-            precise = spread <= MAX_SPREAD and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
-            reason = ("position vérifiée : hauteur de caméra constante à {:.0f} cm près sur {} photos".format(
-                spread * 100, len(heights)) if precise else
-                "position non vérifiée : hauteur de caméra variable de {:.0f} cm sur {} photos".format(
-                    spread * 100, len(heights)))
-            done(result(precise, VERIFIED_ACCURACY if precise else None, True, reason, len(heights), spread, height))
+            done(verify_heights(pts))
 
         api.fetch_json(api.search_url(lon, lat, CHECK_RADIUS, CHECK_PHOTOS, sequence), got_photos)

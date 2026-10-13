@@ -28,7 +28,8 @@ class CalibrationText(unittest.TestCase):
                                  "count": 1}
         self.cal.heights["s1"] = [(2.1, 0.05), (2.1, 0.05)]
         self.assertEqual(self.text(), "Calage : inclinaison 1,8° corrigée en partie (1 objet) · "
-                                      "caméra à 2,10 m (±0,04 m, 2 références)")
+                                      "caméra à 2,10 m (±0,04 m, 2 références), dont 2 d'une version précédente, "
+                                      "sans l'inclinaison automatique : refaites le calage")
 
     def test_automatic_tilt(self):
         up = calibration.up_from_components(1.5, -0.8, 30.0)
@@ -41,6 +42,19 @@ class CalibrationText(unittest.TestCase):
         self.cal.set_auto("p2", {"sequence": "s1", "heading": 30.0, "lidar": [1.0, 0.0], "verticals": None})
         self.assertEqual(self.text(pic="p2"), "Calage : inclinaison 1,5° estimée par la pente et le dévers LiDAR HD "
                                               "(±0,3°, modèle vérifié sur 4 photos de la séquence)")
+
+    def test_one_object_and_automatic(self):
+        up = calibration.up_from_components(1.5, -0.8, 30.0)
+        self.cal.set_auto("p1", {"sequence": "s1", "heading": 30.0, "lidar": None,
+                                 "verticals": {"up": list(up), "count": 140, "sigma": 0.08}})
+        self.cal.add_vertical("p1", (40.0, -10.0), (40.0, 20.0))
+        self.assertRegex(self.text(), r"^Calage : inclinaison \d,\d° corrigée \(1 objet cliqué, complété par les "
+                                      r"verticales de la photo, ±0,\d°\)$")
+
+    def test_legacy_camera_height(self):
+        self.cal.heights["s1"] = [(2.1, 0.05)]
+        self.assertIn("dont 1 d'une version précédente, sans l'inclinaison automatique : refaites le calage",
+                      self.text())
 
     def test_heading(self):
         mark = point(0, 80)

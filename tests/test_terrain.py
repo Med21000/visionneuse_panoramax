@@ -263,5 +263,14 @@ class Cache(unittest.TestCase):
         self.assertEqual(services.calls, ["lidar"])  # un service injoignable n'est pas « sans données »
 
 
+
+class PreciseGround(unittest.TestCase):
+    def test_lidar_only(self):
+        # Hauteur de caméra par l'altitude GPS : sol LiDAR HD seulement (le RGE ALTI peut être décalé)
+        self.assertIn(terrain.LIDAR_LABEL, terrain.PRECISE_LABELS)
+        self.assertIn(terrain.LIDAR_LINE_LABEL, terrain.PRECISE_LABELS)
+        self.assertNotIn(terrain.IGN_LABEL, terrain.PRECISE_LABELS)
+
+
 if __name__ == "__main__":
     unittest.main()

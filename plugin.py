@@ -9,6 +9,7 @@ import os
 
 from qgis.core import (
     Qgis,
+    QgsApplication,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsCsException,
@@ -38,6 +39,12 @@ MENU = "&Panoramax"
 PROJECT_SCOPE = "visionneuse_panoramax"  # section du plugin dans le projet QGIS
 CALIBRATION_KEY = "calibration"  # calage enregistré dans les projets par les versions précédentes
 CALIBRATION_SETTING = "visionneuse_panoramax/calibration"  # calage conservé dans le profil QGIS
+AUTO_TILT_FILE = os.path.join("visionneuse_panoramax", "inclinaisons.json")  # dans le dossier du profil
+
+
+def auto_tilt_path():
+    """Fichier des inclinaisons automatiques, dans le dossier du profil QGIS."""
+    return os.path.join(QgsApplication.qgisSettingsDirPath(), AUTO_TILT_FILE)
 
 
 class LandmarkTool(QgsMapToolPan):
@@ -142,6 +149,7 @@ class PanoramaxPlugin:
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
         self.calibration = Calibration()  # conservé dans le profil QGIS
+        self._saved_auto = None  # inclinaisons automatiques telles qu'enregistrées (texte)
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
@@ -267,8 +275,25 @@ class PanoramaxPlugin:
     # ------------------------------------------------------------------
     def _save_calibration(self):
         """Écrit le calage dans le profil : il est retrouvé aux sessions suivantes, quel que
-        soit le projet, jusqu'à ce qu'il soit refait ou effacé."""
-        QgsSettings().setValue(CALIBRATION_SETTING, json.dumps(self.calibration.to_dict(), separators=(",", ":")))
+        soit le projet, jusqu'à ce qu'il soit refait ou effacé. Les inclinaisons automatiques
+        (une par photo analysée, des milliers à terme) vont dans un fichier à part, réécrit
+        seulement quand elles changent : les réglages de QGIS restent légers."""
+        data = self.calibration.to_dict()
+        auto = data.pop("auto", {})
+        QgsSettings().setValue(CALIBRATION_SETTING, json.dumps(data, separators=(",", ":")))
+        text = json.dumps(auto, separators=(",", ":"))
+        if text != self._saved_auto:
+            path = auto_tilt_path()
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path + ".tmp", "w", encoding="utf-8") as f:
+                    f.write(text)
+                os.replace(path + ".tmp", path)  # remplacement d'un bloc : jamais de fichier à moitié écrit
+                self._saved_auto = text
+            except OSError as exc:
+                self.iface.messageBar().pushMessage(
+                    "Panoramax", "Inclinaisons automatiques non enregistrées : {}".format(exc),
+                    level=Qgis.MessageLevel.Warning, duration=6)
 
     def _load_calibration(self):
         text = QgsSettings().value(CALIBRATION_SETTING, "") or ""
@@ -278,7 +303,21 @@ class PanoramaxPlugin:
             data = None
             self.iface.messageBar().pushMessage("Panoramax", "Calage enregistré illisible : ignoré.",
                                                 level=Qgis.MessageLevel.Warning, duration=6)
+        try:
+            with open(auto_tilt_path(), encoding="utf-8") as f:
+                self._saved_auto = f.read()
+            auto = json.loads(self._saved_auto)
+        except (OSError, ValueError):
+            auto = None
+        if isinstance(data, dict) and isinstance(auto, dict):
+            # Inclinaisons du fichier, complétées par celles qu'une version précédente avait
+            # rangées dans le réglage (reprises au prochain enregistrement)
+            data["auto"] = dict(data.get("auto") or {}, **auto)
+        elif isinstance(auto, dict):
+            data = {"format": Calibration.FORMAT, "auto": auto}
         self.calibration.load(data)
+        if isinstance(data, dict) and "auto" in json.loads(text or "{}"):
+            self._save_calibration()  # migration : inclinaisons sorties du réglage
         self._calibration_updated()
 
     def _import_project_calibration(self, *args):

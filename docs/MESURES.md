@@ -118,14 +118,14 @@ Dans cet ordre :
 Panoramax annonce souvent une précision générique (2 m pour le matériel de relevé), alors que certaines photos ont une position recalée en post-traitement (GNSS RTK et centrale inertielle), comme celles de l'imajbox 360 HD du conseil départemental de la Côte-d'Or. Le plugin vérifie la précision de chaque séquence d'après les **métadonnées des photos** (`precision.py`) :
 
 - si l'EXIF déclare une précision (`GPSHPositioningError`) d'au plus 0,20 m, elle est retenue telle quelle ;
-- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 10 cm près (écart-type) sur au moins 8 photos, et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence CD21 de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m.
+- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 10 cm près (écart-type) sur au moins 8 photos, **la même sur les deux moitiés** de la portion vérifiée (un GPS non recalé peut être lisse sur quelques photos, mais il dérive), et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Les photos dont la hauteur s'écarte de plus de 4 écarts médians absolus (pont, défaut du LiDAR) sont écartées avant le calcul. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence CD21 de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m.
 
 La vérification se fait une fois par séquence, en arrière-plan à l'affichage de la photo (deux requêtes : fiches des photos voisines, environ 100 Ko ; altitudes LiDAR, moins de 1 Ko), et son résultat est gardé pour la session.
 
 Pour une photo vérifiée précise :
 
 - **Précision de position** : 0,10 m (ou celle déclarée) au lieu de celle annoncée par Panoramax, dans la triangulation (poids des visées, incertitude) et le calage par repères.
-- **Hauteur de caméra sans calage** : `h` = altitude NGF de la caméra − `z_sol`, propre à chaque photo, à environ ±5 cm. Elle n'est retenue que si le sol vient du service IGN (LiDAR HD ou RGE ALTI : les services de secours sont trop grossiers sous la caméra) et si elle est plausible ; sinon, la hauteur calée ou la valeur du panneau s'applique. Le résultat l'indique : « caméra à 1,87 m (altitude GPS) ». Elle passe avant une hauteur calée pour la séquence, moins précise (±0,10 m environ avec plusieurs références).
+- **Hauteur de caméra sans calage** : `h` = altitude NGF de la caméra − `z_sol`, propre à chaque photo, à environ ±5 cm. Elle n'est retenue que si le sol vient du LiDAR HD (le RGE ALTI, au mètre et plus ancien, peut être décalé de 0,2 à 0,5 m sous la caméra, soit 10 à 25 % d'erreur sur toutes les distances ; les services de secours sont plus grossiers encore) et si elle est plausible ; sinon, la hauteur calée ou la valeur du panneau s'applique. Le résultat l'indique : « caméra à 1,87 m (altitude GPS) ». Elle passe avant une hauteur calée pour la séquence, moins précise (±0,10 m environ avec plusieurs références).
 - **Proposée pour le champ « Caméra à »** : quand la hauteur se calcule ainsi (médiane de la séquence vérifiée, ou photo de précision déclarée, avec le LiDAR HD sous la photo), un bouton « Caméra à 1,87 m d'après l'altitude GPS : utiliser » apparaît sur la ligne « Terrain » tant que le champ en diffère. Le champ n'est jamais modifié sans ce clic. Il sert quand la hauteur propre à chaque photo ne peut pas être calculée, par exemple avec l'option « Mesure sur un pont » (sol plat, sans altitude IGN sous la caméra), et pour les photos suivantes d'une autre séquence de la même caméra.
 
 **Mode dégradé.** Les mesures ne sont pleinement fiables qu'avec **à la fois** une position vérifiée précise et le **LiDAR HD** sous la photo. S'il manque l'un ou l'autre, les mesures dépendent de la hauteur de caméra (à caler), de l'inclinaison et, sans LiDAR, d'un sol approximatif (RGE ALTI) : l'outil est en mode dégradé. Une **fenêtre** l'annonce quand on active la mesure (« 📐 Mesure ») sur une telle photo, avec ce qui manque et les calages à faire ; une case permet de ne plus l'afficher pendant la session. Si la vérification de la photo n'est pas encore terminée, la fenêtre s'ouvre dès qu'elle l'est. Une **ligne d'état** sous les boutons de mesure rappelle en permanence la précision de la position et la présence du LiDAR HD (par exemple « Position GPS vérifiée (±0,10 m) · LiDAR HD », ou « ⚠ Position GPS non vérifiée (±4 m annoncés) · LiDAR HD : mode de mesure dégradé »). La présence du LiDAR HD est contrôlée pour toute photo, y compris quand sa précision est déclarée dans l'EXIF.
@@ -191,15 +191,19 @@ Entre deux points `P` et `Q`, le moteur calcule la distance 3D, sa composante ho
 
 ### 3.5 Incertitude affichée
 
-C'est l'écart maximal de la grandeur quand on fait varier, une à une :
+Chaque source d'erreur indépendante est prise à ±1 écart-type ; l'écart de la grandeur qu'elle produit (le plus grand des deux sens) entre dans une **somme quadratique** :
 
-- l'élévation de chaque clic de ±0,5° (inclinaison mal connue) ;
-- en triangulation 3D, le cap de chaque clic de l'erreur de visée de la photo ;
+- **inclinaison de chaque photo, commune à tous ses clics**, en tangage et en roulis : l'incertitude du calage appliqué (calcul automatique : 0,05 à 0,25° ; LiDAR HD : environ 0,5° ; calage à la main), ou **2°** pour une photo non calée (1 à 3° mesurés sur l'imajbox) ;
+- **hauteur de caméra de chaque photo** : ±5 cm par l'altitude GPS d'une position vérifiée, l'incertitude de la hauteur calée, ou ±15 cm pour la valeur saisie ;
+- **visée de chaque clic** : ±0,1° en élévation et en cap ; en triangulation 3D, le cap compte aussi l'erreur de visée de la photo ;
 - la position de chaque point recalé sur la carte de ±0,5 m (section 5) ;
-- les clics de définition de la façade (±0,5° d'élévation), ou ses extrémités de ±0,5 m une fois recalées sur la carte ;
+- les clics de définition de la façade (±0,1°), ou ses extrémités de ±0,5 m une fois recalées sur la carte (ou prises dans le cadastre) ;
+- la **façade du cadastre** d'une hauteur : ±0,5 m si le LiDAR HD la confirme, ±1 m sinon ;
 - la hauteur saisie du plan horizontal de ±5 cm.
 
-Elle ne compte pas l'erreur de hauteur de caméra, ni celle du GPS, qui déplacent ou agrandissent la mesure entière (sections 6 et 8).
+L'inclinaison est commune aux clics d'une photo : une erreur de tangage allonge ou raccourcit tous ses points ensemble, et son effet sur une largeur prise devant la caméra est double de celui d'un seul clic. Ordres de grandeur, largeur de 7 m à 10 m devant la caméra : **±1,7 m** sur une photo non calée, ±0,55 m calée avec la hauteur de caméra saisie, moins de ±0,3 m calée avec la hauteur par l'altitude GPS.
+
+Elle ne compte pas l'erreur du GPS, qui déplace la mesure entière sans changer sa longueur (section 8).
 
 ---
 
@@ -255,7 +259,7 @@ Sur la hauteur d'un point de façade à 7–16 m de la photo, le cadastre donne 
 
 #### Contrôle de la façade par le LiDAR HD
 
-Le MNS du LiDAR HD (surface, bâti compris ; WMS de la Géoplateforme, grille de 0,5 m lue en flottants) marque le bord du toit, pas la façade. Le long de la visée, à partir de 3 m avant la façade du cadastre (un arbre, une haie ou un véhicule plus proche est ignoré), le bâti commence là où le MNS dépasse le MNT de 2 m. La façade est **confirmée** si le cadastre est de 0,5 m avant à 2 m après ce point (débord de toit) ; sinon « cadastre et LiDAR HD divergent de … m : contrôlez la façade sur la carte ». Sans LiDAR publié (agglomération dijonnaise en 2026), la façade est utilisée sans contrôle, et c'est signalé. À Nuits et Semur, 145 visées sur 153 sont confirmées.
+Seuls les bâtiments en dur du cadastre servent (pas les constructions légères : abris, appentis, serres). Le MNS du LiDAR HD (surface, bâti compris ; WMS de la Géoplateforme, grille de 0,5 m lue en flottants) marque le bord du toit, pas la façade. Le long de la visée, à partir de 3 m avant la façade du cadastre (un arbre, une haie ou un véhicule plus proche est ignoré), le bâti commence là où le MNS dépasse le MNT de 2 m. La façade est **confirmée** si le cadastre est de 0,5 m avant à 2 m après ce point (débord de toit) ; sinon « cadastre et LiDAR HD divergent de … m : contrôlez la façade sur la carte ». Sans LiDAR publié (agglomération dijonnaise en 2026), la façade est utilisée sans contrôle, et c'est signalé. À Nuits et Semur, 145 visées sur 153 sont confirmées.
 
 ### 4.4 Triangulation d'un objet
 
@@ -273,7 +277,9 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 
 **Contrôles.** Visées presque parallèles (moins de 3°), point derrière une photo ou à plus de 500 m : refusés. Croisement inférieur à 15° ou GPS moins bon que ±5 m : signalés.
 
-**Résultats.** Distances, angle de croisement, incertitude (grand axe de l'ellipse de covariance), écart des visées (à partir de 3), précision GPS. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (GeoPackage ou couche temporaire, au choix lors du premier enregistrement).
+**Erreurs communes.** Les photos d'une même séquence ont presque le même décalage de position GPS et la même erreur de cap (fixation de la caméra) : ces erreurs déplacent le point d'un bloc et ne se compensent pas en multipliant les visées. Quand toutes les visées viennent d'une même séquence, l'incertitude ne descend pas sous cette part commune.
+
+**Résultats.** Distances, angle de croisement, incertitude (grand axe de l'ellipse de covariance, au moins la part commune d'une même séquence), écart des visées (à partir de 3), précision GPS. « Enregistrer le point » l'ajoute à la couche « Panoramax – points triangulés » (GeoPackage ou couche temporaire, au choix lors du premier enregistrement).
 
 **Géométrie favorable.** L'erreur vaut à peu près `σ / sin θ` (θ : angle de croisement) : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet.
 
@@ -430,7 +436,7 @@ Sur scène simulée (pieds de mur masqués, cliqués 15 cm trop haut, hauteur de
 
 ## 6. Le calage des photos
 
-Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **conservés dans le profil QGIS**, d'une session et d'un projet à l'autre, jusqu'à ce qu'ils soient refaits ou effacés (seules les observations sont stockées, les corrections en sont recalculées au démarrage). Le calage d'un projet enregistré par une version précédente, qui le stockait dans le projet, est repris à l'ouverture du projet pour les photos et séquences qui n'en ont pas encore, puis retiré du projet. « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
+Les calages mesurent les défauts propres à une photo ou une séquence, à partir d'éléments connus de la scène. Ils s'appliquent ensuite automatiquement à toutes les mesures et visées, sont rappelés sous les boutons de mesure, et sont **conservés dans le profil QGIS**, d'une session et d'un projet à l'autre, jusqu'à ce qu'ils soient refaits ou effacés (seules les observations sont stockées : verticales et repères cliqués, clics des références de hauteur ; les corrections en sont recalculées). Le calage d'un projet enregistré par une version précédente, qui le stockait dans le projet, est repris à l'ouverture du projet pour les photos et séquences qui n'en ont pas encore, puis retiré du projet. « Effacer » supprime le calage du mode affiché. Les mesures déjà faites ne sont pas recalculées après un nouveau calage.
 
 Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont complémentaires : le premier corrige **une mesure** après coup ; le second corrige **la photo ou la séquence** pour toutes les mesures à venir.
 
@@ -446,13 +452,13 @@ Le recalage d'une mesure sur la carte (section 5) et le calage des photos sont c
 
 **Vérification.** Caméra simulée penchée de 2,5° : retrouvée exactement avec deux poteaux, un point au sol étant ensuite corrigé au centième de degré.
 
-Le calage à la main l'emporte sur l'inclinaison automatique (section 6.1 bis) ; « Effacer » le retire et rend la main à celle-ci.
+Le calage à la main sur deux objets ou plus l'emporte sur l'inclinaison automatique (section 6.1 bis). Sur **un seul objet**, il la complète au lieu de l'écraser : l'inclinaison automatique sert d'a priori (pondéré par son incertitude), l'objet corrige la composante qu'il voit, l'autre reste celle du calcul automatique. « Effacer » retire le calage à la main et rend la main au calcul automatique.
 
 ### 6.1 bis Inclinaison automatique, par photo
 
 **Constat.** Diagnostic du 12/10/2026 sur 28 photos imajbox du CD21 (Pouilly-en-Auxois) : les panoramas ne sont pas mis à niveau. La caméra penche de 1 à 3° avec le véhicule ; le tangage suit la pente de la route (corrélation 0,95), le roulis son dévers. Sans correction, un point au sol à 6 m est déplacé d'environ 37 cm par degré.
 
-**Quand.** Dès que la mesure est active, pour chaque photo 360° affichée qui n'a pas d'inclinaison calée à la main : le plugin télécharge la photo HD (7 à 8 Mo pour l'imajbox) et calcule en arrière-plan (3 à 4 s). Le résultat est conservé dans le profil QGIS avec les autres calages : une photo n'est analysée qu'une fois. Les clics faits sur la photo avant la fin du calcul sont corrigés à son arrivée, et leurs mesures recalculées.
+**Quand.** Dès que la mesure est active, pour chaque photo 360° affichée qui n'a pas d'inclinaison calée à la main sur deux objets ou plus : le plugin télécharge la photo HD (7 à 8 Mo pour l'imajbox) et calcule en arrière-plan (3 à 5 s). Seule la photo affichée est analysée : quittée avant la fin, son téléchargement est interrompu et rien n'est enregistré (elle sera reprise si on y revient). Le résultat est conservé dans le profil QGIS, dans un fichier à part (`visionneuse_panoramax/inclinaisons.json`, une entrée par photo analysée) : une photo n'est analysée qu'une fois. Les clics faits sur la photo avant la fin du calcul sont corrigés à son arrivée, et leurs mesures recalculées.
 
 **1. Verticales de la photo** (`autotilt.py`). Sur une photo de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent verticales dans l'image équirectangulaire ; la caméra penchée, elles s'inclinent selon une loi connue. La photo est décodée à 6 144 px de large, dans la bande de 3 à 45° au-dessus de l'horizon (le sol, les véhicules et la voiture de prise de vue sont en dessous). Par bandes de 2,5° : sommes du gradient horizontal le long de droites de pentes variées (transformée de Radon locale) pour repérer les arêtes rectilignes, puis position de l'arête sur chaque ligne (centre du gradient) et droite des moindres carrés. Chaque segment est traité comme un objet vertical cliqué (6.1) ; moindres carrés sur toutes, avec rejet itératif à 3 écarts-types (arbres, toits, objets penchés). Pentes cherchées jusqu'à ±6,8° : une verticale vue à 45° au-dessus de l'horizon penche de deux fois l'inclinaison de la caméra. Résultat retenu avec au moins 40 segments et une incertitude de moins de 0,25°, calculée dans la direction la moins contrainte (verticales toutes du même côté : une composante mal connue) et en comptant les arêtes distinctes, une même arête donnant un segment par bande.
 
@@ -476,7 +482,9 @@ Le calage à la main l'emporte sur l'inclinaison automatique (section 6.1 bis) ;
 
 **Référence.** « au sol » (deux extrémités : place de stationnement de 2,30 à 2,50 m, bande de passage piéton de 0,50 m, trait de marquage, longueur mesurée sur l'orthophoto) ou « en hauteur » (pied puis sommet d'un objet de hauteur connue), avec sa longueur réelle.
 
-**Calcul.** Recherche par dichotomie, entre 0,3 et 6 m, de la hauteur qui redonne la longueur connue, avec le vrai profil de terrain et les clics corrigés de l'inclinaison. Incertitude : ±0,5° sur l'élévation de chaque clic. Plusieurs références se combinent (moyenne pondérée par `1/σ²`).
+**Calcul.** Recherche par dichotomie, entre 0,3 et 6 m, de la hauteur qui redonne la longueur connue, avec le vrai profil de terrain et les clics corrigés de l'inclinaison. Incertitude : inclinaison de la photo (commune aux deux clics, voir 3.5) et visée de chaque clic (±0,1°), en somme quadratique. Plusieurs références se combinent (moyenne pondérée par `1/σ²`).
+
+**Recalculée.** Les clics bruts, leur profil de terrain et la longueur connue sont conservés : la hauteur est recalculée quand le calage de la photo change (inclinaison automatique arrivée ensuite, calage refait). Un calage fait par une version précédente, qui n'enregistrait que la valeur, reste utilisé tel quel ; le rappel du calage invite à le refaire.
 
 **Conseils.** Référence proche (moins de 10–15 m) et, au sol, **en travers** de la vue : dans l'axe, une longueur est la différence de deux distances et elle est bien moins précise.
 
@@ -572,7 +580,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 ### Incertitudes et contrôle
 
-- **Propagation complète** des covariances (inclinaison, hauteur de caméra, position recalée, terrain, carte) au lieu des écarts à ±0,5° et ±0,5 m.
+- **Propagation complète** des covariances (terrain, axe de la route, corrélations entre sources) au-delà de la somme quadratique d'écarts à ±1 écart-type.
 - **Clic assisté** : accrochage sur un bord détecté dans l'image, affinage sous-pixel.
 - **Contrôle croisé** automatique sur deux photos voisines.
 
@@ -615,7 +623,9 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | Paramètre | Valeur | Rôle | Fichier |
 |---|---|---|---|
 | `DEFAULT_CAMERA_HEIGHT` | 1,90 m | hauteur de caméra par défaut | `measure.py` |
-| `PITCH_ERROR` | 0,5° | variation d'élévation des clics pour l'incertitude | `ground.py` |
+| `AIM_ERROR`, `UNCALIBRATED`, `OBJECT_ERROR` | 0,1°, 2°, 0,2° | visée d'un clic ; inclinaison d'une photo non calée ; écart d'un objet vertical cliqué | `calibration.py` |
+| `CAMERA_ERRORS` | 5 cm (altitude GPS), 15 cm (saisie) | incertitude de la hauteur de caméra | `measure_tool.py` |
+| `WALL_ERROR`, `WALL_ERROR_UNCHECKED` | 0,5 m, 1 m | façade du cadastre confirmée ou non par le LiDAR | `measure_tool.py` |
 | `MAX_DISTANCE` | 60 m | portée maximale d'un point au sol | `ground.py` |
 | `MAX_TOP_OFFSET` | 45° | écart de cap maximal entre pied et sommet d'une hauteur | `ground.py` |
 | `LINE_FROM`, `LINE_TO` | −30 m, 90 m | fenêtre du profil de terrain | `terrain.py` |

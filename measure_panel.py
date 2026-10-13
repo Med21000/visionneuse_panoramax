@@ -50,6 +50,11 @@ def calibration_text(cal, pic, sequence, lon, lat):
         parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
             tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
             "s" if tilt["count"] > 1 else "").replace(".", ","))
+    elif tilt and tilt["source"].startswith("clics + "):
+        parts.append("inclinaison {:.1f}° corrigée ({} objet{} cliqué{}, complété{} par {}, ±{:.1f}°)".format(
+            tilt["tilt"], tilt["count"], *(("s", "s", "s") if tilt["count"] > 1 else ("", "", "")),
+            "les verticales de la photo" if tilt["source"].endswith("verticales") else "le LiDAR HD",
+            max(tilt["sigma"], 0.1)).replace(".", ","))
     elif tilt and tilt["source"] == "verticales":
         parts.append("inclinaison {:.1f}° corrigée automatiquement ({} verticales de la photo, ±{:.1f}°)".format(
             tilt["tilt"], tilt["count"], max(tilt["sigma"], 0.1)).replace(".", ","))
@@ -58,9 +63,12 @@ def calibration_text(cal, pic, sequence, lon, lat):
                      "sur {} photos de la séquence)".format(tilt["tilt"], tilt["sigma"], tilt["count"]).replace(".", ","))
     camera = cal.camera(sequence) if sequence else None
     if camera:
-        parts.append("caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
-            camera["height"], camera["sigma"], camera["count"],
-            "s" if camera["count"] > 1 else "").replace(".", ","))
+        text = "caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
+            camera["height"], camera["sigma"], camera["count"], "s" if camera["count"] > 1 else "").replace(".", ",")
+        if camera.get("legacy"):
+            text += (", dont {} d'une version précédente, sans l'inclinaison automatique : refaites le calage"
+                     .format(camera["legacy"]))
+        parts.append(text)
     pose = cal.pose(sequence, lon, lat) if sequence else None
     if pose:
         text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])

@@ -33,6 +33,8 @@ import math
 from . import ground
 from .triangulation import _local, offset
 
+OBJECT_ERROR = 0.2  # écart d'un objet vertical cliqué à la verticale vraie (degrés : clics, objet)
+UNCALIBRATED = 2.0  # inclinaison d'une photo non calée (degrés) : 1 à 3° mesurés sur l'imajbox
 MAX_TILT = 10.0  # au-delà, les clics sont sûrement faux (objet penché, pied/sommet inversés)
 MIN_SPAN = 3.0  # écart d'élévation minimal entre pied et sommet (degrés)
 MAX_LEAN = 30.0  # écart de cap maximal entre pied et sommet d'un même objet vertical
@@ -93,14 +95,18 @@ def _unit(v):
     return (v[0] / n, v[1] / n, v[2] / n)
 
 
-def tilt_from_verticals(verticals):
+def tilt_from_verticals(verticals, prior=None):
     """Verticale vraie dans le repère de la photo, d'après des objets verticaux.
 
     verticals : liste de ((cap, élév.) du pied, (cap, élév.) du sommet).
+    prior : (up, sigma en degrés), inclinaison déjà connue (calcul automatique) qui complète
+    les objets cliqués : chaque objet ne corrige que la composante qu'il voit, l'autre reste
+    celle de l'a priori.
     Retourne un dict : up (vecteur unitaire), tilt (degrés), toward (cap vers
     lequel le haut de la caméra penche), residual (écart moyen des objets à la
     verticale retenue, degrés, None avec un seul objet), partial (vrai si un
-    seul objet ou des objets alignés : seule une composante est corrigée).
+    seul objet ou des objets alignés, sans a priori : seule une composante est corrigée),
+    sigma (incertitude, degrés, dans la direction la moins contrainte).
     """
     normals = []
     for bottom, top in verticals:
@@ -113,15 +119,25 @@ def tilt_from_verticals(verticals):
     # Verticale vraie (a, b, 1) : n·(a, b, 1) = 0 pour chaque objet, moindres carrés.
     # Un léger amortissement donne la plus petite correction compatible quand les objets
     # ne suffisent pas (un seul objet, ou objets dans la même direction).
+    # Chaque objet pèse 1 / OBJECT_ERROR² ; l'a priori, 1 / sigma² sur chaque composante.
+    w = 1.0 / math.radians(OBJECT_ERROR) ** 2
     a11 = a12 = a22 = r1 = r2 = 0.0
     for nx, ny, nz in normals:
-        a11 += nx * nx
-        a12 += nx * ny
-        a22 += ny * ny
-        r1 -= nx * nz
-        r2 -= ny * nz
-    damp = 1e-6 * max(a11 + a22, 1e-12)
-    a11, a22 = a11 + damp, a22 + damp
+        a11 += w * nx * nx
+        a12 += w * nx * ny
+        a22 += w * ny * ny
+        r1 -= w * nx * nz
+        r2 -= w * ny * nz
+    seen = (a11, a12, a22)  # information des seuls objets
+    if prior is not None:
+        pup, psigma = prior
+        wp = 1.0 / math.radians(max(psigma, 0.01)) ** 2
+        a11, a22 = a11 + wp, a22 + wp
+        r1, r2 = r1 + wp * pup[0] / pup[2], r2 + wp * pup[1] / pup[2]
+        damp = 0.0
+    else:
+        damp = 1e-6 * max(a11 + a22, 1e-12)
+        a11, a22 = a11 + damp, a22 + damp
     det = a11 * a22 - a12 * a12
     a, b = (a22 * r1 - a12 * r2) / det, (a11 * r2 - a12 * r1) / det
     up = _unit((a, b, 1.0))
@@ -130,13 +146,18 @@ def tilt_from_verticals(verticals):
         raise CalibrationError("Inclinaison trouvée de {:.0f}° : objet pas vraiment vertical ou clics "
                                "imprécis. Recommencez sur un autre objet.".format(tilt))
     # Partiel si les plans des objets se coupent mal (objets dans la même direction)
-    partial = len(normals) < 2 or (a11 - damp) * (a22 - damp) - a12 * a12 < 0.1 * ((a11 + a22 - 2 * damp) / 2) ** 2
+    s11, s12, s22 = seen
+    partial = prior is None and (len(normals) < 2 or s11 * s22 - s12 * s12 < 0.1 * ((s11 + s22) / 2) ** 2)
+    lam = (a11 + a22) / 2 - math.sqrt(((a11 - a22) / 2) ** 2 + a12 * a12)  # moins contrainte
     residual = None
     if len(normals) > 1:
         residual = math.degrees(math.sqrt(sum(math.asin(min(1.0, abs(_dot(n, up)))) ** 2
                                               for n in normals) / len(normals)))
+    sigma = UNCALIBRATED if partial else math.degrees(1.0 / math.sqrt(max(lam, 1e-12)))
+    if residual is not None and not partial:
+        sigma = max(sigma, residual / math.sqrt(len(normals)))
     return {"up": up, "tilt": tilt, "toward": math.degrees(math.atan2(up[0], up[1])) % 360,
-            "residual": residual, "partial": partial, "count": len(normals)}
+            "residual": residual, "partial": partial, "count": len(normals), "sigma": sigma}
 
 
 def tilt_components(up, heading):
@@ -246,12 +267,13 @@ def _solve_height(kind, clicks, known):
     return (lo + hi) / 2.0
 
 
-def camera_height(kind, clicks, known):
+def camera_height(kind, clicks, known, tilt_sigma=None):
     """Hauteur de caméra (m) et son incertitude, d'après une longueur connue.
 
     kind : "ground" (deux clics au sol) ou "height" (pied au sol, puis sommet) ;
     clicks : dicts avec elev (corrigée de l'inclinaison), yaw, lon, lat, profile.
-    L'incertitude correspond à ±ground.PITCH_ERROR sur l'élévation de chaque clic.
+    L'incertitude combine (somme quadratique) l'inclinaison de la photo, commune aux deux
+    clics (tilt_sigma degrés, UNCALIBRATED par défaut), et la visée de chaque clic (AIM_ERROR).
     """
     if known <= 0:
         raise CalibrationError("Indiquez la longueur connue.")
@@ -261,16 +283,31 @@ def camera_height(kind, clicks, known):
         h = _solve_height(kind, clicks, known)
     except ground.GroundError as exc:
         raise CalibrationError(str(exc))
-    spread = 0.0
+    tilt_sigma = UNCALIBRATED if tilt_sigma is None else tilt_sigma
+    groups = []
+    for north, east in ((tilt_sigma, 0.0), (0.0, tilt_sigma)):
+        variants = []
+        for sign in (-1, 1):
+            up = up_from_components(sign * north, sign * east, 0.0)
+            variants.append([dict(c, **dict(zip(("yaw", "elev"), untilt(up, c["yaw"], c["elev"])))) for c in clicks])
+        groups.append(variants)
     for i in range(len(clicks)):
+        variants = []
         for sign in (-1, 1):
             moved = [dict(c) for c in clicks]
-            moved[i]["elev"] += sign * ground.PITCH_ERROR
+            moved[i]["elev"] += sign * AIM_ERROR
+            variants.append(moved)
+        groups.append(variants)
+    total = 0.0
+    for variants in groups:
+        worst = 0.0
+        for moved in variants:
             try:
-                spread = max(spread, abs(_solve_height(kind, moved, known) - h))
+                worst = max(worst, abs(_solve_height(kind, moved, known) - h))
             except (CalibrationError, ground.GroundError):
-                spread = max(spread, h)  # référence trop loin pour être fiable
-    return h, max(spread, 0.005)
+                worst = max(worst, h)  # référence trop loin pour être fiable
+        total += worst * worst
+    return h, max(math.sqrt(total), 0.005)
 
 
 class Calibration:
@@ -287,7 +324,11 @@ class Calibration:
     def __init__(self):
         self.verticals = {}  # pic -> [((cap, élév.) pied, (cap, élév.) sommet)]
         self.landmarks = {}  # séquence -> [dicts : pic, lon, lat, yaw, elev, mlon, mlat, accuracy, prior]
-        self.heights = {}  # séquence -> [(hauteur de caméra, incertitude)]
+        # séquence -> calages de la hauteur de caméra : dicts kind, known, clicks (clics bruts,
+        # recalculés avec le calage actuel, voir camera), ou (hauteur, incertitude) enregistrés
+        # par une version précédente (valeur figée)
+        self.heights = {}
+        self._cameras = {}  # séquence -> hauteur recalculée (cache, vidé à chaque modification)
         # pic -> inclinaison automatique : sequence, heading (cap du centre de l'image),
         # verticals (up, count, sigma : d'après les verticales de la photo, ou None), lidar
         # ((pente, dévers) en degrés sous le véhicule, ou None)
@@ -297,6 +338,7 @@ class Calibration:
         self.changed = None
 
     def _notify(self):
+        self._cameras = {}  # l'inclinaison ou le cap ont pu changer : hauteurs à recalculer
         if self.changed is not None:
             self.changed()
 
@@ -306,7 +348,7 @@ class Calibration:
             "format": self.FORMAT,
             "verticals": {pic: [[list(b), list(t)] for b, t in v] for pic, v in self.verticals.items()},
             "landmarks": self.landmarks,
-            "heights": {seq: [list(o) for o in obs] for seq, obs in self.heights.items()},
+            "heights": {seq: [o if isinstance(o, dict) else list(o) for o in obs] for seq, obs in self.heights.items()},
             "auto": self.auto,
         }
 
@@ -314,7 +356,7 @@ class Calibration:
         """Remplace le calage par celui enregistré (dict de to_dict, ou None : calage vide).
         Les entrées illisibles sont ignorées. Ne déclenche pas `changed`."""
         self.verticals, self.landmarks, self.heights, self._tilts = {}, {}, {}, {}
-        self.auto, self._models = {}, {}
+        self.auto, self._models, self._cameras = {}, {}, {}
         if not isinstance(data, dict) or data.get("format") != self.FORMAT:
             return
         keys = ("pic", "lon", "lat", "yaw", "elev", "mlon", "mlat", "accuracy", "prior")
@@ -331,7 +373,7 @@ class Calibration:
                 if obs:
                     self.landmarks[seq] = obs
             for seq, obs in (data.get("heights") or {}).items():
-                obs = [(float(h), float(s)) for h, s in obs if float(s) > 0]
+                obs = [o for o in (_height_obs(o) for o in obs) if o is not None]
                 if obs:
                     self.heights[seq] = obs
             for pic, entry in (data.get("auto") or {}).items():
@@ -356,7 +398,7 @@ class Calibration:
                     added += 1
         for pic, tilt in other._tilts.items():
             self._tilts.setdefault(pic, tilt)
-        self._models = {}
+        self._models, self._cameras = {}, {}
         return added
 
     # Inclinaison ---------------------------------------------------------
@@ -368,13 +410,26 @@ class Calibration:
         return result
 
     def tilt(self, pic):
-        """Inclinaison de la photo (dict de tilt_from_verticals), ou None. Dans l'ordre : calée
-        à la main (source "clics"), calculée d'après les verticales de la photo
-        ("verticales"), estimée par le LiDAR HD ("lidar"), avec sigma (degrés) pour les
-        deux dernières."""
-        t = self._tilts.get(pic)
-        if t:
-            return dict(t, source="clics")
+        """Inclinaison de la photo (dict de tilt_from_verticals, avec sigma en degrés), ou None.
+        Dans l'ordre : calée à la main sur deux objets ou plus (source "clics") ; calée à la
+        main sur un objet et complétée par l'inclinaison automatique ("clics + verticales",
+        "clics + lidar") ; calculée d'après les verticales de la photo ("verticales") ;
+        estimée par le LiDAR HD ("lidar")."""
+        manual, auto = self._tilts.get(pic), self.auto_tilt(pic)
+        if manual and (not manual["partial"] or auto is None):
+            return dict(manual, source="clics")
+        if manual:
+            combined = tilt_from_verticals(self.verticals[pic], (auto["up"], auto["sigma"]))
+            return dict(combined, source="clics + " + auto["source"])
+        return auto
+
+    def manual_complete(self, pic):
+        """Inclinaison calée à la main sur assez d'objets pour se passer du calcul automatique."""
+        manual = self._tilts.get(pic)
+        return bool(manual) and not manual["partial"]
+
+    def auto_tilt(self, pic):
+        """Inclinaison automatique de la photo (verticales, sinon LiDAR HD), ou None."""
         entry = self.auto.get(pic)
         if not entry:
             return None
@@ -419,18 +474,59 @@ class Calibration:
 
     # Hauteur de caméra --------------------------------------------------------
     def add_camera_height(self, sequence, kind, clicks, known):
-        h, sigma = camera_height(kind, clicks, known)
-        self.heights.setdefault(sequence, []).append((h, sigma))
+        """Calage de la hauteur de caméra sur une longueur connue (clics corrigés du calage
+        actuel). Les clics bruts sont conservés : la hauteur est recalculée si l'inclinaison ou
+        le cap de la photo changent ensuite (voir camera)."""
+        h, sigma = camera_height(kind, clicks, known, self._tilt_sigma(clicks[0].get("pic")))
+        keep = ("pic", "sequence", "lon", "lat", "gps", "raw", "yaw", "elev", "profile")
+        obs = {"kind": kind, "known": float(known),
+               "clicks": [{k: c[k] for k in keep if c.get(k) is not None} for c in clicks]}
+        self.heights.setdefault(sequence, []).append(obs)
         self._notify()
         return {"height": h, "sigma": sigma}
 
-    def camera(self, sequence):
-        """Hauteur de caméra calée de la séquence : dict height, sigma, count, ou None."""
-        obs = self.heights.get(sequence)
-        if not obs:
+    def _height_of(self, sequence, obs):
+        """(hauteur, incertitude) d'un calage de la hauteur de caméra, avec le calage actuel."""
+        if not isinstance(obs, dict):
+            return tuple(obs)
+        clicks = []
+        for c in obs["clicks"]:
+            if c.get("raw"):  # direction brute : corrigée du calage actuel
+                lon, lat = c.get("gps") or (c["lon"], c["lat"])
+                yaw, elev = self.correct(c.get("pic"), sequence, c["raw"][0], c["raw"][1], lon, lat)
+            else:  # direction déjà corrigée, figée
+                yaw, elev = c["yaw"], c["elev"]
+            clicks.append(dict(c, yaw=yaw, elev=elev))
+        try:
+            return camera_height(obs["kind"], clicks, obs["known"], self._tilt_sigma(clicks[0].get("pic")))
+        except (CalibrationError, ground.GroundError):
             return None
-        sw = sum(1.0 / s ** 2 for _, s in obs)
-        return {"height": sum(h / s ** 2 for h, s in obs) / sw, "sigma": 1.0 / math.sqrt(sw), "count": len(obs)}
+
+    def _tilt_sigma(self, pic):
+        """Incertitude (degrés) de l'inclinaison de la photo, UNCALIBRATED sans calage."""
+        t = self.tilt(pic) if pic else None
+        return t["sigma"] if t and t.get("sigma") is not None else UNCALIBRATED
+
+    def camera(self, sequence):
+        """Hauteur de caméra calée de la séquence : dict height, sigma, count, legacy (calages
+        d'une version précédente, figés), ou None."""
+        obs_list = self.heights.get(sequence) or []
+        key = (id(obs_list), len(obs_list))  # calages ajoutés ou remplacés directement
+        if self._cameras.get(sequence, (None,))[0] == key:
+            return self._cameras[sequence][1]
+        values, legacy = [], 0
+        for o in obs_list:
+            v = self._height_of(sequence, o)
+            if v is not None:
+                values.append(v)
+                legacy += not isinstance(o, dict)
+        res = None
+        if values:
+            sw = sum(1.0 / s ** 2 for _, s in values)
+            res = {"height": sum(h / s ** 2 for h, s in values) / sw, "sigma": 1.0 / math.sqrt(sw),
+                   "count": len(values), "legacy": legacy}
+        self._cameras[sequence] = (key, res)
+        return res
 
     def clear_camera(self, sequence):
         self.heights.pop(sequence, None)
@@ -576,6 +672,31 @@ class Calibration:
         """Erreur de visée (degrés) d'une séquence recalée, ou None si elle ne l'est pas."""
         pose = self.pose(sequence, lon, lat)
         return math.hypot(pose["sigma"], AIM_ERROR) if pose else None
+
+
+def _height_obs(o):
+    """Calage de la hauteur de caméra relu (voir Calibration.heights), ou None si illisible."""
+    try:
+        if isinstance(o, dict):
+            clicks = []
+            for c in o["clicks"]:
+                clicks.append({
+                    "pic": c.get("pic"), "sequence": c.get("sequence"),
+                    "lon": float(c["lon"]), "lat": float(c["lat"]),
+                    "gps": [float(v) for v in c["gps"]] if c.get("gps") else None,
+                    "raw": [float(c["raw"][0]), float(c["raw"][1])] if c.get("raw") else None,
+                    "yaw": float(c["yaw"]) if c.get("yaw") is not None else None,
+                    "elev": float(c["elev"]) if c.get("elev") is not None else None,
+                    "profile": [(float(d), float(z)) for d, z in c["profile"]] if c.get("profile") else None})
+            if o.get("kind") not in ("ground", "height") or len(clicks) != 2 or float(o["known"]) <= 0:
+                return None
+            if any(c["raw"] is None and (c["yaw"] is None or c["elev"] is None) for c in clicks):
+                return None
+            return {"kind": o["kind"], "known": float(o["known"]), "clicks": clicks}
+        h, s = float(o[0]), float(o[1])
+        return (h, s) if s > 0 else None
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+        return None
 
 
 def _auto_entry(entry):

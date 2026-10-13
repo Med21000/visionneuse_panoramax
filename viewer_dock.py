@@ -540,6 +540,9 @@ class PanoramaxDock(QDockWidget):
         if tilt:
             if tilt["source"] == "clics":
                 return "inclinaison calée à la main", False
+            if tilt["source"].startswith("clics + "):
+                return "inclinaison calée à la main et automatiquement (±{:.1f}°)".format(
+                    max(tilt["sigma"], 0.1)).replace(".", ","), False
             how = "verticales de la photo" if tilt["source"] == "verticales" else "pente et dévers LiDAR HD"
             return "inclinaison calée ({}, ±{:.1f}°)".format(how, max(tilt["sigma"], 0.1)).replace(".", ","), False
         if pic and self.tilts.pending(pic):
@@ -611,7 +614,11 @@ class PanoramaxDock(QDockWidget):
         except ValueError:
             return
         item = self._current_item or {}
-        azimuth = api.precise_heading(item) or api.item_heading(item) or 0.0
+        precise, rounded = api.precise_heading(item), api.item_heading(item)
+        azimuth = precise if precise is not None else (rounded if rounded is not None else 0.0)
+        # La visionneuse s'oriente sur view:azimuth (arrondi au degré) : une direction calculée
+        # depuis l'écran est ramenée au cap précis, comme celles qu'elle fournit (voir pos)
+        screen_offset = precise - rounded if precise is not None and rounded is not None else 0.0
         for c in clicks:
             try:
                 vfov = float(c.get("vfov") or 0)
@@ -620,6 +627,7 @@ class PanoramaxDock(QDockWidget):
                     vfov = math.degrees(2 * math.atan(math.tan(hfov / 2) * c["h"] / max(c["w"], 1)))
                 yaw, elev = view_direction(float(c["x"]), float(c["y"]), vfov,
                                            float(c["dx"]), float(c["dy"]), float(c["h"]))
+                yaw = (yaw + screen_offset) % 360
             except (KeyError, TypeError, ValueError, ZeroDivisionError):
                 continue
             pos = None
@@ -676,7 +684,7 @@ class PanoramaxDock(QDockWidget):
         lon, lat = float(lon), float(lat)
         heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch, lon, lat)
         clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        return {"pic": pic_id, "lon": clon, "lat": clat, "heading": heading,
+        return {"pic": pic_id, "sequence": sequence, "lon": clon, "lat": clat, "heading": heading,
                 "accuracy": accuracy, "precise": precise is not None,
                 "heading_error": self.calibration.heading_error(sequence, lon, lat)}
 
@@ -781,8 +789,10 @@ class PanoramaxDock(QDockWidget):
         is360 = (fov or 0) >= 360 or src.width() >= 1.9 * src.height()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
+            tilt = self.calibration.tilt(item.get("id")) if item.get("id") else None
             out = capture.render_view(capture.qimage_to_array(src), api.item_heading(item) or 0.0,
-                                      is360, heading, pitch, vfov, fov if not is360 else None)
+                                      is360, heading, pitch, vfov, fov if not is360 else None,
+                                      up=tilt["up"] if tilt else None)  # vue redressée
             img = capture.add_caption(capture.array_to_qimage(out), capture.caption_for(item, heading))
             props = item.get("properties", {}) or {}
             date = re.sub(r"[^0-9]", "", (props.get("datetime") or ""))[:8] or "sansdate"

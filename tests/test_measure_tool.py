@@ -238,6 +238,20 @@ class Relocation(Base):
         self.assertAlmostEqual(dyaw, math.degrees(math.atan2(4, 20) - math.atan2(4, 12)), places=6)
         self.assertAlmostEqual(delev, 0.0, places=6)
 
+    def test_reaim_on_map_plane_horizontal_surface(self):
+        # Plan horizontal à 1 m : le second point est en fait sur un mur à 14 m. Glissé sur la carte
+        # puis visé à nouveau, il doit rester dans le plan calé sur la carte (y = 14), pas revenir
+        # sur le plan horizontal
+        self.tool.plane_height = 1.0
+        m = self.measure("free", [click((3.0, 10.0, 1.0)), click((-2.0, 12.0, 1.0))], surface="horizontal")
+        x = -2.0 * 14 / 12
+        m.relocate(1, *point(x, 14.0))
+        m.reaim(1, click((x, 14.0, 1.8)))
+        self.assertIsNone(m.error)
+        p = m.points()[0][1]
+        self.assertAlmostEqual(p[1], 14.0, places=6)
+        self.assertAlmostEqual(p[2], 1.8, places=6)
+
     def test_reaim(self):
         m = self.measure("width", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         m.reaim(1, click((4.0, 16.0, 0.0)))
@@ -283,6 +297,65 @@ class RoadAxisAtMeasure(Base):
         answer[0] = None  # rien de lisible : axe de la caméra, sans attente annoncée
         self.tool.recompute_roads()
         self.assertNotIn("lecture", m.status())
+
+
+class Uncertainty(Base):
+    """Incertitude affichée : inclinaison de la photo (commune à ses clics), hauteur de caméra,
+    visée, façade du cadastre."""
+
+    def road(self):
+        return self.measure("road", [click((-3.5, 10.0, 0.0)), click((3.5, 10.0, 0.0))])
+
+    def calibrated(self, sigma):
+        cal = calibration.Calibration()
+        cal.set_auto("p1", {"sequence": "s1", "heading": 0.0, "lidar": None,
+                            "verticals": {"up": [0.0, 0.0, 1.0], "count": 100, "sigma": sigma}})
+        self.tool.calibration = cal
+
+    def test_uncalibrated_photo(self):
+        # Photo non calée (1 à 3° sur l'imajbox) : 2° de tangage commun fausse 7 m de plus d'un mètre
+        unc = self.road().result["uncertainty"]
+        self.assertGreater(unc, 1.0)
+        self.assertLess(unc, 2.0)  # tangage de +2° : +1,58 m ; hauteur de caméra saisie : 0,55 m
+
+    def test_calibrated_photo(self):
+        self.calibrated(0.1)
+        unc = self.road().result["uncertainty"]
+        self.assertGreater(unc, 0.1)  # hauteur de caméra saisie (±15 cm) : environ 0,55 m sur 7 m à 10 m
+        self.assertLess(unc, 0.65)
+        # Hauteur de caméra par l'altitude GPS (±5 cm) : bien plus précise
+        clicks = [click((-3.5, 10.0, 0.0), camera_alt=100.0 + CAMERA, precise_ground=True,
+                        profile=[(0.0, 100.0), (60.0, 100.0)]),
+                  click((3.5, 10.0, 0.0), camera_alt=100.0 + CAMERA, precise_ground=True,
+                        profile=[(0.0, 100.0), (60.0, 100.0)])]
+        m = self.measure("road", clicks)
+        self.assertAlmostEqual(m.result["value"], 7.0, places=6)
+        self.assertLess(m.result["uncertainty"], 0.3)
+        self.assertLess(m.result["uncertainty"], unc / 2)
+
+    def test_common_tilt(self):
+        # L'inclinaison est commune aux clics d'une photo : son effet sur une largeur dans l'axe
+        # double par rapport à un seul clic (ancien modèle)
+        self.calibrated(1.0)
+        self.tool.camera_height = CAMERA
+        m = self.road()
+        north = abs(m._value(clicks=m._tilted_clicks(m.clicks, "p1", 1.0, 0.0)) - 7.0)
+        single = [dict(c) for c in m.clicks]
+        single[1]["elev"] += 1.0
+        self.assertGreater(north, 1.8 * abs(m._value(clicks=single) - 7.0))
+
+    def test_cadastre_wall(self):
+        self.calibrated(0.1)
+        clicks = [click((8.0, 0.0, 1.0)), click((12.0, 0.0, 6.5))]
+        wall = dict(CadastreWall.WALL)
+        self.tool.wall_lookup = lambda *args: wall
+        self.tool.use_wall = True
+        confirmed = self.measure("height", clicks).result["uncertainty"]
+        self.tool.clear_all()
+        wall["warning"] = True
+        unchecked = self.measure("height", [dict(c) for c in clicks]).result["uncertainty"]
+        self.assertGreater(unchecked, confirmed)
+        self.assertGreater(confirmed, 0.5 * (6.5 - CAMERA) / 12)  # mur à ±0,5 m, vu sous tan e = 0,38
 
 
 class CadastreWall(Base):

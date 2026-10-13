@@ -82,10 +82,31 @@ def _bilinear(src, xs, ys, valid=None):
     return out
 
 
+def _tilted_rays(dx, dy, dz, up):
+    """Directions vraies (x = est, y = haut, z = nord) exprimées dans le repère d'une caméra
+    penchée dont la verticale vraie est `up` (est, nord, haut ; voir calibration.py) : rotation
+    qui amène le zénith sur up, inverse de calibration.untilt."""
+    ux, uy, uz = up
+    s = math.hypot(ux, uy)
+    if s < 1e-12:
+        return dx, dy, dz
+    kx, ky = -uy / s, ux / s  # zénith × up, normé
+    c = uz
+    ve, vn, vu = dx, dz, dy
+    kv = kx * ve + ky * vn
+    re = ve * c + (ky * vu) * s + kx * kv * (1 - c)
+    rn = vn * c + (-kx * vu) * s + ky * kv * (1 - c)
+    ru = vu * c + (kx * vn - ky * ve) * s
+    return re, ru, rn
+
+
 def render_view(src, azimuth, is360, heading, pitch, vfov, photo_hfov=None,
-                width=OUT_W, height=OUT_H):
-    """Calcule la vue (tableau numpy RGB) à partir de la photo source."""
+                width=OUT_W, height=OUT_H, up=None):
+    """Calcule la vue (tableau numpy RGB) à partir de la photo source. up : verticale vraie de
+    la photo (calage de l'inclinaison), pour une vue redressée (verticales verticales)."""
     dx, dy, dz = _view_rays(heading, pitch, vfov, width, height)
+    if up is not None:
+        dx, dy, dz = _tilted_rays(dx, dy, dz, up)
     sh, sw, _ = src.shape
     a = math.radians(azimuth or 0.0)
     # Directions exprimées dans le repère de la photo (centre de l'image = azimut)

@@ -24,6 +24,7 @@ def new_plugin():
     p.iface = mock.Mock()
     p.calibrator = p.dock = None
     p.calibration = calibration.Calibration()
+    p._saved_auto = None
     p.calibration.changed = p._save_calibration
     p._load_calibration()
     return p
@@ -33,6 +34,37 @@ class Storage(unittest.TestCase):
     def setUp(self):
         QgsSettings().remove(plugin.CALIBRATION_SETTING)
         QgsProject.instance().clear()
+        # Inclinaisons automatiques : fichier temporaire, pas celui du profil de l'utilisateur
+        self.auto_path = os.path.join(tempfile.mkdtemp(dir=TMP), "inclinaisons.json")
+        patcher = mock.patch.object(plugin, "auto_tilt_path", lambda: self.auto_path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_auto_tilts_in_their_own_file(self):
+        first = new_plugin()
+        entry = {"sequence": "s", "heading": 10.0, "lidar": [0.5, -0.2],
+                 "verticals": {"up": [0.01, 0.0, 1.0], "count": 50, "sigma": 0.1}}
+        first.calibration.set_auto("p1", entry)
+        self.assertNotIn("auto", json.loads(QgsSettings().value(plugin.CALIBRATION_SETTING)))  # réglage léger
+        with open(self.auto_path, encoding="utf-8") as f:
+            self.assertIn("p1", json.load(f))
+        self.assertEqual(new_plugin().calibration.tilt("p1")["source"], "verticales")  # session suivante
+        mtime = os.stat(self.auto_path).st_mtime_ns
+        os.utime(self.auto_path, ns=(0, 0))
+        first.calibration.add_vertical("p2", (10.0, -10.0), (10.0, 20.0))  # autre calage : fichier inchangé
+        self.assertEqual(os.stat(self.auto_path).st_mtime_ns, 0)
+        self.assertGreater(mtime, 0)
+
+    def test_migration_from_setting(self):
+        # Version précédente : inclinaisons rangées dans le réglage
+        old = {"format": 1, "auto": {"p1": {"sequence": "s", "heading": 0.0, "lidar": None,
+                                            "verticals": {"up": [0.0, 0.01, 1.0], "count": 40, "sigma": 0.2}}}}
+        QgsSettings().setValue(plugin.CALIBRATION_SETTING, json.dumps(old))
+        p = new_plugin()
+        self.assertEqual(p.calibration.tilt("p1")["source"], "verticales")
+        self.assertNotIn("auto", json.loads(QgsSettings().value(plugin.CALIBRATION_SETTING)))
+        with open(self.auto_path, encoding="utf-8") as f:
+            self.assertIn("p1", json.load(f))
 
     def test_kept_between_sessions_and_projects(self):
         first = new_plugin()

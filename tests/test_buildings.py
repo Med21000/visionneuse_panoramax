@@ -63,6 +63,16 @@ class Wall(unittest.TestCase):
         hit = buildings.wall_hit(self.edges(HOUSE), LON0, LAT0, 110.0)  # visée vers le sud-est
         self.assertAlmostEqual(hit["distance"], 12.0 / 0.9397, delta=0.02)
 
+    def test_light_buildings_ignored(self):
+        shed = building((6, -2), (9, -2), (9, 2), (6, 2))
+        shed["properties"] = {"type": "Construction légère"}  # abri de jardin devant la maison
+        hit = buildings.wall_hit(self.edges(shed, HOUSE), LON0, LAT0, 90.0)
+        self.assertAlmostEqual(hit["distance"], 12.0, delta=0.01)
+
+    def test_grid_west_of_edge(self):
+        g = buildings.Grid(grid_bytes(lambda x, y: 3.0), CELL)
+        self.assertIsNone(g.at(g.lon0 - 0.1 * (g.lon1 - g.lon0) / g.w, LAT0))  # juste à l'ouest de la grille
+
     def test_parse(self):
         multi = {"type": "Feature", "geometry": {"type": "MultiPolygon", "coordinates": [
             HOUSE["geometry"]["coordinates"]]}}
@@ -161,6 +171,17 @@ class Provider(unittest.TestCase):
         hit = self.lookup(provider, services)
         self.assertTrue(hit["warning"])
         self.assertIn("non publié", hit["check"])
+
+    def test_unreadable_grid_not_kept(self):
+        # Exception du service WMS renvoyée comme une réponse normale : pas « LiDAR non publié »
+        provider = buildings.BuildingProvider()
+        services = FakeServices([HOUSE], mns_house())
+        services.fetch = lambda url, cb, **kw: services.pending.append(lambda: cb(b"<ServiceException/>", None))
+        self.lookup(provider, services)
+        services.answer()
+        self.assertNotIn(("mns", CELL), provider._cache)
+        with mock.patch.object(buildings.time, "monotonic", lambda: 1e12):
+            self.assertEqual(self.lookup(provider, FakeServices([HOUSE], mns_house())), buildings.PENDING)
 
     def test_failure_not_kept(self):
         provider = buildings.BuildingProvider()

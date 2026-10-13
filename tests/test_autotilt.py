@@ -162,15 +162,40 @@ class LidarModel(unittest.TestCase):
         # Autre séquence, sans modèle : rien
         cal.set_auto("q", self.entry(0, 0, [1.5, -0.5], sequence="autre", verticals=False))
         self.assertIsNone(cal.tilt("q"))
-        # Calage à la main : prioritaire
+        # Calage à la main sur deux objets : prioritaire ; sur un seul, complété par l'automatique
         up = calibration.up_from_components(0.5, 0.0, 0.0)
         cal.add_vertical("p", seen(up, 10.0, -10.0), seen(up, 10.0, 20.0))
+        self.assertEqual(cal.tilt("p")["source"], "clics + lidar")
+        cal.add_vertical("p", seen(up, 100.0, -10.0), seen(up, 100.0, 20.0))
         self.assertEqual(cal.tilt("p")["source"], "clics")
+        self.assertTrue(cal.manual_complete("p"))
         cal.clear_tilt("p")
         self.assertEqual(cal.tilt("p")["source"], "lidar")
         # Correction appliquée aux clics
         yaw, elev = cal.untilted("v0", 30.0, -10.0)
         self.assertNotAlmostEqual(elev, -10.0, places=2)
+
+    def test_one_object_completes_automatic(self):
+        """Un objet vertical cliqué corrige la composante qu'il voit ; l'autre reste celle du calcul
+        automatique, au lieu de revenir à zéro."""
+        truth = calibration.up_from_components(1.2, 0.8, 0.0)
+        cal = calibration.Calibration()
+        auto = calibration.up_from_components(1.0, 0.8, 0.0)  # tangage un peu faux, roulis juste
+        cal.set_auto("p", {"sequence": "s", "heading": 0.0, "lidar": None,
+                           "verticals": {"up": list(auto), "count": 80, "sigma": 0.15}})
+        # Objet à l'est : il voit le tangage (avant), pas le roulis
+        cal.add_vertical("p", seen(truth, 90.0, -10.0), seen(truth, 90.0, 25.0))
+        t = cal.tilt("p")
+        self.assertEqual(t["source"], "clics + verticales")
+        f, r = calibration.tilt_components(t["up"], 0.0)
+        self.assertAlmostEqual(r, 0.8, delta=0.02)  # roulis du calcul automatique conservé
+        self.assertGreater(f, 1.05)  # tangage tiré vers l'objet cliqué
+        self.assertLess(f, 1.2)
+        self.assertAlmostEqual(t["sigma"], 0.15, delta=0.01)  # roulis : l'a priori seul le contraint
+        alone = calibration.tilt_from_verticals(cal.verticals["p"])
+        self.assertTrue(alone["partial"])
+        self.assertAlmostEqual(calibration.tilt_components(alone["up"], 0.0)[1], 0.0, delta=0.05)  # sans a priori
+        self.assertEqual(alone["sigma"], calibration.UNCALIBRATED)
 
     def test_storage(self):
         cal = calibration.Calibration()
@@ -252,6 +277,38 @@ class Checker(unittest.TestCase):
         self.assertNotIn("pic", cal.auto)  # à refaire : le service peut revenir
         self.check(ITEM, cal, FakeNetwork(), None)
         self.assertIsNone(cal.auto["pic"]["verticals"])  # pas de verticales : gardé quand même
+
+    def test_left_photo_abandoned(self):
+        """Photo quittée avant la fin : téléchargement interrompu, rien d'enregistré ni calculé ;
+        reprise si on y revient."""
+        cal, checker, pending, runs, aborted = calibration.Calibration(), autotilt.TiltChecker(), {}, [], []
+
+        class Reply:
+            def __init__(self, cb):
+                self.cb = cb
+
+            def abort(self):
+                aborted.append(1)
+                self.cb(None, "Operation canceled")
+
+        def fetch(url, cb, **kw):
+            pending["image"] = Reply(cb)
+            return pending["image"]
+
+        checker.run = lambda function, args, cb: runs.append(args) or cb(None)
+        other = dict(ITEM, id="autre")
+        with mock.patch.object(autotilt.api, "fetch_json", lambda url, cb, **kw: pending.__setitem__("lidar", cb)), \
+                mock.patch.object(autotilt.api, "fetch", fetch), mock.patch.object(autotilt, "HAS_NUMPY", True):
+            checker.check(ITEM, cal)
+            first_lidar = pending["lidar"]
+            checker.check(other, cal)  # on passe à une autre photo
+            self.assertEqual(aborted, [1])
+            self.assertFalse(checker.pending("pic"))
+            first_lidar({"elevations": [100.0] * len(calibration.LIDAR_GRID)}, None)  # réponse tardive
+            self.assertNotIn("pic", cal.auto)
+            self.assertEqual(runs, [])
+            checker.check(ITEM, cal)  # retour sur la photo : analysée à nouveau
+            self.assertTrue(checker.pending("pic"))
 
     def test_requests_shared(self):
         cal, checker, pending, done = calibration.Calibration(), autotilt.TiltChecker(), [], []

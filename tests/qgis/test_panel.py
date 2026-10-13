@@ -8,6 +8,7 @@ la visionneuse de secours (native_viewer.py). Les services sont simulés : liste
 instances, fiches et images des photos, vérification de la précision GPS.
 """
 
+import json
 import unittest
 from unittest import mock
 
@@ -254,13 +255,28 @@ class NativeViewer(Base):
         sighting = self.emitted("aimRequested")[-1][0]
         self.assertEqual((sighting["pic"], sighting["heading"]), ("p1", 91.0))
 
+    def test_screen_click_on_precise_heading(self):
+        # Clic calculé depuis l'écran (sans position fournie par la visionneuse) : la visionneuse
+        # s'oriente sur le cap arrondi, la direction est ramenée au cap précis (EXIF)
+        dock = self.dock
+        dock.btn_measure.setChecked(True)
+        dock.show_picture("p1", 5.0415, 47.322)
+        props = dock._current_item.setdefault("properties", {})
+        props["view:azimuth"] = 90
+        props["exif"] = {"Exif.GPSInfo.GPSImgDirection": "9040/100"}
+        dock._on_viewer_clicks(json.dumps([{"x": 120.0, "y": -10.0, "vfov": 60, "dx": 0, "dy": 0, "h": 600, "w": 800}]))
+        raw = self.emitted("photoClicked")[-1][0]["raw"]
+        self.assertAlmostEqual(raw[0], 120.4, places=6)
+        self.assertAlmostEqual(raw[1], -10.0, places=6)
+
     def test_calibration_line(self):
         dock = self.dock
         dock.show_picture("p1", 5.0415, 47.322)
         dock.btn_measure.setChecked(True)
         dock.calibration.heights["seq"] = [(2.1, 0.05)]
         dock.update_calibration_label()
-        self.assertEqual(dock.measure_box.lbl_calibration.text(), "Calage : caméra à 2,10 m (±0,05 m, 1 référence)")
+        self.assertEqual(dock.measure_box.lbl_calibration.text(), "Calage : caméra à 2,10 m (±0,05 m, 1 référence), dont 1 d'une "
+                         "version précédente, sans l'inclinaison automatique : refaites le calage")
 
 
 class StableImage(Base):

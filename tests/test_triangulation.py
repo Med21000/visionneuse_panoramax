@@ -7,7 +7,7 @@ import unittest
 
 from support import bearing, distance, module, point
 
-triangulation = module("triangulation")
+triangulation = module("core.triangulation")
 TriangulationError = triangulation.TriangulationError
 
 

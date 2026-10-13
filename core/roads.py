@@ -25,7 +25,7 @@ import math
 import time
 from urllib.parse import urlencode
 
-from . import api, triangulation
+from . import host, metadata, triangulation
 
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 LAYER = "BDTOPO_V3:troncon_de_route"
@@ -180,7 +180,7 @@ class RoadAxisProvider:
             return res
         key = (sequence, cell)
         track = self._get(("track",) + key, self._tracks, key,
-                          lambda: api.search_url(lon, lat, TRACK_RADIUS + 10, 20, sequence), lambda data: data)
+                          lambda: metadata.search_url(lon, lat, TRACK_RADIUS + 10, 20, sequence, host.api_url), lambda data: data)
         if track is PENDING:
             return PENDING
         return trajectory_axis(track, sequence, lon, lat) if track else None
@@ -204,5 +204,5 @@ class RoadAxisProvider:
             if self.ready is not None:
                 self.ready()
 
-        api.fetch_json(url(), done, timeout_ms=15000)
+        host.fetch_json(url(), done, timeout_ms=15000)
         return PENDING if key in self._pending else self._get(key, cache, cache_key, url, parse)

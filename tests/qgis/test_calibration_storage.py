@@ -15,7 +15,7 @@ from qgis_support import TMP, module
 from qgis.core import QgsProject, QgsSettings
 
 plugin = module("plugin")
-calibration = module("calibration")
+calibration = module("core.calibration")
 
 
 def new_plugin():

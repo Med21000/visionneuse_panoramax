@@ -13,7 +13,7 @@ from unittest import mock
 from support import LAT0, LON0, install_qgis_stub, module, point
 
 install_qgis_stub()
-buildings = module("buildings")
+buildings = module("core.buildings")
 CELL = buildings._cell(LON0, LAT0)
 
 
@@ -137,8 +137,8 @@ class FakeServices:
 
 class Provider(unittest.TestCase):
     def lookup(self, provider, services, yaw=90.0):
-        with mock.patch.object(buildings.api, "fetch_json", services.fetch_json), \
-                mock.patch.object(buildings.api, "fetch", services.fetch):
+        with mock.patch.object(buildings.host, "fetch_json", services.fetch_json), \
+                mock.patch.object(buildings.host, "fetch", services.fetch):
             return provider.lookup(LON0, LAT0, yaw)
 
     def test_read_then_cache(self):

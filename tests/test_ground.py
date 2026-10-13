@@ -8,7 +8,7 @@ import unittest
 
 from support import LAT0, LON0, module
 
-ground = module("ground")
+ground = module("core.ground")
 GroundError = ground.GroundError
 
 

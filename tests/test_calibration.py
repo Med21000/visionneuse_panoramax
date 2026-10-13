@@ -8,7 +8,7 @@ import unittest
 
 from support import LAT0, LON0, bearing, distance, module, point
 
-calibration = module("calibration")
+calibration = module("core.calibration")
 CalibrationError = calibration.CalibrationError
 
 

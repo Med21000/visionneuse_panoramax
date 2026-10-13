@@ -76,16 +76,18 @@ message destiné à l'utilisateur, et ne pas renvoyer un résultat faux.
 - enregistre le dossier du dépôt comme paquet `visionneuse_panoramax`, quel que soit
   son nom sur le disque, pour que les imports relatifs des modules (`from . import
   ground`) fonctionnent ;
-- fournit `install_qgis_stub()`, un faux paquet `qgis` pour les modules qui importent
-  QGIS (`terrain.py`, `measure_tool.py`, `measure_panel.py`). Toute classe Qt ou QGIS y est une coquille
-  vide (`Stub`) : on peut l'instancier, l'appeler, lire n'importe quel attribut ou en
-  hériter. Les calculs s'exécutent donc réellement, et ce qui touche à l'affichage ou
-  au réseau est remplacé dans les tests eux-mêmes ;
+- fournit `install_qgis_stub()`, un faux paquet `qgis` pour les modules du plugin qui
+  importent QGIS (`measure_tool.py`, `measure_panel.py`, `api.py`…). Toute classe Qt ou
+  QGIS y est une coquille vide (`Stub`) : on peut l'instancier, l'appeler, lire n'importe
+  quel attribut ou en hériter. Les calculs s'exécutent donc réellement, et ce qui touche à
+  l'affichage est remplacé dans les tests eux-mêmes ;
 - fournit les outils des scènes : `point`, `bearing` (cap d'un point vers un autre),
   `distance`.
 
-Les modules `triangulation.py`, `geometry.py`, `ground.py` et `calibration.py` ne
-dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
+Le cœur de calcul (`core/`) ne dépend pas de QGIS (`test_core.py` le vérifie) : le réseau,
+l'altitude NGF, le décodage des photos et les tâches de fond passent par `core/host.py`, que
+les tests remplacent (`mock.patch.object(terrain.host, "fetch_json", …)`) et que le plugin
+remplit au démarrage (`qgis_host.py`).
 
 ## Contenu
 
@@ -101,6 +103,7 @@ dépendent pas de QGIS : ils sont testés directement, sans faux paquet.
 | `test_roads.py` | 11 | Axe de la route au point mesuré : tronçon BD TOPO droit, le plus proche de deux rues parallèles, virage suivi au point mesuré (et non à son entrée), carrefour en croix (la rue que traverse la mesure), rien trop loin ou parallèle au segment cliqué, lecture du GeoJSON ; trajectoire de la séquence au point mesuré (axe principal des photos voisines), refus si trop peu de photos, à l'arrêt ou d'une autre séquence ; fournisseur : lecture puis cache par maille, trajectoire quand la BD TOPO n'a rien, panne non réessayée tout de suite. |
 | `test_buildings.py` | 13 | Façade du cadastre : premier mur coupé par la visée (de face, en biais, rien derrière ni à côté, constructions légères ignorées), lecture du GeoJSON ; grille LiDAR (flottants petit-boutistes, sans données, hors grille y compris juste au bord, taille inattendue ; réponse illisible traitée comme une panne) ; bâti du LiDAR au bord du toit, arbre entre la photo et le mur ignoré, LiDAR non publié ; contrôle (confirmée, divergence, pas de bâti) ; fournisseur : lectures puis cache par maille, sans LiDAR, panne non réessayée tout de suite. |
 | `test_capture.py` | 1 | Capture HD redressée : une direction vraie est cherchée dans la photo là où la caméra penchée la voit. Sautée sans numpy. |
+| `test_core.py` | 2 | Le cœur de calcul s'importe dans un processus où `qgis` est interdit, et fait une mesure complète (largeur de 7 m) sans hôte, sans dessin ni réseau. |
 | `test_api.py` | 9 | Métadonnées des photos : précision déclarée dans l'EXIF (sinon celle de Panoramax), correction différentielle, altitude GPS (au-dessus ou au-dessous de l'ellipsoïde), recherche limitée à une séquence ; réponse JSON (une erreur du callback n'est pas prise pour un JSON invalide) ; cache des fiches : requête partagée, fiche arrivée dans le désordre, réponse de l'ancienne instance ignorée. |
 | `test_calibration_tool.py` | 11 | Outil de calage, du clic au calage enregistré : inclinaison (correction partielle puis complète, sommet sur une autre photo, clics inversés), hauteur de caméra sur une longueur au sol ou une hauteur connue, repère cliqué dans la photo puis sur la carte (position GPS d'origine, matériel de relevé), effacement du calage, repères dans la visionneuse. |
 | `test_filters.py` | 11 | Expressions du filtre sur les tuiles (séquences, photos, grille de densité, apostrophes), filtre des fiches STAC (chaque critère, valeurs absentes), résumé du filtre, producteur d'une photo, mémorisation des réglages (simulés en mémoire). |

@@ -10,7 +10,7 @@ from support import install_qgis_stub, module
 from test_calibration import seen
 
 install_qgis_stub()
-calibration = module("calibration")
+calibration = module("core.calibration")
 HAS_NUMPY = importlib.util.find_spec("numpy") is not None
 
 

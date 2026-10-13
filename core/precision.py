@@ -14,7 +14,7 @@ photo est jugée précise (au décimètre) :
   photos à Pouilly-en-Auxois).
 
 Une photo précise donne la hauteur de caméra par son altitude (voir
-measure_tool.MeasureTool.camera_info). Les mesures ne sont pleinement fiables qu'avec à la
+measures.MeasureTool.camera_info). Les mesures ne sont pleinement fiables qu'avec à la
 fois une position vérifiée précise et le LiDAR HD sous la photo ; sinon l'outil est en
 mode dégradé (hauteur de caméra et inclinaison à caler, sol approximatif sans LiDAR) :
 une fenêtre l'annonce à l'activation de la mesure (voir viewer_dock).
@@ -27,7 +27,7 @@ import math
 import statistics
 from urllib.parse import urlencode
 
-from . import altitude, api, terrain
+from . import host, metadata, terrain
 
 PRECISE_ACCURACY = 0.20  # m : précision déclarée suffisante pour la hauteur de caméra par l'altitude
 VERIFIED_ACCURACY = 0.10  # m : précision retenue pour une séquence vérifiée
@@ -206,11 +206,11 @@ class PrecisionChecker:
         except (KeyError, TypeError, ValueError):
             done(result(False, reason="position de la photo inconnue"))
             return
-        accuracy = api.exif_accuracy(item)
+        accuracy = metadata.exif_accuracy(item)
         if accuracy is not None and accuracy <= PRECISE_ACCURACY:
             self._check_lidar(lon, lat, done, "précision déclarée dans les métadonnées de la photo", accuracy,
-                              altitude.ngf_altitude(lon, lat, api.item_altitude(item)))
-        elif api.gps_differential(item) and sequence:
+                              host.ngf_altitude(lon, lat, metadata.item_altitude(item)))
+        elif metadata.gps_differential(item) and sequence:
             self._check_sequence(item, sequence, lon, lat, done)
         else:
             self._check_lidar(lon, lat, done, "pas de correction différentielle déclarée")
@@ -230,7 +230,7 @@ class PrecisionChecker:
             done(result(accuracy is not None, accuracy, lidar, reason, height=height,
                         transient=transient or bool(error)))
 
-        api.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
+        host.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 
     def _check_sequence(self, item, sequence, lon, lat, done):
         def got_photos(data, error):
@@ -240,7 +240,7 @@ class PrecisionChecker:
                     plon, plat = (float(v) for v in feat["geometry"]["coordinates"][:2])
                 except (KeyError, TypeError, ValueError):
                     continue
-                ngf = altitude.ngf_altitude(plon, plat, api.item_altitude(feat))
+                ngf = host.ngf_altitude(plon, plat, metadata.item_altitude(feat))
                 if ngf is not None and feat.get("collection", sequence) == sequence:
                     photos.append((plon, plat, ngf))
             if error:
@@ -249,7 +249,7 @@ class PrecisionChecker:
             if len(photos) < MIN_PHOTOS:
                 self._check_lidar(lon, lat, done, "altitude GPS inexploitable ({} photos voisines)".format(len(photos)))
                 return
-            api.fetch_json(lidar_url([(p[0], p[1]) for p in photos]),
+            host.fetch_json(lidar_url([(p[0], p[1]) for p in photos]),
                            lambda data, error: got_ground(photos, data, error), timeout_ms=terrain.TIMEOUT_MS)
 
         def got_ground(photos, data, error):
@@ -262,4 +262,4 @@ class PrecisionChecker:
                 return
             done(verify_heights(pts))
 
-        api.fetch_json(api.search_url(lon, lat, CHECK_RADIUS, CHECK_PHOTOS, sequence), got_photos)
+        host.fetch_json(metadata.search_url(lon, lat, CHECK_RADIUS, CHECK_PHOTOS, sequence, host.api_url), got_photos)

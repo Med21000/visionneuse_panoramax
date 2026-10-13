@@ -15,7 +15,7 @@ from support import Stub, distance, install_qgis_stub, module, point
 
 install_qgis_stub()
 measure_tool = module("measure_tool")
-calibration = module("calibration")
+calibration = module("core.calibration")
 
 CAMERA = 1.9
 

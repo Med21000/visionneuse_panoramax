@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 from support import LAT0, install_qgis_stub, module, point
 
 install_qgis_stub()
-precision = module("precision")
+precision = module("core.precision")
 
 GEOID, GROUND, CAMERA = 47.59, 391.4, 1.88
 
@@ -50,8 +50,8 @@ class Check(unittest.TestCase):
     def check(self, item, services, checker=None):
         checker = checker or precision.PrecisionChecker()
         out = []
-        with mock.patch.object(precision.api, "fetch_json", services), \
-                mock.patch.object(precision.altitude, "ngf_altitude", lambda lon, lat, h: None if h is None else h - GEOID):
+        with mock.patch.object(precision.host, "fetch_json", services), \
+                mock.patch.object(precision.host, "ngf_altitude", lambda lon, lat, h: None if h is None else h - GEOID):
             checker.check(item, out.append)
         self.assertEqual(len(out), 1)
         return out[0]
@@ -197,7 +197,7 @@ class Check(unittest.TestCase):
         def fake(url, callback, **kwargs):
             pending.append(callback)
 
-        with mock.patch.object(precision.api, "fetch_json", fake):
+        with mock.patch.object(precision.host, "fetch_json", fake):
             checker.check(declared, lambda res: out.setdefault("declared", res))
             checker.check(simple, lambda res: out.setdefault("simple", res))
         self.assertEqual(len(pending), 2)  # deux vérifications, pas une seule partagée

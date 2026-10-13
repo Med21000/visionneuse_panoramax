@@ -84,7 +84,7 @@ def _bilinear(src, xs, ys, valid=None):
 
 def _tilted_rays(dx, dy, dz, up):
     """Directions vraies (x = est, y = haut, z = nord) exprimées dans le repère d'une caméra
-    penchée dont la verticale vraie est `up` (est, nord, haut ; voir calibration.py) : rotation
+    penchée dont la verticale vraie est `up` (est, nord, haut ; voir core/calibration.py) : rotation
     qui amène le zénith sur up, inverse de calibration.untilt."""
     ux, uy, uz = up
     s = math.hypot(ux, uy)

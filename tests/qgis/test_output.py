@@ -23,7 +23,7 @@ from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 output = module("output")
 measure = module("measure")
 measure_tool = module("measure_tool")
-triangulation = module("triangulation")
+triangulation = module("core.triangulation")
 
 FIELDS = "field=nom:string&field=valeur:double"
 LON0, LAT0 = 5.0415, 47.3220

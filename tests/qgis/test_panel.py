@@ -20,8 +20,8 @@ from qgis.PyQt.QtWidgets import QAbstractButton
 
 viewer_dock = module("viewer_dock")
 api = module("api")
-calibration = module("calibration")
-precision = module("precision")
+calibration = module("core.calibration")
+precision = module("core.precision")
 filters = module("filters")
 
 

@@ -24,7 +24,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from . import calibration
+from .core import calibration
 from .measure_tool import FREE_SURFACES
 
 MEASURE_MODES = (
@@ -230,7 +230,7 @@ class MeasurePanel(QWidget):
         self.lbl_calibration = QLabel("")
         self.lbl_calibration.setWordWrap(True)
         mbox.addWidget(self.lbl_calibration)
-        self.lbl_quality = QLabel("")  # avertissement du mode dégradé (voir precision.py)
+        self.lbl_quality = QLabel("")  # avertissement du mode dégradé (voir core/precision.py)
         self.lbl_quality.setWordWrap(True)
         self.lbl_quality.setStyleSheet("font-weight: bold")
         mbox.addWidget(self.lbl_quality)
@@ -253,7 +253,7 @@ class MeasurePanel(QWidget):
         return self.chk_bridge.isChecked()
 
     def surface(self):
-        """Surface de la mesure libre 3D (voir measure_tool.FREE_SURFACES)."""
+        """Surface de la mesure libre 3D (voir core/measures.FREE_SURFACES)."""
         return self.cmb_surface.currentData() or "ground"
 
     def reference(self):

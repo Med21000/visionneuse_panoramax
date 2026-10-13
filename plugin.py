@@ -23,15 +23,15 @@ from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QAction, QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import QPushButton
 
-from . import api, filters, layers
+from . import api, filters, layers, qgis_host
 from .cursor import ViewCursor
-from .calibration import Calibration
+from .core.calibration import Calibration
 from .measure import CalibrationTool, Triangulator
 from .measure_tool import MeasureTool
 from .measure_panel import GROUND_MODES
-from .buildings import BuildingProvider
-from .roads import RoadAxisProvider
-from .terrain import PRECISE_LABELS, TerrainProvider
+from .core.buildings import BuildingProvider
+from .core.roads import RoadAxisProvider
+from .core.terrain import PRECISE_LABELS, TerrainProvider
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -148,6 +148,7 @@ class PanoramaxPlugin:
         self.calibrator = None
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
+        qgis_host.install()  # réseau, altitude NGF, photos et tâches de QGIS pour le cœur de calcul
         self.calibration = Calibration()  # conservé dans le profil QGIS
         self._saved_auto = None  # inclinaisons automatiques telles qu'enregistrées (texte)
         self.calibration.changed = self._save_calibration

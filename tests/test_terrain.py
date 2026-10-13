@@ -10,9 +10,9 @@ from urllib.parse import parse_qs, urlsplit
 from support import LAT0, LON0, install_qgis_stub, module
 
 install_qgis_stub()
-terrain = module("terrain")
-ground = module("ground")
-triangulation = module("triangulation")
+terrain = module("core.terrain")
+ground = module("core.ground")
+triangulation = module("core.triangulation")
 
 
 def line(slope, z0, dists):
@@ -143,7 +143,7 @@ class Provider(unittest.TestCase):
         provider = terrain.TerrainProvider()
         provider.bridge = bridge
         results = []
-        with mock.patch.object(terrain.api, "fetch_json", services):
+        with mock.patch.object(terrain.host, "fetch_json", services):
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
         self.assertEqual(len(results), 1)
         return results[0]
@@ -218,7 +218,7 @@ class Cache(unittest.TestCase):
 
     def profile(self, provider, services, yaw=0.0, lon=LON0, lat=LAT0):
         results = []
-        with mock.patch.object(terrain.api, "fetch_json", services):
+        with mock.patch.object(terrain.host, "fetch_json", services):
             provider.profile(lon, lat, yaw, lambda *r: results.append(r))
         return results
 
@@ -234,7 +234,7 @@ class Cache(unittest.TestCase):
     def test_concurrent_requests_shared(self):
         provider, pending, results = terrain.TerrainProvider(), [], []
         services = FakeServices(lidar=True)
-        with mock.patch.object(terrain.api, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
+        with mock.patch.object(terrain.host, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
         self.assertEqual(len(pending), 1)

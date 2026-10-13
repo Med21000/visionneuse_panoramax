@@ -17,9 +17,10 @@ from qgis_support import APP, module
 from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice
 from qgis.PyQt.QtGui import QImage
 
-autotilt = module("autotilt")
-calibration = module("calibration")
-api = module("api")
+autotilt = module("core.autotilt")
+calibration = module("core.calibration")
+host = module("core.host")
+qgis_host = module("qgis_host")  # décodage des photos et tâches de fond de QGIS, installés
 
 
 def seen(up, yaw, elev):
@@ -76,19 +77,19 @@ class Background(unittest.TestCase):
         cls.jpeg = photo()
 
     def test_read_band(self):
-        band, row0, height, width = autotilt.read_band(self.jpeg, width=2048)
+        band, row0, height, width = qgis_host.read_band(self.jpeg, 2048, autotilt.ELEV_MIN, autotilt.ELEV_MAX)
         self.assertEqual((width, height), (2048, 1024))
         self.assertEqual(row0, int((90 - autotilt.ELEV_MAX) / 180 * height))
         self.assertEqual(band.shape, (int((90 - autotilt.ELEV_MIN) / 180 * height) - row0, 2048))
-        self.assertIsNone(autotilt.read_band(b"pas une image"))
+        self.assertIsNone(qgis_host.read_band(b"pas une image", 2048, autotilt.ELEV_MIN, autotilt.ELEV_MAX))
 
     def test_estimate_in_task(self):
         cal = calibration.Calibration()
         checker = autotilt.TiltChecker()
         done = []
         lidar = {"elevations": [{"z": 300 + a * 0.1 / 3} for a, _ in calibration.LIDAR_GRID]}
-        with mock.patch.object(api, "fetch_json", lambda url, cb, **kw: cb(lidar, None)), \
-                mock.patch.object(api, "fetch", lambda url, cb, **kw: cb(self.jpeg, None)):
+        with mock.patch.object(host, "fetch_json", lambda url, cb, **kw: cb(lidar, None)), \
+                mock.patch.object(host, "fetch", lambda url, cb, **kw: cb(self.jpeg, None)):
             checker.check(ITEM, cal, lambda: done.append(1))
             limit = time.time() + 60
             while not done and time.time() < limit:

@@ -36,7 +36,7 @@ import math
 from collections import OrderedDict
 from urllib.parse import urlencode
 
-from . import api, ground, triangulation
+from . import ground, host, triangulation
 
 # Fenêtre de la droite de pente : 10 m derrière la photo à 25 m devant, le long de la visée
 LINE_FROM, LINE_TO = -10.0, 25.0
@@ -193,7 +193,7 @@ class TerrainProvider:
             else:
                 no_data(error)
 
-        api.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
+        host.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
 
     @staticmethod
     def _parse_ign(data, lon, lat, yaw):
@@ -238,7 +238,7 @@ class TerrainProvider:
                 values = [r.get("elevation") for r in data.get("results") or []]
             self._coarse_done(dists, values, error, OPENTOPODATA_LABEL, "OpenTopoData", ok, failed)
 
-        api.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
+        host.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
 
     def _openmeteo_step(self, lon, lat, yaw, ok, failed):
         dists, pts = self._coarse_points(lon, lat, yaw)
@@ -251,7 +251,7 @@ class TerrainProvider:
             values = data.get("elevation") if not error and isinstance(data, dict) else None
             self._coarse_done(dists, values, error, OPENMETEO_LABEL, "Open-Meteo", ok, failed)
 
-        api.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
+        host.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
 
     @staticmethod
     def _coarse_done(dists, values, error, label, name, ok, failed):

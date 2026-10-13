@@ -9,7 +9,7 @@ from support import LAT0, LON0, bearing, install_qgis_stub, module, point
 
 install_qgis_stub()
 measure_panel = module("measure_panel")
-calibration = module("calibration")
+calibration = module("core.calibration")
 
 
 class CalibrationText(unittest.TestCase):

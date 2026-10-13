@@ -12,7 +12,7 @@ from test_calibration import seen as tilted  # direction vue par une caméra inc
 
 install_qgis_stub()
 measure = module("measure")
-calibration = module("calibration")
+calibration = module("core.calibration")
 
 
 class FakeItem:

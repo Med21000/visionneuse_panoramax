@@ -41,8 +41,9 @@ import math
 import os
 import re
 
-from . import altitude, api, autotilt, precision
-from .calibration import Calibration
+from . import altitude, api, qgis_host
+from .core import autotilt, precision
+from .core.calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
 from .native_viewer import NativeViewer
@@ -156,6 +157,7 @@ class PanoramaxDock(QDockWidget):
         self.calibration = Calibration()  # inclinaison des photos et cap des séquences (session)
         self.precision = precision.PrecisionChecker()  # précision GPS vérifiée par séquence
         self._quality = None  # résultat de la vérification pour la photo affichée
+        qgis_host.install()  # réseau, altitude NGF, photos et tâches de QGIS pour le cœur de calcul
         self.tilts = autotilt.TiltChecker()  # inclinaison automatique des photos (mesure activée)
         self._warn_pending = False  # mesure activée : avertir du mode dégradé dès que la photo est vérifiée
         self._no_degraded_popup = False  # « Ne plus afficher pendant cette session »
@@ -359,7 +361,7 @@ class PanoramaxDock(QDockWidget):
         return self.measure_box.on_bridge()
 
     def surface(self):
-        """Surface de la mesure libre 3D (voir measure_tool.FREE_SURFACES)."""
+        """Surface de la mesure libre 3D (voir core/measures.FREE_SURFACES)."""
         return self.measure_box.surface()
 
     def reference(self):
@@ -498,7 +500,7 @@ class PanoramaxDock(QDockWidget):
             return fixed
         return lon, lat, self._accuracy(item)
 
-    # Précision GPS des photos (voir precision.py) --------------------------------
+    # Précision GPS des photos (voir core/precision.py) --------------------------------
     def _accuracy(self, item):
         """Précision de la position de la photo affichée : vérifiée, sinon celle des métadonnées."""
         q = self._quality
@@ -521,7 +523,7 @@ class PanoramaxDock(QDockWidget):
         self.measure_box.set_camera_suggestion(precision.camera_suggestion(self._quality) if item else None)
         self._warn_if_degraded()
 
-    # Inclinaison automatique (voir autotilt.py) ----------------------------------
+    # Inclinaison automatique (voir core/autotilt.py) ----------------------------------
     def _check_tilt(self):
         item = self._current_item
         if item and item.get("id") == self._current_pic:
@@ -592,7 +594,7 @@ class PanoramaxDock(QDockWidget):
         cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
         clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
         # Position vérifiée précise : altitude NGF de la caméra (hauteur de caméra sans calage,
-        # voir measure_tool.MeasureTool.camera_info)
+        # voir core/measures.MeasureTool.camera_info)
         precise = bool(self._quality and self._quality["precise"])
         camera_alt = altitude.ngf_altitude(lon, lat, api.item_altitude(item)) if precise else None
         self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat, "camera_alt": camera_alt,
@@ -607,7 +609,7 @@ class PanoramaxDock(QDockWidget):
             self._clicked_direction(yaw, elev)
 
     def _on_viewer_clicks(self, value):
-        from .ground import view_direction
+        from .core.ground import view_direction
 
         try:
             clicks = json.loads(value) if isinstance(value, str) and value else []

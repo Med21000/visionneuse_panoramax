@@ -26,7 +26,7 @@ import math
 import time
 from urllib.parse import urlencode
 
-from . import api, roads, triangulation
+from . import host, roads, triangulation
 
 WFS_URL = roads.WFS_URL
 LAYER = "CADASTRALPARCELS.PARCELLAIRE_EXPRESS:batiment"
@@ -233,5 +233,5 @@ class BuildingProvider:
             if self.ready is not None:
                 self.ready()
 
-        (api.fetch if raw else api.fetch_json)(url(), done, timeout_ms=20000)
+        (host.fetch if raw else host.fetch_json)(url(), done, timeout_ms=20000)
         return PENDING if key in self._pending else self._cache.get(key)

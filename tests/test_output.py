@@ -142,10 +142,10 @@ class SaveMeasures(unittest.TestCase):
         self.tool = measure_tool.MeasureTool(Stub())
         self.measure = mock.Mock(result={"value": 1.0}, fid=None, layer_id=None)
         self.measure.unsaved.return_value = True
-        self.measure.feature.side_effect = lambda layer: Feature([None, 1.0, "p1", None, None])
-        patcher = mock.patch.object(measure_tool.MeasureTool, "measures", lambda tool: [self.measure])
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(measure_tool.MeasureTool, "measures", lambda tool: [self.measure]),
+                        mock.patch.object(measure_tool, "feature", lambda m, layer: Feature([None, 1.0, "p1", None, None]))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def save(self, layer):
         with mock.patch.object(output, "ensure_layer", return_value=(layer, None)):

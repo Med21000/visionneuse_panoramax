@@ -9,13 +9,20 @@ Historique des décisions, revue de code et feuille de route : `docs/feuille-de-
 
 ## Règles du projet
 
+- **Cœur de calcul sans QGIS** (`core/`) : aucun import de `qgis` (vérifié par
+  `tests/test_core.py`) ; il sert aussi à l'application web web-measures (Pyodide). Ce qui
+  dépend de l'hôte passe par `core/host.py` (réseau, altitude NGF, décodage d'une photo,
+  tâches de fond), rempli par `qgis_host.py`. Le dessin et l'enregistrement restent dans le
+  plugin (`measure_tool.py`, `measure.py`, `output.py`).
+
 - Nom : « Visionneuse Panoramax » partout. Jamais « Panoramax Viewer » (nom d'un autre plugin).
 - QGIS 4.0 minimum, Qt6 : énumérations qualifiées (`Qt.MouseButton.LeftButton`,
   `QgsVectorFileWriter.WriterError.NoError`…).
 - Français partout : interface, messages, docstrings, commentaires, messages de commit.
   Typographie française (« », espace avant `:`, `;`, `?`).
 - En-tête SPDX dans chaque fichier Python (`GPL-2.0-or-later`, © Cédric COCHART).
-- Réseau : uniquement par `api.fetch` / `api.fetch_json` (asynchrone, `QgsNetworkAccessManager`).
+- Réseau : uniquement par `api.fetch` / `api.fetch_json` (asynchrone, `QgsNetworkAccessManager`) ;
+  dans le cœur, par `host.fetch` / `host.fetch_json`.
   Minimiser les appels à l'API : caches de `api.py` (photo courante + voisines),
   `terrain.TerrainProvider` (profils, zones sans données), `precision.PrecisionChecker`
   (par séquence), `autotilt.TiltChecker` (inclinaison par photo, conservée dans le calage),

@@ -8,7 +8,7 @@ import unittest
 
 from support import LAT0, LON0, module, point
 
-geometry = module("geometry")
+geometry = module("core.geometry")
 GeometryError = geometry.GeometryError
 ORIGIN = (LON0, LAT0)
 

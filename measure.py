@@ -7,8 +7,8 @@
   le viser à nouveau ; le point d'intersection s'affiche sur la carte et peut
   être enregistré dans la couche « Panoramax – points triangulés ».
 - Largeur / hauteur : deux clics dans la photo, prolongés jusqu'au terrain
-  (voir ground.py et terrain.py) ; les points s'affichent sur la carte.
-- Calage : inclinaison de la photo et cap de la séquence (voir calibration.py),
+  (voir core/ground.py et core/terrain.py) ; les points s'affichent sur la carte.
+- Calage : inclinaison de la photo et cap de la séquence (voir core/calibration.py),
   appliqués ensuite à toutes les mesures.
 """
 
@@ -28,7 +28,9 @@ from qgis.gui import QgsMapCanvasItem
 from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen
 
-from . import calibration, output, triangulation
+from . import output
+from .core import calibration, triangulation
+from .core.measures import _num
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
@@ -42,12 +44,9 @@ LAYER_NAME = "Panoramax – points triangulés"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
     "&field=dist_max_m:double&field=gps_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
-DEFAULT_CAMERA_HEIGHT = 1.9  # hauteur de caméra par défaut (m)
 LONE_RAY = 60.0  # longueur (m) d'une visée tant qu'elle n'en croise aucune autre
 
 
-def _num(value, digits=1):
-    return "{:.{}f}".format(value, digits).replace(".", ",")
 
 
 class SightingsItem(QgsMapCanvasItem):
@@ -389,7 +388,7 @@ class MeasureItem(QgsMapCanvasItem):
 # Calage : inclinaison et cap
 # --------------------------------------------------------------------------
 class CalibrationTool:
-    """Clics de calage (voir calibration.py) : pied et sommet d'objets verticaux
+    """Clics de calage (voir core/calibration.py) : pied et sommet d'objets verticaux
     (inclinaison de la photo), ou repère cliqué dans la photo puis sur la carte
     (cap de la séquence)."""
 

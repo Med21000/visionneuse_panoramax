@@ -28,8 +28,6 @@ from .core import ground, measures
 from .core.measures import CAMERA_SOURCES, KIND_NAMES, SURFACE_NAMES, _ground_z
 from .measure import COLOR, WGS84, MeasureItem
 
-FREE_SURFACES = measures.FREE_SURFACES  # surfaces de la mesure libre, pour le panneau
-
 LAYER_NAME = "Panoramax – mesures"
 LAYER_FIELDS = (
     "field=type:string&field=surface:string&field=valeur_m:double&field=incert_m:double"

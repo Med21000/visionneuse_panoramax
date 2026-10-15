@@ -11,7 +11,6 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 - Mesures (bouton « 📐 Mesure ») :
   - largeur perpendiculaire à la chaussée, longueur parallèle à la route et hauteur d'un objet, en deux clics dans la photo ;
   - triangulation d'un objet : le positionner (panneau, poteau, regard…) sur la carte en le visant depuis deux photos ou plus ;
-  - mesure libre 3D : distance entre deux points pris au sol, sur une façade, dans un plan vertical ou horizontal, ou par triangulation depuis deux photos ;
   - recalage des points de mesure en les glissant sur la carte QGIS, puis nouvelle visée précise dans la photo, dans le plan ainsi calé ;
   - mesures affichées dans la visionneuse et sur la carte, conservées à l'écran jusqu'à « Tout effacer » ;
   - enregistrement des mesures et des points triangulés dans des couches QGIS, dans un fichier GeoPackage ou en couche temporaire ;
@@ -79,18 +78,6 @@ Là où le **LiDAR HD** est publié, le sol suit le **profil réel** de la chaus
 La précision dépend surtout de celle du GPS des photos (indiquée par Panoramax : 2 m pour le matériel de relevé, 4 à 5 m pour les caméras grand public et les téléphones ; 0,10 m retenu pour une position vérifiée recalée par RTK, comme celles de l'imajbox) et de l'angle entre les visées : visez de préférence avec un croisement d'au moins 30°. Quand l'EXIF de la photo donne le cap au centième de degré, il remplace le cap arrondi au degré de Panoramax.
 
 ![Triangulation d'un lampadaire : quatre visées tracées sur la carte QGIS et réticule jaune dans la visionneuse, croisement de 83°, incertitude ±1,8 m](docs/images/triangulation.png)
-
-### Mesure libre 3D
-
-Mode « Mesure libre 3D » : chaque clic devient un point en 3D, à l'intersection de la visée avec la **surface** choisie, avec le même modèle de caméra que les autres modes (calages, hauteur de caméra, terrain). Un point est donc le même quel que soit le mode, et les mesures restent cohérentes entre elles.
-
-- **Sol** : comme les mesures de largeur.
-- **Façade (plan vertical)** : « Définir la façade », puis cliquer dans la photo le pied du mur à ses deux extrémités, ou « Façade du cadastre » puis un clic sur le mur. On mesure ensuite n'importe quoi sur cette façade (largeur ou hauteur d'une fenêtre, d'une porte, d'un portail), y compris depuis d'autres photos. Ses deux extrémités s'affichent sur la carte : les glisser sur le bord du bâtiment (orthophoto, cadastre) la place dans le bon plan, et elle ne dépend plus alors ni du sol, ni du trottoir, ni de la hauteur de caméra.
-- **Plan vertical face à la caméra** : premier point au sol (pied), second dans le plan vertical qui passe par lui (sommet, angle) ; c'est la mesure de hauteur, généralisée.
-- **Plan horizontal** : points sur un plan horizontal à la hauteur indiquée au-dessus du sol (dessus d'un muret, d'un quai).
-- **Triangulation 3D (deux photos)** : chaque point est cliqué sur deux photos différentes ; la mesure ne dépend alors ni du sol, ni de la hauteur de caméra.
-
-Le résultat est la distance 3D, avec sa décomposition : horizontale, verticale, le long de la route et en travers. Un point qui n'est pas vraiment sur la surface choisie (balcon ou appui en saillie sur une façade) est faux de toute sa saillie, et une visée rasante sur un plan est signalée. Détails dans [docs/MESURES.md](docs/MESURES.md#45-mesure-libre-3d).
 
 ### Calage des photos
 

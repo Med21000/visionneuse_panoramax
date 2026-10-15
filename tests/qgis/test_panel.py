@@ -102,8 +102,8 @@ class Base(unittest.TestCase):
         self.signals = []
         for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoClicked", "aimRequested",
                      "measureSaveRequested", "measureClearRequested", "measureClearAllRequested",
-                     "cameraHeightChanged", "surfaceChanged", "planeHeightChanged", "terrainChanged",
-                     "filterChanged", "message", "tiltChanged", "wallChanged", "wallFacadeRequested"):
+                     "cameraHeightChanged", "terrainChanged",
+                     "filterChanged", "message", "tiltChanged", "wallChanged"):
             getattr(self.dock, name).connect(lambda *args, n=name: self.signals.append((n, args)))
         self.dock.resize(1092, 990)
         self.dock.show()
@@ -130,38 +130,24 @@ class MeasureModes(Base):
         mp = self.dock.measure_box
         self.dock.btn_measure.setChecked(True)
         self.assertTrue(self.emitted("measureToggled"))
-        expected = {  # mode : (Viser, Caméra à, ligne Terrain, référence, ligne Surface)
-            "road": (False, True, True, False, False), "width": (False, True, True, False, False),
-            "height": (False, True, True, False, False), "tri": (True, False, False, False, False),
-            "free": (False, True, True, False, True), "tilt": (False, False, False, False, False),
-            "heading": (False, False, False, False, False), "camera": (False, False, True, True, False)}
+        expected = {  # mode : (Viser, Caméra à, ligne Terrain, référence)
+            "road": (False, True, True, False), "width": (False, True, True, False),
+            "height": (False, True, True, False), "tri": (True, False, False, False),
+            "tilt": (False, False, False, False), "heading": (False, False, False, False),
+            "camera": (False, False, True, True)}
         for i in range(mp.cmb_measure.count()):
             mp.cmb_measure.setCurrentIndex(i)
             mode = self.dock.measure_mode()
-            shown = tuple(self.visible(w) for w in (mp.btn_aim, mp.spin_camera, mp.terrain_row, mp.spin_reference,
-                                                    mp.free_row))
+            shown = tuple(self.visible(w) for w in (mp.btn_aim, mp.spin_camera, mp.terrain_row, mp.spin_reference))
             self.assertEqual(shown, expected[mode], mode)
         self.assertEqual([a[0] for a in self.emitted("measureModeChanged")],
-                         ["width", "height", "tri", "free", "tilt", "heading", "camera"])
-
-    def test_free_surfaces(self):
-        mp = self.dock.measure_box
-        self.dock.btn_measure.setChecked(True)
-        mp.cmb_measure.setCurrentIndex(mp.cmb_measure.findData("free"))
-        for i in range(mp.cmb_surface.count()):
-            mp.cmb_surface.setCurrentIndex(i)
-            surface = self.dock.surface()
-            self.assertEqual(self.visible(mp.btn_facade), surface == "facade")
-            self.assertEqual(self.visible(mp.spin_plane), surface == "horizontal")
-        self.assertEqual(len(self.emitted("surfaceChanged")), mp.cmb_surface.count() - 1)
+                         ["width", "height", "tri", "tilt", "heading", "camera"])
 
     def test_settings_and_buttons(self):
         mp = self.dock.measure_box
         self.dock.spin_camera.setValue(2.2)
-        self.dock.spin_plane.setValue(1.5)
         mp.chk_bridge.setChecked(True)
         self.assertEqual(self.emitted("cameraHeightChanged"), [(2.2,)])
-        self.assertEqual(self.emitted("planeHeightChanged"), [(1.5,)])
         self.assertTrue(self.dock.on_bridge())
         self.assertEqual(len(self.emitted("terrainChanged")), 1)
         for text, signal in (("Effacer", "measureClearRequested"), ("Tout effacer", "measureClearAllRequested"),
@@ -174,16 +160,11 @@ class CadastreWall(Base):
     def test_controls(self):
         box = self.dock.measure_box
         self.dock.btn_measure.setChecked(True)
-        for mode, surface, chk, btn in (("road", None, False, False), ("height", None, True, False),
-                                        ("free", "facade", False, True), ("free", "ground", False, False)):
+        for mode, chk in (("road", False), ("width", False), ("height", True), ("tri", False)):
             box.cmb_measure.setCurrentIndex(box.cmb_measure.findData(mode))
-            if surface:
-                box.cmb_surface.setCurrentIndex(box.cmb_surface.findData(surface))
-            self.assertEqual((self.visible(box.chk_wall), self.visible(box.btn_wall_facade)), (chk, btn), mode)
+            self.assertEqual(self.visible(box.chk_wall), chk, mode)
         box.chk_wall.setChecked(True)
         self.assertEqual(self.emitted("wallChanged"), [(True,)])
-        box.btn_wall_facade.click()
-        self.assertEqual(len(self.emitted("wallFacadeRequested")), 1)
 
 
 class Compact(Base):

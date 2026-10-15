@@ -37,7 +37,7 @@ Un clic dans la photo est une demi-droite partant de la caméra (le **rayon de v
 
 - le **sol**, pour les largeurs ;
 - le **plan vertical face à la caméra** passant par le pied d'un objet, pour une hauteur ;
-- une **façade**, un **plan horizontal**, ou aucune surface en **triangulation** depuis deux photos, pour la mesure libre ;
+- le **plan d'une façade du cadastre**, pour la hauteur d'un bâtiment au pied caché ;
 - le **plan calé sur la carte**, une fois la mesure recalée (section 5).
 
 La mesure est ensuite un simple calcul sur deux points 3D : distance, composante horizontale, verticale, le long de la route ou en travers.
@@ -50,10 +50,9 @@ La mesure est ensuite un simple calcul sur deux points 3D : distance, composante
 | Longueur parallèle à la route | sol | distance 3D entre les deux points |
 | Hauteur d'un objet | pied au sol, sommet dans le plan vertical face à la caméra | composante verticale |
 | Triangulation d'un objet | aucune : visées depuis plusieurs photos | position sur la carte |
-| Mesure libre 3D | au choix : sol, façade, plan vertical face à la caméra, plan horizontal, triangulation 3D | distance 3D décomposée (hauteur sur le plan vertical) |
 | Calage : inclinaison, cap et position, hauteur de caméra | — | corrections appliquées ensuite à toutes les mesures |
 
-Les quatre premiers modes de mesure au sol ou en plan, ainsi que la mesure libre, partagent le même moteur de calcul : un point est le même quel que soit le mode.
+Les modes de mesure au sol ou en plan partagent le même moteur de calcul : un point est le même quel que soit le mode. La **mesure libre 3D** (points sur une façade définie à la main, un plan horizontal, ou triangulés entre deux photos) a été retirée le 15/10/2026 : elle donnait des résultats trop incohérents.
 
 ---
 
@@ -167,39 +166,24 @@ Plans utilisés :
 | Plan | Définition |
 |---|---|
 | Plan vertical face à la caméra | vertical, passant par un point (le pied d'un objet), de normale horizontale dirigée vers la caméra |
-| Façade | vertical, passant par deux points au pied du mur |
-| Plan horizontal | altitude du sol sous la caméra + hauteur saisie |
+| Façade du cadastre | vertical, passant par le bord du bâtiment coupé par la visée (section 4.3) |
 | Plan calé sur la carte | vertical, passant par les points glissés sur la carte (section 5) |
 
 **Contrôles.** Visée parallèle au plan, point derrière le plan ou à plus de 100 m : refusés. Une **incidence rasante** (moins de 15° entre la visée et le plan) est signalée : l'erreur croît alors comme `1/sin(incidence)`.
 
-### 3.3 Point triangulé en 3D
-
-Sans surface : chaque point est visé depuis deux photos différentes, et le point retenu est le plus proche des deux visées 3D au sens des moindres carrés :
-
-```
-Σᵢ (I − uᵢ uᵢᵀ) X = Σᵢ (I − uᵢ uᵢᵀ) Cᵢ
-```
-
-avec `uᵢ` la direction unitaire de la visée depuis la photo `i` et `Cᵢ` le centre optique de cette photo.
-
-Les deux visées doivent se croiser d'au moins 3°, et devant les photos. Le résultat ne dépend ni du sol ni de la hauteur de caméra (elle s'élimine dans les distances quand les deux photos sont de la même séquence) ; sa composante verticale dépend seulement de l'altitude du sol sous chaque photo.
-
-### 3.4 Grandeurs
+### 3.3 Grandeurs
 
 Entre deux points `P` et `Q`, le moteur calcule la distance 3D, sa composante horizontale, le dénivelé (de `P` à `Q`) et, si l'axe de la route est connu, les composantes le long de la route et en travers. L'**axe de la route** est la direction de la séquence, calculée entre la photo précédente et la suivante ; à défaut, l'orientation de la photo.
 
-### 3.5 Incertitude affichée
+### 3.4 Incertitude affichée
 
 Chaque source d'erreur indépendante est prise à ±1 écart-type ; l'écart de la grandeur qu'elle produit (le plus grand des deux sens) entre dans une **somme quadratique** :
 
 - **inclinaison de chaque photo, commune à tous ses clics**, en tangage et en roulis : l'incertitude du calage appliqué (calcul automatique : 0,05 à 0,25° ; LiDAR HD : environ 0,5° ; calage à la main), ou **2°** pour une photo non calée (1 à 3° mesurés sur l'imajbox) ;
 - **hauteur de caméra de chaque photo** : ±5 cm par l'altitude GPS d'une position vérifiée, l'incertitude de la hauteur calée, ou ±15 cm pour la valeur saisie ;
-- **visée de chaque clic** : ±0,1° en élévation et en cap ; en triangulation 3D, le cap compte aussi l'erreur de visée de la photo ;
+- **visée de chaque clic** : ±0,1° en élévation et en cap ;
 - la position de chaque point recalé sur la carte de ±0,5 m (section 5) ;
-- les clics de définition de la façade (±0,1°), ou ses extrémités de ±0,5 m une fois recalées sur la carte (ou prises dans le cadastre) ;
-- la **façade du cadastre** d'une hauteur : ±0,5 m si le LiDAR HD la confirme, ±1 m sinon ;
-- la hauteur saisie du plan horizontal de ±5 cm.
+- la **façade du cadastre** d'une hauteur : ±0,5 m si le LiDAR HD la confirme, ±1 m sinon.
 
 L'inclinaison est commune aux clics d'une photo : une erreur de tangage allonge ou raccourcit tous ses points ensemble, et son effet sur une largeur prise devant la caméra est double de celui d'un seul clic. Ordres de grandeur, largeur de 7 m à 10 m devant la caméra : **±1,7 m** sur une photo non calée, ±0,55 m calée avec la hauteur de caméra saisie, moins de ±0,3 m calée avec la hauteur par l'altitude GPS.
 
@@ -243,7 +227,6 @@ Elle ne compte pas l'erreur du GPS, qui déplace la mesure entière sans changer
 - **Calcul.** Le pied est un point au sol ; le sommet est pris dans le **plan vertical face à la caméra qui passe par le pied**. À l'écart de cap `Δ` entre pied et sommet, il est à la distance horizontale `d / cos Δ`. Pour un objet fin (poteau, `Δ ≈ 0`), c'est la distance du pied ; pour un mur face à la caméra, le sommet peut être cliqué un peu de côté sans fausser la hauteur. Un sommet à plus de 45° de côté, ou sous le pied, est refusé. La hauteur affichée est la composante verticale.
 - **Sensibilité.** Sur sol plat, `H = h · (1 + tan e_sommet / tan(−e_pied))` : la hauteur est proportionnelle à la hauteur de caméra, et très sensible au clic du pied. Quand le pied est caché, le recalage sur la carte (section 5) la rend indépendante de l'un et de l'autre.
 - **Façade du cadastre** (case du même nom, `core/buildings.py`), pour un bâtiment dont le pied est caché (voiture, haie, muret). Le mur est le premier bord de bâtiment du cadastre (Parcellaire Express, service WFS de la Géoplateforme) coupé par la visée horizontale du pied ; le pied est pris **au bas de ce mur, à l'altitude du sol** (profil de terrain), même si le clic tombe sur la voiture devant, et le sommet sur le plan du mur. La façade s'affiche sur la carte (tirets violets « façade du cadastre ») ; glisser le pied sur la carte reprend la main. Le résultat indique la distance du mur et son contrôle par le LiDAR HD (ci-dessous).
-- **Façade du cadastre en mesure libre** : bouton « Façade du cadastre », puis un clic sur le mur dans la photo ; ses extrémités se recalent ensuite sur la carte comme une façade définie au pied du mur.
 
 #### Validation des façades (12/10/2026)
 
@@ -285,28 +268,6 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 
 **Ordre de grandeur.** Sur 15 points simulés à partir de vraies photos imajbox à position RTK (visées à 5–30 m), l'écart médian au point visé est de 3 cm (11 cm au plus) avec le cap EXIF précis et la pondération, contre 8 cm (29 cm) auparavant. Ces écarts sont relatifs aux positions GPS des photos : la position absolue reste à la précision du GPS, sauf recalage (section 6.3).
 
-### 4.5 Mesure libre 3D
-
-**But.** Mesurer entre deux points quelconques, dans un plan au choix, avec des résultats cohérents avec les autres modes.
-
-**Surfaces** (liste « Surface ») :
-
-- **Sol** : comme les largeurs ;
-- **Façade (plan vertical)** : « Définir la façade », puis deux clics au pied du mur, ou « Façade du cadastre » et un clic sur le mur (section 4.3) ; on mesure ensuite n'importe quoi sur la façade (fenêtres, portes, portails), y compris depuis d'autres photos. Ses extrémités se recalent sur la carte (section 5.5) ;
-- **Plan vertical face à la caméra** : premier point au sol, second dans le plan qui passe par lui ; la grandeur affichée est alors la **hauteur**, comme le préréglage ;
-- **Plan horizontal** : à la hauteur saisie au-dessus du sol (dessus d'un muret, d'un quai) ;
-- **Triangulation 3D (deux photos)** : chaque point cliqué sur deux photos différentes ; mesure indépendante du sol et de la hauteur de caméra.
-
-**Résultat.** Distance 3D (ou hauteur sur le plan vertical), décomposée en horizontale, verticale, le long de la route et en travers.
-
-**Limites.**
-
-- Un point qui n'est pas sur la surface choisie est faux : un balcon ou un appui de fenêtre en saillie est projeté sur le plan de la façade.
-- Le **plan horizontal** est vu d'autant plus en rasant qu'il est proche de la hauteur de la caméra : à 1 m sous une caméra à 2 m, les visées y sont deux fois plus rasantes qu'au sol (±0,15 m contre ±0,04 m pour un segment de 3 m à 4 m, sur scène simulée). Le message indique l'écart du plan sous la caméra et l'incidence.
-- Des altitudes de sources différentes entre les clics (service IGN et sol plat) sont signalées : la composante verticale peut en être faussée.
-
-**Vérifications sur scène simulée** (caméra à 2 m, mur à 6 m, deux photos à 10 m l'une de l'autre) : au sol 6,01 m comme la longueur parallèle ; plan vertical 3,00 m comme la hauteur ; fenêtre de 2,00 m vue en face ±0,04 m, et ±0,58 m vue à 13° d'incidence ; plan horizontal 3,00 m ; triangulation 3D 3,35 m (3,00 horizontale, 1,50 verticale).
-
 ---
 
 ## 5. Recaler une mesure dans un plan défini sur la carte QGIS
@@ -332,10 +293,9 @@ Le recalage combine les deux en deux gestes, que l'on peut alterner librement :
 
 ### 5.3 Glisser un point sur la carte
 
-**Outil de la carte.** Pendant les largeurs, les hauteurs et la mesure libre, un outil propre est actif sur la carte QGIS :
+**Outil de la carte.** Pendant les largeurs, les longueurs et les hauteurs, un outil propre est actif sur la carte QGIS :
 
 - **glisser un point** (croix jaune) d'une mesure (à moins de 10 pixels) le recale à l'endroit où on le lâche ;
-- **glisser une extrémité de façade** déplace la façade (section 5.5) ;
 - **glisser ailleurs** déplace la carte, la molette zoome ;
 - un **simple clic** ailleurs ouvre la photo la plus proche.
 
@@ -368,25 +328,20 @@ Glisser des points définit un **plan vertical**, mémorisé avec la mesure :
 
 Le plan reste mémorisé jusqu'au prochain glisser, qui le redéfinit. Pour une largeur le long d'un mur, il faut glisser **les deux** points : avec un seul, le plan est face à la caméra et non le long du mur.
 
-### 5.5 Façade recalée sur la carte
-
-En mesure libre, la façade définie dans la photo (deux clics au pied du mur) hérite des défauts du point au sol : un pied masqué ou cliqué un peu haut la repousse derrière le mur. Ses deux extrémités s'affichent sur la carte : en les **glissant sur le bord du bâtiment**, la façade ne dépend plus du sol, du trottoir ni de la hauteur de caméra, et **toutes les mesures prises dessus sont recalculées**. Son incertitude devient alors celle de la carte (±0,5 m à chaque extrémité).
-
-### 5.6 Viser à nouveau dans la visionneuse
+### 5.5 Viser à nouveau dans la visionneuse
 
 **Sélection.** Entre deux mesures (pas au milieu de l'une d'elles), cliquer dans la visionneuse sur le **repère** d'un point, à moins de 1° de lui : un **cercle jaune** l'entoure. Le message indique s'il sera placé dans le plan calé ou sur sa surface d'origine.
 
 **Nouvelle visée.** Le **clic suivant**, même tout près du repère (une correction fine l'est toujours), remplace le clic d'origine du point :
 
 - si la mesure a un plan calé, le point est pris à l'**intersection du nouveau rayon et du plan calé**, qu'il ait été lui-même glissé ou non : la carte donne la profondeur, la photo la position dans le plan, latérale et en hauteur ;
-- sinon, il est simplement visé à nouveau sur la surface de la mesure (le sol, par exemple) ;
-- en triangulation 3D, il est visé à nouveau depuis l'une des photos qui l'avaient visé.
+- sinon, il est simplement visé à nouveau sur la surface de la mesure (le sol, par exemple).
 
 **Annuler.** « Effacer », tant qu'un point est sélectionné, annule la sélection sans effacer la mesure.
 
 **Alterner.** On peut glisser à nouveau sur la carte (le point repart à la position lâchée et le plan est redéfini), puis viser à nouveau, autant de fois que nécessaire.
 
-### 5.7 Ce que montre la visionneuse
+### 5.6 Ce que montre la visionneuse
 
 Chaque repère est **reprojeté** là où la caméra voit le point 3D :
 
@@ -396,7 +351,7 @@ Chaque repère est **reprojeté** là où la caméra voit le point 3D :
 
 Le message du panneau rappelle le nombre de points recalés et visés à nouveau, et chaque résultat se termine par « Point mal placé : glissez-le sur la carte. »
 
-### 5.8 Déroulés types
+### 5.7 Déroulés types
 
 **Hauteur d'une porte dont le pied est caché par une voiture.**
 
@@ -414,17 +369,9 @@ Sur scène simulée (porte de 2,10 m dans un mur à 6 m, hauteur de caméra faus
 
 Sur scène simulée (fenêtre de 2,00 m au pied d'un mur à 6 m, hauteur de caméra fausse de 40 cm) : 1,60 m avec les clics bruts ; après avoir glissé les deux points sur le mur à 30 cm près puis visé chaque coin, **2,00 m**, les points étant à 1 à 8 cm de leur vraie position.
 
-**Mesures en série sur une façade.**
-
-1. Mesure libre, surface « Façade » : « Définir la façade », deux clics au pied du mur.
-2. Sur la carte, glisser les deux extrémités de la façade sur le bord du bâtiment.
-3. Mesurer fenêtres, portes et portails : toutes les mesures sont dans le plan de la façade, et suivent si on la recale encore.
-
-Sur scène simulée (pieds de mur masqués, cliqués 15 cm trop haut, hauteur de caméra fausse) : une fenêtre de 2,00 m est mesurée 1,73 m sur la façade définie dans la photo, et exactement 2,00 m une fois ses extrémités recalées.
-
 **Poteau dont le pied est cliqué trop haut.** Glisser le pied à sa place sur la carte suffit : sur scène simulée (pied cliqué 20 cm trop haut, caméra fausse de 40 cm), le pied passe de 5,3 m à 6,0 m de la photo et la hauteur entre le point cliqué et le sommet est retrouvée exactement (2,80 m). Pour la hauteur depuis le vrai pied, viser ensuite ce pied dans la photo.
 
-### 5.9 Précision et limites
+### 5.8 Précision et limites
 
 - **Incertitude.** Chaque point glissé est supposé placé à ±0,5 m sur la carte : sur une hauteur à 6 m, cela fait environ 8 %. Viser à nouveau ne la réduit que dans le plan (position latérale et hauteur) ; la profondeur reste celle de la carte. Elle est d'autant meilleure que l'orthophoto est précise et bien calée, et que le bord du bâtiment y est net.
 - **Bord de toiture.** Sur l'orthophoto, on voit souvent le **débord de toit**, pas le pied du mur ; le cadastre ou la BD TOPO donnent mieux l'emprise au sol. Un débord de 50 cm à 6 m fausse une hauteur d'environ 8 %.
@@ -544,7 +491,7 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | Position GPS de la photo | 2 m (relevé) à 5 m et plus | position absolue des points ; peu d'effet sur les longueurs prises sur une photo | recalage par repères (6.3), pondération (4.4) |
 | Cap de la photo | 0,3° à plusieurs degrés ; +0,5° si arrondi | triangulation : `t · tan ε` de décalage latéral | cap EXIF précis (2.4), recalage du cap (6.3) |
 | Position sur la carte | ±0,5 m (orthophoto), débord de toit | profondeur d'un point recalé | choisir le cadastre ou la BD TOPO plutôt que le bord de toit |
-| Incidence rasante sur un plan | erreur en `1/sin(incidence)` | mesures sur façade ou plan horizontal | photo plus en face ; avertissement sous 15° |
+| Incidence rasante sur un plan | erreur en `1/sin(incidence)` | hauteur sur une façade vue de biais | photo plus en face ; avertissement sous 15° |
 | Précision du clic | 1 pixel = 0,03° sur une image de 12 288 px, bien plus sans zoom | toutes les mesures | zoomer avant de cliquer |
 | Assemblage 360° | quelques pixels près des raccords | décalages locaux | éviter les raccords |
 | Décalage temporel GPS / prise de vue | à 50 km/h, 10 ms = 14 cm | position le long de la route | recalage par repères |
@@ -562,13 +509,12 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 
 ### Recalage sur la carte
 
-- **Accrochage** : accrocher les points et les extrémités de façade glissés aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
+- **Accrochage** : accrocher les points glissés aux sommets et aux arêtes des couches de bâtiments (cadastre, BD TOPO), avec les outils d'accrochage de QGIS.
 - **Plan calé depuis une couche** : prendre directement le plan dans l'arête de bâtiment la plus proche, sans glisser.
 - **Plan incliné** défini par trois points connus en 3D (triangulés), pour les toitures, talus et rampes.
 
 ### Mesures sans hypothèse de sol ni de hauteur de caméra
 
-- **Plus de deux visées par point** en triangulation 3D, pondérées, avec l'écart des visées comme contrôle.
 - **Points réutilisables** : relier les points mesurés entre eux (polyligne, surface, angle) et les enregistrer avec leur altitude.
 
 ### Modèles et données plus riches
@@ -632,8 +578,6 @@ avec un **a priori** sur chaque inconnue : cap juste à ±0,5° (matériel de re
 | `MAX_COARSE_SLOPE` | 12 % | pente maximale du service de secours | `core/terrain.py` |
 | `MAX_RANGE` | 100 m | portée maximale d'un point sur un plan | `core/geometry.py` |
 | `GRAZING` | 15° | incidence sous laquelle une visée sur un plan est signalée | `core/geometry.py` |
-| `MIN_CROSSING` | 3° | croisement minimal en triangulation 3D | `core/geometry.py` |
-| `PLANE_HEIGHT_ERROR` | 0,05 m | incertitude de la hauteur du plan horizontal | `core/measures.py` |
 | `SELECT_ANGLE` | 1° | écart maximal entre un clic et un repère pour le sélectionner | `core/measures.py` |
 | poignées sur la carte | 10 px | distance de saisie d'un point à glisser | `plugin.py` |
 | `CLICK_TOLERANCE` | 4 px | au-delà, un clic sur la carte est un glisser | `plugin.py` |

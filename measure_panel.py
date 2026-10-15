@@ -4,7 +4,7 @@
 """Zone des mesures du panneau : choix du mode et réglages de la mesure en cours.
 
 Mode (mesures, triangulation, calages), hauteur de caméra, référence du calage de la
-hauteur, service d'altimétrie, surface de la mesure libre 3D, rappel du calage de la
+hauteur, service d'altimétrie, rappel du calage de la
 photo affichée et ligne d'aide. Les widgets affichés suivent le mode choisi ; les
 réglages sont enregistrés et chaque modification est signalée au panneau.
 """
@@ -23,20 +23,18 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from .core.tools import calibration_text
-from .measure_tool import FREE_SURFACES
 
 MEASURE_MODES = (
     ("Largeur perpendiculaire à la chaussée", "road"),
     ("Longueur parallèle à la route", "width"),
     ("Hauteur d'un objet", "height"),
     ("Triangulation d'un objet", "tri"),
-    ("Mesure libre 3D", "free"),
     ("Calage : inclinaison (objets verticaux)", "tilt"),
     ("Calage : cap et position (repères sur la carte)", "heading"),
     ("Calage : hauteur de caméra (longueur connue)", "camera"),
 )
 
-GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
+GROUND_MODES = ("width", "road", "height")  # mesures par lancer de rayon (voir core/measures.py)
 STATUS_LINES = 3  # hauteur réservée à la ligne d'aide (voir set_status)
 REEXPORTED = (calibration_text,)  # importée d'ici par le panneau et les tests
 
@@ -51,11 +49,7 @@ class MeasurePanel(QWidget):
     # Réglages modifiés (déjà enregistrés)
     modeChanged = pyqtSignal(str)
     cameraHeightChanged = pyqtSignal(float)
-    surfaceChanged = pyqtSignal(str)
-    facadeRequested = pyqtSignal()
-    wallFacadeRequested = pyqtSignal()  # façade du cadastre, d'un clic sur le mur (mesure libre)
     wallChanged = pyqtSignal(bool)  # hauteur sur la façade du cadastre
-    planeHeightChanged = pyqtSignal(float)
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
 
@@ -146,43 +140,6 @@ class MeasurePanel(QWidget):
         tlay.addWidget(self.btn_camera_auto)
         self.terrain_row.setMinimumHeight(self.btn_camera_auto.sizeHint().height())  # pas de saut à son apparition
         mbox.addWidget(self.terrain_row)
-        self.free_row = QWidget(self)
-        flay = QHBoxLayout(self.free_row)
-        flay.setContentsMargins(0, 0, 0, 0)
-        flay.addWidget(QLabel("Surface :"))
-        self.cmb_surface = QComboBox()
-        for label, key in FREE_SURFACES:
-            self.cmb_surface.addItem(label, key)
-        self.cmb_surface.setToolTip(
-            "Surface sur laquelle se trouvent les points cliqués : le sol, une façade (plan vertical défini "
-            "par deux clics au pied du mur), le plan vertical face à la caméra passant par le premier point "
-            "(cliqué au sol), un plan horizontal à une hauteur donnée, ou aucune (triangulation depuis deux photos)")
-        self.cmb_surface.currentIndexChanged.connect(self._on_surface)
-        flay.addWidget(self.cmb_surface)
-        self.btn_facade = QPushButton("Définir la façade")
-        self.btn_facade.setToolTip("Cliquer ensuite dans la photo au pied du mur, à ses deux extrémités ; ses "
-                                   "extrémités se recalent ensuite en les glissant sur la carte")
-        self.btn_facade.clicked.connect(self.facadeRequested)
-        flay.addWidget(self.btn_facade)
-        self.btn_wall_facade = QPushButton("Façade du cadastre")
-        self.btn_wall_facade.setToolTip("Cliquer ensuite sur le mur dans la photo : la façade est celle du bâtiment "
-                                        "du cadastre traversé par la visée, contrôlée par le LiDAR HD ; ses "
-                                        "extrémités se recalent en les glissant sur la carte")
-        self.btn_wall_facade.clicked.connect(self.wallFacadeRequested)
-        flay.addWidget(self.btn_wall_facade)
-        self.lbl_plane = QLabel("à")
-        flay.addWidget(self.lbl_plane)
-        self.spin_plane = QDoubleSpinBox()
-        self.spin_plane.setRange(-20.0, 50.0)
-        self.spin_plane.setSingleStep(0.1)
-        self.spin_plane.setDecimals(2)
-        self.spin_plane.setSuffix(" m du sol")
-        self.spin_plane.setValue(1.0)
-        self.spin_plane.setToolTip("Hauteur du plan horizontal au-dessus du sol sous la caméra")
-        self.spin_plane.valueChanged.connect(lambda v: self.planeHeightChanged.emit(float(v)))
-        flay.addWidget(self.spin_plane)
-        flay.addStretch(1)
-        mbox.addWidget(self.free_row)
         self.lbl_calibration = QLabel("")
         self.lbl_calibration.setWordWrap(True)
         mbox.addWidget(self.lbl_calibration)
@@ -208,10 +165,6 @@ class MeasurePanel(QWidget):
         """Option « Mesure sur un pont » : sol plat (voir terrain.TerrainProvider.bridge)."""
         return self.chk_bridge.isChecked()
 
-    def surface(self):
-        """Surface de la mesure libre 3D (voir core/measures.FREE_SURFACES)."""
-        return self.cmb_surface.currentData() or "ground"
-
     def reference(self):
         """Référence du calage de la hauteur de caméra : ("ground" | "height", longueur en m)."""
         return self.cmb_reference.currentData() or "ground", self.spin_reference.value()
@@ -219,10 +172,6 @@ class MeasurePanel(QWidget):
     def _on_mode(self, index):
         self.update_widgets()
         self.modeChanged.emit(self.measure_mode())
-
-    def _on_surface(self, index):
-        self.update_widgets()
-        self.surfaceChanged.emit(self.surface())
 
     def _on_camera_height(self, value):
         QgsSettings().setValue("visionneuse_panoramax/camera_height", float(value))
@@ -276,13 +225,7 @@ class MeasurePanel(QWidget):
         self.terrain_row.setVisible(mode in GROUND_MODES + ("camera",))
         for w in (self.cmb_reference, self.spin_reference):
             w.setVisible(mode == "camera")
-        surface = self.surface()
-        self.free_row.setVisible(mode == "free")
-        self.btn_facade.setVisible(surface == "facade")
-        self.btn_wall_facade.setVisible(surface == "facade")
         self.chk_wall.setVisible(mode == "height")
-        for w in (self.lbl_plane, self.spin_plane):
-            w.setVisible(surface == "horizontal")
 
     def set_calibration_text(self, text):
         """Rappel du calage de la photo affichée. Une fois apparu pendant une séance de mesure,

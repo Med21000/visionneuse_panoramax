@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Tests de measure_tool.py : préréglages (largeurs, hauteur), mesure libre, recalage sur la carte.
+"""Tests de measure_tool.py : largeurs, longueur, hauteur, recalage sur la carte.
 
 Scène : sol plat à l'altitude 0, route nord-sud (axe 0°), caméra à CAMERA m. Les clics
 sont calculés depuis des points 3D connus, que les mesures doivent retrouver.
@@ -52,10 +52,8 @@ class Base(unittest.TestCase):
         self.tool = measure_tool.MeasureTool(Stub())
         self.tool.camera_height = CAMERA
 
-    def measure(self, mode, clicks, surface=None):
+    def measure(self, mode, clicks):
         self.tool.set_mode(mode)
-        if surface:
-            self.tool.set_surface(surface)
         for c in clicks:
             self.tool.add_click(c)
         return self.tool.current
@@ -177,44 +175,6 @@ class CameraFromAltitude(Base):
         self.assertValue(m, 7.0)
 
 
-class Free(Base):
-    def test_ground(self):
-        m = self.measure("free", [click((1.0, 6.0, 0.0)), click((-2.0, 10.0, 0.0))], surface="ground")
-        self.assertValue(m, 5.0)
-
-    def test_facade(self):
-        self.tool.set_mode("free")
-        self.tool.set_surface("facade")
-        self.assertTrue(self.tool.defining)
-        for target in ((8.0, 2.0, 0.0), (8.0, 14.0, 0.0)):  # pied du mur, à l'est
-            self.tool.add_click(click(target))
-        self.assertFalse(self.tool.defining)
-        for target in ((8.0, 5.0, 1.0), (8.0, 9.0, 4.0)):
-            self.tool.add_click(click(target))
-        self.assertValue(self.tool.current, 5.0, delta=1e-5)
-
-    def test_vertical(self):
-        m = self.measure("free", [click((-4.0, 9.0, 0.0)), click((-4.0, 9.0, 6.5))], surface="vertical")
-        self.assertValue(m, 6.5)
-
-    def test_horizontal(self):
-        self.tool.set_plane_height(1.0)
-        m = self.measure("free", [click((2.0, 6.0, 1.0)), click((-1.0, 10.0, 1.0))], surface="horizontal")
-        self.assertValue(m, 5.0)
-
-    def test_tri3d(self):
-        a, b = (6.0, 20.0, 5.0), (9.0, 24.0, 5.0)
-        photos = ((0.0, 0.0), (12.0, 2.0))
-        clicks = [click(a, photos[0], "p1"), click(a, photos[1], "p2"),
-                  click(b, photos[0], "p1"), click(b, photos[1], "p2")]
-        m = self.measure("free", clicks, surface="tri3d")
-        self.assertValue(m, 5.0)
-
-    def test_tri3d_same_photo(self):
-        m = self.measure("free", [click((6.0, 20.0, 5.0)), click((6.0, 20.0, 5.0))], surface="tri3d")
-        self.assertIsNotNone(m.error)
-
-
 class Relocation(Base):
     def test_height_relocated_on_map(self):
         # Hauteur de caméra fausse : la hauteur mesurée l'est aussi...
@@ -238,12 +198,10 @@ class Relocation(Base):
         self.assertAlmostEqual(dyaw, math.degrees(math.atan2(4, 20) - math.atan2(4, 12)), places=6)
         self.assertAlmostEqual(delev, 0.0, places=6)
 
-    def test_reaim_on_map_plane_horizontal_surface(self):
-        # Plan horizontal à 1 m : le second point est en fait sur un mur à 14 m. Glissé sur la carte
-        # puis visé à nouveau, il doit rester dans le plan calé sur la carte (y = 14), pas revenir
-        # sur le plan horizontal
-        self.tool.plane_height = 1.0
-        m = self.measure("free", [click((3.0, 10.0, 1.0)), click((-2.0, 12.0, 1.0))], surface="horizontal")
+    def test_reaim_on_map_plane(self):
+        # Second point cliqué au sol, mais en fait sur un mur à 14 m. Glissé sur la carte puis visé
+        # à nouveau, il doit rester dans le plan calé sur la carte (y = 14), pas revenir au sol
+        m = self.measure("width", [click((3.0, 10.0, 0.0)), click((-2.0, 12.0, 0.0))])
         x = -2.0 * 14 / 12
         m.relocate(1, *point(x, 14.0))
         m.reaim(1, click((x, 14.0, 1.8)))
@@ -388,31 +346,6 @@ class CadastreWall(Base):
         answer[0] = None
         self.tool.recompute_walls()
         self.assertIn("aucune façade du cadastre dans la visée : pied cliqué", m.status())
-
-    def test_free_facade_in_one_click(self):
-        answer = ["pending"]
-        self.tool.wall_lookup = lambda *args: answer[0]
-        self.tool.set_mode("free")
-        self.tool.set_surface("facade")
-        self.tool.start_wall_facade()
-        self.assertIn("cliquez sur le mur", self.tool.status())
-        self.tool.add_click(click((12.0, 2.0, 3.0)))
-        self.assertIn("lecture du cadastre", self.tool.status())
-        answer[0] = self.WALL
-        self.tool.recompute_walls()
-        self.assertFalse(self.tool.defining)
-        self.assertIn("Façade du cadastre à 12,0 m", self.tool.status())
-        m = self.measure("free", [click((12.0, -1.0, 2.0)), click((12.0, 1.0, 2.0))], surface="facade")
-        self.assertValue(m, 2.0)  # largeur d'une fenêtre sur la façade
-
-    def test_no_wall_for_free_facade(self):
-        self.tool.wall_lookup = lambda *args: None
-        self.tool.set_mode("free")
-        self.tool.set_surface("facade")
-        self.tool.start_wall_facade()
-        self.tool.add_click(click((12.0, 2.0, 3.0)))
-        self.assertTrue(self.tool.defining)
-        self.assertIn("Aucune façade du cadastre dans la visée", self.tool.status())
 
 
 class Recorrect(Base):

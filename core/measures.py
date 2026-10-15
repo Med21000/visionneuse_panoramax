@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Mesures entre deux points 3D : préréglages (largeurs, hauteur) et mesure libre.
+"""Mesures entre deux points 3D : largeurs, longueur et hauteur.
 
 Toutes reposent sur le même moteur (geometry.py) : chaque clic devient un point 3D
 sur une surface, puis la mesure est une grandeur calculée sur ces points.
@@ -10,9 +10,10 @@ sur une surface, puis la mesure est une grandeur calculée sur ces points.
   en travers de l'axe de la route) ;
 - "width" : longueur parallèle à la route (distance 3D entre deux points au sol) ;
 - "height" : hauteur d'un objet (pied au sol, sommet dans le plan vertical face à
-  la caméra, composante verticale) ;
-- "free" : mesure libre, sur la surface choisie (sol, façade, plan vertical face à
-  la caméra, plan horizontal, triangulation 3D), distance 3D.
+  la caméra, ou sur la façade du cadastre, composante verticale).
+
+La mesure libre 3D (façade, plans, triangulation 3D entre deux photos) a été retirée le
+15/10/2026 : elle donnait des résultats trop incohérents.
 
 Un point peut être recalé après coup sur la carte : sa position horizontale vient
 alors de la carte, et son altitude du rayon de visée de la photo à cette distance.
@@ -43,18 +44,10 @@ class NullItem:
         pass
 
 
-FREE_SURFACES = (
-    ("Sol", "ground"),
-    ("Façade (plan vertical)", "facade"),
-    ("Plan vertical face à la caméra", "vertical"),
-    ("Plan horizontal", "horizontal"),
-    ("Triangulation 3D (deux photos)", "tri3d"),
-)
-SURFACE_NAMES = {key: label.lower() for label, key in FREE_SURFACES}
-PRESET_SURFACES = {"road": "ground", "width": "ground", "height": "vertical"}  # surface des préréglages
+SURFACE_NAMES = {"ground": "sol", "vertical": "plan vertical face à la caméra"}
+PRESET_SURFACES = {"road": "ground", "width": "ground", "height": "vertical"}  # surface de chaque mesure
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m) déduite de l'altitude GPS
 CAMERA_SOURCES = {None: 0, "calée": 1, "altitude GPS": 2}  # champ camera_calee de la couche des mesures
-PLANE_HEIGHT_ERROR = 0.05  # incertitude de la hauteur saisie du plan horizontal (m)
 # Incertitude de la hauteur de caméra (m) selon sa source : altitude GPS d'une position vérifiée
 # (écart-type sur la séquence de Pouilly : 2 cm, plus le LiDAR), sinon valeur saisie (1,7 à 2,2 m
 # selon le véhicule) ; une hauteur calée a sa propre incertitude
@@ -64,7 +57,7 @@ WALL_ERROR, WALL_ERROR_UNCHECKED = 0.5, 1.0
 SELECT_ANGLE = 1.0  # écart maximal (degrés) entre un clic et le repère d'un point pour le sélectionner
 ERRORS = (geometry.GeometryError, ground.GroundError)
 KIND_NAMES = {"road": "largeur perpendiculaire à la chaussée", "width": "longueur parallèle à la route",
-              "height": "hauteur", "free": "mesure libre 3D"}
+              "height": "hauteur"}
 
 
 
@@ -105,33 +98,12 @@ def _wall_foot(click, camera_height, origin, ground_z, plane):
     return (cam[0] + t * hx, cam[1] + t * hy, _profile_z(profile, s))
 
 
-def _empty(measure):
-    """Pas de mesure, ou mesure sans clic."""
-    return measure is None or not measure.clicks
-
-
-class Facade:
-    """Façade : plan vertical passant par deux points (lon, lat, altitude) au pied du mur.
-
-    Partagée par les mesures prises dessus : la recaler sur la carte les recalcule
-    toutes. source : les deux clics qui l'ont définie dans la photo, None une fois
-    qu'une extrémité a été recalée sur la carte (son incertitude est alors celle de
-    la carte).
-    """
-
-    def __init__(self, points, source=None):
-        self.points = list(points)
-        self.source = source
-
-
 class Measure:
     """Une mesure entre deux points 3D (voir le module)."""
 
     def __init__(self, tool, kind, surface):
         self.tool = tool
         self.kind, self.surface = kind, surface
-        self.facade = tool.facade  # Facade partagée, ou None
-        self.plane_height = tool.plane_height
         self.clicks = []  # dicts de PanoramaxDock.photoClicked, avec profil de terrain
         # n° de point -> (lon, lat, orientation en degrés) : point recalé sur la carte, qui fixe
         # son plan vertical (passant par lui, de normale horizontale orientée vers la caméra
@@ -153,7 +125,7 @@ class Measure:
         self.road_pending = False  # lecture de cet axe en cours
 
     def needed(self):
-        return 4 if self.surface == "tri3d" else 2
+        return 2
 
     def add_click(self, click, notice=None):
         if notice:
@@ -166,22 +138,10 @@ class Measure:
             self.compute()
             self.error = error
 
-    def _click_index(self, index, pic=None):
-        """Clic d'où vient le point n° index (en triangulation 3D, celui de la photo pic)."""
-        if self.surface != "tri3d":
-            return index
-        pair = [2 * index, 2 * index + 1]
-        if pic is None:
-            return pair[0]
-        for i in pair:
-            if self.clicks[i].get("pic") == pic:
-                return i
-        return None
-
     def relocate(self, index, lon, lat):
         """Recale le point n° index à la position (lon, lat) cliquée sur la carte. Son plan
         vertical est orienté face à la photo qui l'a visé."""
-        c = self.clicks[self._click_index(index)]
+        c = self.clicks[index]
         x, y = triangulation._local(lon, lat, c["lon"], c["lat"])
         state = dict(self.overrides), set(self.aimed)
         self.overrides[index] = (lon, lat, math.degrees(math.atan2(x, y)))
@@ -198,12 +158,8 @@ class Measure:
         été calée sur la carte, le point est pris sur son plan calé (profondeur de la carte,
         position fine de la photo), qu'il ait été lui-même recalé ou non ; sinon, sur la
         surface de la mesure."""
-        i = self._click_index(index, click.get("pic"))
-        if i is None:
-            self.error = "Visez ce point depuis l'une des photos qui l'ont visé."
-            return
         state = list(self.clicks), set(self.aimed)
-        self.clicks[i] = click
+        self.clicks[index] = click
         if self.overrides:
             self.aimed.add(index)
         self.compute()
@@ -214,17 +170,14 @@ class Measure:
             self.error = error
 
     # Calcul -------------------------------------------------------------------
-    def points(self, clicks=None, facade=None, plane_height=None, overrides=None, camera_delta=None, wall_shift=0.0):
+    def points(self, clicks=None, overrides=None, camera_delta=None, wall_shift=0.0):
         """Points 3D (repère local centré sur le premier clic) des clics complets,
         angle d'incidence le plus rasant sur un plan, origine du repère, et pour
         chaque point le clic dont il vient. camera_delta (photo -> écart de hauteur de caméra,
         m) et wall_shift (décalage de la façade du cadastre vers l'extérieur, m) servent au
         calcul de l'incertitude."""
         clicks = self.clicks if clicks is None else clicks
-        if facade is None and self.facade is not None:
-            facade = self.facade.points
         overrides = self.overrides if overrides is None else overrides
-        plane_height = self.plane_height if plane_height is None else plane_height
         if not clicks:
             return [], None, None, []
         origin = (clicks[0]["lon"], clicks[0]["lat"])
@@ -273,21 +226,8 @@ class Measure:
                 k = len(pts)
                 pts.append(fixed(k, None if recaled(k) else geometry.on_ground(c, h(c), origin, zof(c))[0], c))
                 sources.append(c)
-        elif self.surface == "tri3d":
-            for k in range(0, len(clicks) - 1, 2):
-                pair = clicks[k:k + 2]
-                if pair[0].get("pic") == pair[1].get("pic"):
-                    raise geometry.GeometryError("Changez de photo pour viser le même point sous un autre angle.")
-                p = geometry.triangulate([geometry.camera(c, h(c), origin, zof(c)) for c in pair])[0]
-                pts.append(fixed(len(pts), p, pair[0]))
-                sources.append(pair[0])
-        else:
-            planar = clicks
-            if self.surface == "facade":
-                if not facade:
-                    raise geometry.GeometryError("Façade non définie : définissez-la dans la photo ou sur la carte.")
-                plane = geometry.vertical_plane(*(geometry.to_local(*p, origin) for p in facade))
-            elif self.surface == "vertical" and self.wall and 0 not in anchors:
+        else:  # plan vertical : celui du mur du cadastre, sinon face à la caméra
+            if self.wall and 0 not in anchors:
                 # Façade du cadastre : pied au bas du mur, à l'altitude du sol (même si le clic
                 # tombe sur une voiture devant), sommet sur le mur
                 plane = geometry.vertical_plane(*(geometry.to_local(lon, lat, 0.0, origin)
@@ -298,13 +238,11 @@ class Measure:
                     plane = ((px + k * nx, py + k * ny, pz), (nx, ny, nz))
                 first = _wall_foot(clicks[0], h(clicks[0]), origin, zof(clicks[0]), plane)
                 planar, pts, sources = clicks[1:], [first], [clicks[0]]
-            elif self.surface == "vertical":
+            else:
                 first = fixed(0, geometry.on_ground(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0], clicks[0])
                 cam = geometry.camera(clicks[0], h(clicks[0]), origin, zof(clicks[0]))[0]
                 plane = geometry.facing_plane(cam, first)
                 planar, pts, sources = clicks[1:], [first], [clicks[0]]
-            else:  # horizontal
-                plane = ((0.0, 0.0, zof(clicks[0]) + plane_height), (0.0, 0.0, 1.0))
             for c in planar:
                 if recaled(len(pts)):
                     pts.append(fixed(len(pts), None, c))
@@ -366,8 +304,8 @@ class Measure:
                 raise geometry.GeometryError("Axe de la route inconnu pour cette photo : largeur impossible "
                                              "à calculer.")
             return d["across"]
-        if self.kind == "height" or (self.kind == "free" and self.surface == "vertical"):
-            if self.kind == "height" and d["vertical"] <= 0:
+        if self.kind == "height":
+            if d["vertical"] <= 0:
                 raise geometry.GeometryError("Le sommet est sous le pied : cliquez d'abord au pied, puis au "
                                              "sommet.")
             return abs(d["vertical"])
@@ -383,9 +321,8 @@ class Measure:
         - inclinaison de chaque photo, commune à tous ses clics (tangage et roulis) : celle du
           calage appliqué, ou UNCALIBRATED sans calage ;
         - hauteur de caméra de chaque photo (CAMERA_ERRORS, ou celle de la hauteur calée) ;
-        - visée de chaque clic (AIM_ERROR), et son cap en triangulation 3D (erreur de visée) ;
-        - position de chaque point recalé sur la carte, des extrémités d'une façade recalée,
-          définition d'une façade cliquée, hauteur du plan horizontal, façade du cadastre."""
+        - visée de chaque clic (AIM_ERROR) ;
+        - position de chaque point recalé sur la carte, façade du cadastre."""
         ref = self._value()
         groups = []  # par source d'erreur : variantes à ±1 écart-type
         for pic in dict.fromkeys(c.get("pic") for c in self.clicks):
@@ -395,11 +332,8 @@ class Measure:
                                for sign in (-1, 1)])
             dh = self._camera_sigma(pic)
             groups.append([{"camera_delta": {pic: sign * dh}} for sign in (-1, 1)])
-        for i, c in enumerate(self.clicks):
-            moves = [("elev", AIM_ERROR), ("yaw", AIM_ERROR)]
-            if self.surface == "tri3d":
-                moves[1] = ("yaw", math.hypot(triangulation.heading_error(c), AIM_ERROR))
-            for key, step in moves:
+        for i in range(len(self.clicks)):
+            for key, step in (("elev", AIM_ERROR), ("yaw", AIM_ERROR)):
                 variants = []
                 for sign in (-1, 1):
                     moved = [dict(x) for x in self.clicks]
@@ -413,30 +347,6 @@ class Measure:
                     moved = dict(self.overrides)
                     moved[k] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (azimuth,)
                     variants.append({"overrides": moved})
-                groups.append(variants)
-        if self.surface == "horizontal":
-            groups.append([{"plane_height": self.plane_height + s * PLANE_HEIGHT_ERROR} for s in (-1, 1)])
-        source = self.facade.source if self.facade is not None else None
-        if self.surface == "facade" and self.facade is not None and not source:
-            for i in range(2):  # façade recalée sur la carte ou du cadastre : chaque extrémité à ±MAP_ERROR
-                lon, lat, z = self.facade.points[i]
-                for dx, dy in ((1, 0), (0, 1)):
-                    variants = []
-                    for sign in (-1, 1):
-                        moved = list(self.facade.points)
-                        moved[i] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (z,)
-                        variants.append({"facade": moved})
-                    groups.append(variants)
-        if self.surface == "facade" and source:
-            for i in range(2):
-                variants = []
-                for sign in (-1, 1):
-                    moved = [dict(x) for x in source]
-                    moved[i]["elev"] += sign * AIM_ERROR
-                    try:
-                        variants.append({"facade": self.tool.facade_from(moved)})
-                    except ERRORS:
-                        return float("inf")
                 groups.append(variants)
         if self.wall and not self.overrides:
             err = WALL_ERROR_UNCHECKED if self.wall.get("warning") else WALL_ERROR
@@ -519,11 +429,11 @@ class Measure:
     def _shifts(self, pts, origin):
         """Pour chaque clic, écart (cap, élévation en degrés) entre la direction cliquée et
         celle où la caméra voit le point 3D qui en résulte : nul pour un point resté sur sa
-        visée, non nul pour un point recalé de côté sur la carte (ou triangulé)."""
+        visée, non nul pour un point recalé de côté sur la carte."""
         ground_z = _ground_z(self.clicks)
         out = []
         for i, c in enumerate(self.clicks):
-            p = pts[i // 2] if self.surface == "tri3d" else pts[i]
+            p = pts[i]
             z = ground_z[c.get("pic")]
             cam, _ = geometry.camera(c, self.tool.camera_for(c, z), origin, z)
             vx, vy, vz = p[0] - cam[0], p[1] - cam[1], p[2] - cam[2]
@@ -565,10 +475,7 @@ class Measure:
     def _vertical(self):
         if self.kind in ("road", "width"):
             return False
-        if self.kind == "height" or self.surface == "vertical":
-            return True
-        d = self.result["decomposition"] if self.result else None
-        return bool(d) and abs(d["vertical"]) > d["horizontal"]
+        return True  # hauteur
 
     def _draw(self):
         if self.result:
@@ -596,7 +503,7 @@ class Measure:
 
     def point_of_click(self, i):
         """N° du point auquel contribue le clic n° i."""
-        return i // 2 if self.surface == "tri3d" else i
+        return i
 
     def viewer_marks(self, selected=None):
         """Repères dans la visionneuse (voir PanoramaxDock.set_measure_marks) : là où la
@@ -634,26 +541,12 @@ class Measure:
             elif self.tool.use_wall:
                 text += (" · lecture du cadastre…" if self.wall_pending else
                          " · aucune façade du cadastre dans la visée : pied cliqué")
-        else:
-            if self.surface == "vertical":
-                text = "Hauteur : {} m (±{} m) · distance 3D {} · horizontale {}".format(
-                    value, unc, _num(d["d3"], 2), _num(d["horizontal"], 2))
-            else:
-                text = "Distance 3D : {} m (±{} m) · horizontale {} · verticale {}".format(
-                    value, unc, _num(d["horizontal"], 2), _num(d["vertical"], 2))
-            if d["along"] is not None:
-                text += " · le long de la route {} · en travers {}".format(_num(d["along"], 2), _num(d["across"], 2))
-            text += " · surface : {}".format(SURFACE_NAMES[self.surface])
         if self.overrides:
             text += " · {} point{} recalé{} sur la carte".format(
                 len(self.overrides), *(("s", "s") if len(self.overrides) > 1 else ("", "")))
             if self.aimed:
                 text += ", dont {} visé{} à nouveau dans son plan".format(
                     len(self.aimed), "s" if len(self.aimed) > 1 else "")
-        if self.surface == "horizontal":
-            text += " · plan à {} m sous la caméra, incidence {}°".format(
-                _num(self.tool.camera_for(self.clicks[0], _ground_z(self.clicks)[self.clicks[0].get("pic")])
-                     - self.plane_height, 2), _num(self.incidence or 0, 0))
         if self.incidence is not None and self.incidence < geometry.GRAZING:
             text += ". Visée rasante sur le plan ({}°) : mesure imprécise, prenez une photo plus en face".format(
                 _num(self.incidence, 0))
@@ -669,32 +562,23 @@ class Measure:
 
 
 class MeasureTool:
-    """Mesure en cours, mesures terminées gardées à l'écran, façade et réglages."""
+    """Mesure en cours, mesures terminées gardées à l'écran et réglages."""
 
     def __init__(self, canvas):
         self.canvas = canvas
-        self.mode = "road"  # préréglage, ou "free"
-        self.surface = "ground"  # surface de la mesure libre
+        self.mode = "road"  # "road", "width" ou "height"
         self.camera_height = DEFAULT_CAMERA_HEIGHT  # hauteur saisie dans le panneau
         self.road_lookup = None  # roads.RoadAxisProvider.lookup : axe de la route au point mesuré
         self.wall_lookup = None  # buildings.BuildingProvider.lookup : façade du cadastre visée
         self.use_wall = False  # hauteur : pied et sommet sur la façade du cadastre
         self.calibration = None  # calibration.Calibration : hauteur calée par séquence
-        self.plane_height = 1.0  # hauteur du plan horizontal au-dessus du sol (m)
-        self.facade = None  # Facade en cours (voir Facade)
-        self.defining = False  # les prochains clics dans la photo définissent la façade
-        self.facade_clicks = []
-        self.wall_facade = False  # le prochain clic prend la façade dans le cadastre
-        self.wall_click = None  # clic en attente de la lecture du cadastre
-        self.notice_facade = None  # façade du cadastre retenue (texte), jusqu'au premier clic de mesure
-        self.facade_item = None
         self.error = None
         self.current = None
         self.done = []  # mesures terminées, gardées à l'écran jusqu'à clear_all
         self.selected = None  # (mesure, n° de point) à viser à nouveau dans la visionneuse
 
     def new_item(self, wall=False):
-        """Dessin d'une mesure (ou d'une façade, wall) sur la carte : set_data(points, libellé,
+        """Dessin d'une mesure (ou de la façade du cadastre, wall) sur la carte : set_data(points, libellé,
         extras) et remove(). Rien ici ; l'hôte le fournit (plugin QGIS : measure.MeasureItem)."""
         return NullItem()
 
@@ -703,28 +587,10 @@ class MeasureTool:
         if mode != self.mode:
             self.finish()
             self.mode = mode
-            self.defining = self._surface() == "facade" and self.facade is None
-            self._draw_facade()
-
-    def set_surface(self, surface):
-        if surface != self.surface:
-            self.finish()
-            self.surface = surface
-            self.defining = self._surface() == "facade" and self.facade is None
-            self._draw_facade()
-
-    def _surface(self):
-        return PRESET_SURFACES.get(self.mode, self.surface)
 
     def set_camera_height(self, value):
         self.camera_height = float(value)
         if self.current is not None:
-            self.current.compute()
-
-    def set_plane_height(self, value):
-        self.plane_height = float(value)
-        if self.current is not None and self.current.surface == "horizontal":
-            self.current.plane_height = self.plane_height
             self.current.compute()
 
     def camera_info(self, click, ground_z=None):
@@ -748,83 +614,13 @@ class MeasureTool:
     def needs_profile(self):
         return True  # altitude du sol sous la caméra, et du sol visé
 
-    # Façade -------------------------------------------------------------------
-    def start_facade(self):
-        """Les deux prochains clics dans la photo, au pied du mur, définissent la façade."""
-        self.finish()
-        self.defining, self.facade_clicks, self.error = True, [], None
-        self.wall_facade, self.wall_click, self.notice_facade = False, None, None
-
-    def start_wall_facade(self):
-        """Le prochain clic sur un mur, dans la photo, prend sa façade dans le cadastre."""
-        self.start_facade()
-        self.wall_facade = True
-
-    def _try_wall_facade(self):
-        """Façade du cadastre visée par le clic en attente (voir buildings.py)."""
-        c = self.wall_click
-        res = self.wall_lookup(c["lon"], c["lat"], c["yaw"]) if self.wall_lookup else None
-        if res == "pending":
-            return
-        self.wall_click = None
-        if not res:
-            self.error = ("Aucune façade du cadastre dans la visée : cliquez sur le mur, ou définissez la façade "
-                          "au pied du mur (« Définir la façade »).")
-            return
-        z = (c.get("profile") or ground.flat_profile())[0][1]
-        self.facade = Facade([(lon, lat, z) for lon, lat in res["points"]])
-        self.facade.check = res["check"]
-        self.defining, self.wall_facade = False, False
-        self.notice_facade = "Façade du cadastre à {} m : {}.".format(_num(res["distance"]), res["check"])
-        for m in self.measures():
-            if m.surface == "facade":
-                m.facade = self.facade
-                m.compute()
-        self._draw_facade()
-
-    def facade_from(self, clicks):
-        """Façade (deux points lon, lat, altitude) à partir de deux clics au pied du mur."""
-        origin = (clicks[0]["lon"], clicks[0]["lat"])
-        ground_z = _ground_z(clicks)
-        a, b = (geometry.on_ground(c, self.camera_for(c, ground_z[c.get("pic")]), origin, ground_z[c.get("pic")])[0]
-                for c in clicks)
-        geometry.vertical_plane(a, b)  # contrôle
-        return [geometry.to_geographic(a, origin), geometry.to_geographic(b, origin)]
-
-    def move_facade(self, index, lon, lat):
-        """Recale l'extrémité n° index de la façade sur la carte, et recalcule les mesures
-        prises dessus. Retourne un message d'erreur, ou None."""
-        facade = self.facade
-        old = list(facade.points), facade.source
-        facade.points[index] = (lon, lat, facade.points[index][2])
-        facade.source = None
-        try:
-            origin = facade.points[0][:2]
-            geometry.vertical_plane(*(geometry.to_local(*p, origin) for p in facade.points))
-        except geometry.GeometryError as exc:
-            facade.points, facade.source = old
-            return str(exc)
-        for m in self.measures():
-            if m.facade is facade:
-                m.compute()
-        self._draw_facade()
-        return None
-
-    def _draw_facade(self):
-        if self.facade and self._surface() == "facade":
-            if self.facade_item is None:
-                self.facade_item = self.new_item(wall=True)
-            self.facade_item.set_data([p[:2] for p in self.facade.points], "façade")
-        elif self.facade_item is not None:
-            self.facade_item.set_data([], "")
-
     # Clics --------------------------------------------------------------------
     def select_near(self, click):
         """Clic sur le repère d'un point existant (à moins de SELECT_ANGLE degrés), entre deux
         mesures : le sélectionne pour le viser à nouveau. Retourne True si le clic a servi à
         cela. Un point déjà sélectionné : le clic est sa nouvelle visée, même tout près de son
         repère (une correction fine l'est toujours) ; on annule avec cancel_selection."""
-        if self.selected is not None or self.defining:
+        if self.selected is not None:
             return False
         if self.current is not None and 0 < len(self.current.clicks) < self.current.needed():
             return False
@@ -864,24 +660,9 @@ class MeasureTool:
             if measure.error:
                 return measure.error + " " + (measure.status() if measure.result else "")
             return measure.status()
-        if self.defining and self.wall_facade:
-            self.error, self.wall_click = None, click
-            self._try_wall_facade()
-            return self.status()
-        if self.defining:
-            self.facade_clicks.append(click)
-            if len(self.facade_clicks) == 2:
-                clicks, self.facade_clicks = self.facade_clicks, []
-                try:
-                    self.facade = Facade(self.facade_from(clicks), clicks)
-                    self.defining = False
-                except ERRORS as exc:
-                    self.error = str(exc)
-                self._draw_facade()
-            return self.status()
         if self.current is None or len(self.current.clicks) >= self.current.needed():
             self.finish()  # nouvelle mesure, la précédente reste affichée
-            self.current = Measure(self, self.mode, self._surface())
+            self.current = Measure(self, self.mode, PRESET_SURFACES[self.mode])
         self.current.add_click(click, notice)
         return self.status()
 
@@ -893,32 +674,23 @@ class MeasureTool:
                 self.done.append(self.current)
             else:
                 self.current.remove()
-        self.current, self.facade_clicks, self.selected = None, [], None
+        self.current, self.selected = None, None
 
     def clear(self):
         """Efface la mesure en cours (les mesures terminées restent affichées)."""
         if self.current is not None:
             self.current.remove()
-        self.current, self.facade_clicks, self.error, self.selected = None, [], None, None
+        self.current, self.error, self.selected = None, None, None
 
     def clear_all(self):
-        """Efface aussi les mesures terminées et la façade."""
+        """Efface aussi les mesures terminées."""
         self.clear()
         for m in self.done:
             m.remove()
         self.done = []
-        self.facade = None
-        self.defining = self._surface() == "facade"
-        self._draw_facade()
 
     def remove(self):
-        self.clear()
-        for m in self.done:
-            m.remove()
-        self.done = []
-        if self.facade_item is not None:
-            self.facade_item.remove()
-            self.facade_item = None
+        self.clear_all()
 
     def measures(self):
         """Toutes les mesures affichées (terminées, puis en cours)."""
@@ -930,10 +702,8 @@ class MeasureTool:
         return self.recompute_walls()
 
     def recompute_walls(self):
-        """Façades du cadastre arrivées ou demandées : hauteurs recalculées, façade en attente
-        définie. Retourne le nombre de mesures concernées."""
-        if self.wall_click is not None:
-            self._try_wall_facade()
+        """Façades du cadastre arrivées ou demandées : hauteurs recalculées. Retourne le
+        nombre de mesures concernées."""
         heights = [m for m in self.measures() if m.kind == "height" and len(m.clicks) == m.needed()]
         for m in heights:
             m.compute()
@@ -965,21 +735,11 @@ class MeasureTool:
     # Recalage sur la carte ----------------------------------------------------
     def handles(self):
         """Poignées déplaçables sur la carte : [(clé, lon, lat)], clé ("point", mesure,
-        n° de point) ou ("facade", n° d'extrémité)."""
-        out = [(("point", m, k), lon, lat) for m in self.measures() for k, lon, lat in m.picks()]
-        if self.facade is not None and self._surface() == "facade":
-            out += [(("facade", i), p[0], p[1]) for i, p in enumerate(self.facade.points)]
-        return out
+        n° de point)."""
+        return [(("point", m, k), lon, lat) for m in self.measures() for k, lon, lat in m.picks()]
 
     def move_handle(self, key, lon, lat):
         """Recale une poignée à (lon, lat). Retourne le texte à afficher dans le panneau."""
-        if key[0] == "facade":
-            error = self.move_facade(key[1], lon, lat)
-            if error:
-                return error + " Recalage annulé."
-            measure = self.current or (self.done[-1] if self.done else None)
-            text = "Façade recalée sur la carte."
-            return text + (" " + measure.status() if measure is not None and measure.result else "")
         measure, index = key[1], key[2]
         measure.relocate(index, lon, lat)
         if measure.error:
@@ -994,14 +754,6 @@ class MeasureTool:
         return [self._marks(m) for m in self.done]
 
     def viewer_marks(self):
-        if self.defining:
-            points = []
-            for c in self.facade_clicks:
-                pos = c.get("pos") or [None, None]
-                raw = c.get("raw") or [c["yaw"], c["elev"]]
-                points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1], "abs_yaw": raw[0],
-                               "elev": raw[1]})
-            return {"points": points, "label": "", "beside": False}
         if self.current is None:
             return {"points": [], "label": "", "beside": False}
         return self._marks(self.current)
@@ -1014,30 +766,12 @@ class MeasureTool:
                      " : il sera replacé sur la {}".format(SURFACE_NAMES[measure.surface]))
             return ("Point {} sélectionné{}. Cliquez sa position exacte dans la photo (zoomez pour être précis), "
                     "ou « Effacer » pour annuler.").format(index + 1, where)
-        if self.defining and self.wall_facade:
-            if self.wall_click is not None:
-                return "Façade du cadastre : lecture du cadastre et du LiDAR HD…"
-            return prefix + "Façade du cadastre : cliquez sur le mur dans la photo."
-        if self.notice_facade and _empty(self.current):
-            return prefix + self.notice_facade + " Cliquez maintenant les points à mesurer sur la façade."
-        if self.defining:
-            if not self.facade_clicks:
-                return prefix + ("Façade : cliquez au pied du mur dans la photo, à une extrémité. Ses extrémités "
-                                 "se recalent ensuite en les glissant sur la carte, au bord du bâtiment.")
-            return "Façade : cliquez au pied du mur, à l'autre extrémité."
         m = self.current
         if m is not None and m.result:
             return m.status()
         n = len(m.clicks) if m is not None else 0
         if m is not None and m.error:
             prefix = m.error + " "
-        surface = m.surface if m is not None else self._surface()
-        if surface == "tri3d":
-            steps = ("Point 1 : cliquez-le sur cette photo.",
-                     "Point 1 : changez de photo et cliquez le même point, sous un autre angle.",
-                     "Point 2 : cliquez-le (sur cette photo ou une autre).",
-                     "Point 2 : changez de photo et cliquez le même point, sous un autre angle.")
-            return prefix + steps[min(n, 3)]
         hints = {
             "road": ("Cliquez au pied du premier bord (bordure, marquage, limite de chaussée…).",
                      "Cliquez au pied du bord opposé, pas forcément juste en face : la largeur est prise "
@@ -1046,13 +780,5 @@ class MeasureTool:
                       "Cliquez au sol à l'autre extrémité : la distance directe entre les deux points est mesurée."),
             "height": ("Cliquez dans la photo au pied de l'objet, exactement au contact du sol.",
                        "Cliquez au sommet de l'objet, sur la même photo."),
-        }.get(self.mode) or {
-            "ground": ("Cliquez le premier point, au sol.", "Cliquez le second point, au sol."),
-            "facade": ("Cliquez le premier point sur la façade.", "Cliquez le second point sur la façade."),
-            "vertical": ("Cliquez le premier point, au sol (pied de l'objet).",
-                         "Cliquez le second point, dans le plan vertical face à la caméra qui passe par le premier "
-                         "(sommet, angle…)."),
-            "horizontal": ("Cliquez le premier point sur le plan horizontal à {} m du sol.".format(
-                _num(self.plane_height, 2)), "Cliquez le second point sur le même plan."),
-        }[surface]
+        }[self.mode]
         return prefix + hints[min(n, 1)]

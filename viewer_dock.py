@@ -130,12 +130,7 @@ class PanoramaxDock(QDockWidget):
     measureModeChanged = pyqtSignal(str)
     photoClicked = pyqtSignal(object)  # clic de mesure : dict pic, lon, lat, yaw, elev, axis
     cameraHeightChanged = pyqtSignal(float)
-    # Mesure libre 3D : surface choisie, façade à (re)définir, hauteur du plan horizontal
-    surfaceChanged = pyqtSignal(str)
-    facadeRequested = pyqtSignal()
-    wallFacadeRequested = pyqtSignal()
-    wallChanged = pyqtSignal(bool)
-    planeHeightChanged = pyqtSignal(float)
+    wallChanged = pyqtSignal(bool)  # hauteur sur la façade du cadastre
     referenceChanged = pyqtSignal()  # référence du calage de la hauteur de caméra modifiée
     terrainChanged = pyqtSignal()  # option « Mesure sur un pont » changée (voir on_bridge)
     filterChanged = pyqtSignal(object)  # filtre des photos modifié (filters.PhotoFilter)
@@ -245,15 +240,13 @@ class PanoramaxDock(QDockWidget):
 
         self.measure_box = MeasurePanel(root)
         mp = self.measure_box
-        self.spin_camera, self.spin_plane = mp.spin_camera, mp.spin_plane  # lus par le plugin
+        self.spin_camera = mp.spin_camera  # lu par le plugin
         mp.aimClicked.connect(self._aim)
         mp.saveClicked.connect(self.measureSaveRequested)
         mp.clearClicked.connect(self.measureClearRequested)
         mp.clearAllClicked.connect(self.measureClearAllRequested)
         mp.modeChanged.connect(self._on_measure_mode)
-        mp.surfaceChanged.connect(self._on_surface)
-        for signal in ("cameraHeightChanged", "facadeRequested", "planeHeightChanged", "referenceChanged",
-                       "terrainChanged", "wallFacadeRequested", "wallChanged"):
+        for signal in ("cameraHeightChanged", "referenceChanged", "terrainChanged", "wallChanged"):
             getattr(mp, signal).connect(getattr(self, signal))
         self.measure_box.setVisible(False)
         self._update_measure_widgets()
@@ -360,10 +353,6 @@ class PanoramaxDock(QDockWidget):
     def on_bridge(self):
         return self.measure_box.on_bridge()
 
-    def surface(self):
-        """Surface de la mesure libre 3D (voir core/measures.FREE_SURFACES)."""
-        return self.measure_box.surface()
-
     def reference(self):
         """Référence du calage de la hauteur de caméra : ("ground" | "height", longueur en m)."""
         return self.measure_box.reference()
@@ -414,10 +403,6 @@ class PanoramaxDock(QDockWidget):
     def _on_measure_mode(self, mode):
         self._update_measure_widgets()
         self.measureModeChanged.emit(mode)
-
-    def _on_surface(self, surface):
-        self._update_measure_widgets()
-        self.surfaceChanged.emit(surface)
 
     # Filtre des photos ---------------------------------------------------------
     def photo_filter(self):

@@ -144,7 +144,7 @@ class PanoramaxPlugin:
         self.tool = None
         self.cursor = None
         self.triangulator = None
-        self.measures = None  # largeurs, hauteur et mesure libre 3D (MeasureTool)
+        self.measures = None  # largeurs, longueur et hauteur (MeasureTool)
         self.calibrator = None
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
@@ -157,7 +157,7 @@ class PanoramaxPlugin:
         self.terrain = TerrainProvider()
         self.roads = RoadAxisProvider()  # axe de la route au point mesuré (largeur perpendiculaire)
         self.roads.ready = self._on_road_axis
-        self.buildings = BuildingProvider()  # façade du cadastre visée (hauteur, mesure libre)
+        self.buildings = BuildingProvider()  # façade du cadastre visée (hauteur)
         self.buildings.ready = self._on_buildings
         self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
@@ -259,11 +259,7 @@ class PanoramaxPlugin:
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
             self.dock.terrainChanged.connect(self._on_terrain_changed)
             self.dock.referenceChanged.connect(self._on_reference_changed)
-            self.dock.surfaceChanged.connect(self._on_surface_changed)
-            self.dock.facadeRequested.connect(self._on_facade_requested)
-            self.dock.wallFacadeRequested.connect(self._on_wall_facade_requested)
             self.dock.wallChanged.connect(self._on_wall_changed)
-            self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
             self.dock.tiltChanged.connect(self._on_tilt_changed)
             self.terrain.bridge = self.dock.on_bridge()
@@ -514,8 +510,6 @@ class PanoramaxPlugin:
             self.measures = MeasureTool(self.canvas)
             self.measures.camera_height = self.dock.camera_height()
             self.measures.calibration = self.dock.calibration
-            self.measures.plane_height = self.dock.spin_plane.value()
-            self.measures.surface = self.dock.surface()
             self.measures.road_lookup = self.roads.lookup
             self.measures.wall_lookup = self.buildings.lookup
             self.measures.use_wall = self.dock.measure_box.chk_wall.isChecked()
@@ -588,7 +582,7 @@ class PanoramaxPlugin:
                                    QgsProject.instance()).transform(point)
         return p.x(), p.y()
 
-    # Outil de la carte pendant les largeurs, hauteurs et mesures libres : glisser un point
+    # Outil de la carte pendant les largeurs, longueurs et hauteurs : glisser un point
     # rouge ou une extrémité de façade le recale, glisser ailleurs déplace la carte
     def _update_edit_tool(self):
         active = (self.dock is not None and self.dock.btn_measure.isChecked()
@@ -702,11 +696,6 @@ class PanoramaxPlugin:
         if self.dock.btn_measure.isChecked():
             self._show_measure(self._active_measure().status())
 
-    def _on_wall_facade_requested(self):
-        self._end_landmark_tool()
-        self._ensure_measures().start_wall_facade()
-        self._show_measure(self.measures.status())
-
     def _on_road_axis(self):
         """Axe de la route lu (BD TOPO ou trajectoire) : largeurs perpendiculaires recalculées."""
         if self._unloaded or self.measures is None or self.dock is None:
@@ -745,21 +734,6 @@ class PanoramaxPlugin:
         self._ensure_measures().set_camera_height(value)
         if self.dock.measure_mode() in GROUND_MODES:
             self._show_measure(self._active_measure().status())
-
-    def _on_surface_changed(self, surface):
-        self._ensure_measures().set_surface(surface)
-        if self.dock.measure_mode() == "free":
-            self._show_measure(self.measures.status())
-
-    def _on_facade_requested(self):
-        self._end_landmark_tool()
-        self._ensure_measures().start_facade()
-        self._show_measure(self.measures.status())
-
-    def _on_plane_height(self, value):
-        self._ensure_measures().set_plane_height(value)
-        if self.dock.measure_mode() == "free":
-            self._show_measure(self.measures.status())
 
     def _on_measure_save(self):
         """« Enregistrer » : point triangulé, ou mesures terminées affichées."""

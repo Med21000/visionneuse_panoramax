@@ -1,16 +1,13 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Points 3D à partir des clics, pour les mesures libres dans un plan quelconque.
+"""Points 3D à partir des clics, pour les mesures (voir measures.py).
 
 Un clic ne donne qu'une direction ; le point 3D est l'intersection du rayon de
 visée avec une surface :
-- "ground" : le terrain (même calcul que les mesures au sol, voir ground.py) ;
-- "facade" : un plan vertical défini par deux points au pied d'un mur ;
-- "vertical" : le plan vertical face à la caméra passant par le premier point
-  de la mesure (généralisation de la mesure de hauteur) ;
-- "horizontal" : un plan horizontal à une hauteur donnée au-dessus du sol ;
-- "tri3d" : sans surface, par intersection de visées depuis deux photos.
+- le terrain (même calcul que les mesures au sol, voir ground.py) ;
+- un plan vertical : face à la caméra et passant par le pied de l'objet (hauteur),
+  ou celui d'une façade du cadastre (voir buildings.py).
 
 Repère local (est, nord, altitude) en mètres, centré sur un point de référence
 (lon0, lat0). La caméra est à la position (recalée) de la photo, à la hauteur de
@@ -27,7 +24,6 @@ from .triangulation import _geographic, _local
 
 MAX_RANGE = 100.0  # portée maximale d'un point sur un plan (m)
 GRAZING = 15.0  # en dessous de cet angle d'incidence sur un plan, la mesure devient imprécise
-MIN_CROSSING = 3.0  # angle minimal entre deux visées de triangulation 3D (degrés)
 
 
 class GeometryError(ValueError):
@@ -99,50 +95,6 @@ def facing_plane(cam, point):
     if math.hypot(dx, dy) < 0.1:
         raise GeometryError("Point trop proche de la caméra.")
     return point, (dx, dy, 0.0)
-
-
-def triangulate(rays):
-    """Point le plus proche de plusieurs visées 3D (moindres carrés) : (point, distances,
-    croisement en degrés). rays : [(centre, direction unitaire)]."""
-    a = [[0.0] * 3 for _ in range(3)]
-    b = [0.0, 0.0, 0.0]
-    for c, u in rays:
-        for i in range(3):
-            for j in range(3):
-                m = (1.0 if i == j else 0.0) - u[i] * u[j]
-                a[i][j] += m
-                b[i] += m * c[j]
-    crossing = max(_angle(u1, u2) for k, (_, u1) in enumerate(rays) for _, u2 in rays[k + 1:])
-    if crossing < MIN_CROSSING:
-        raise GeometryError("Visées presque parallèles ({:.0f}°) : visez le point depuis une photo plus "
-                            "décalée.".format(crossing))
-    x = _solve3(a, b)
-    ranges = [sum((x[i] - c[i]) * u[i] for i in range(3)) for c, u in rays]
-    if min(ranges) < 0.5:
-        raise GeometryError("Les visées ne se croisent pas devant les photos : visez bien le même point.")
-    return tuple(x), ranges, crossing
-
-
-def _angle(u, v):
-    """Angle entre deux droites (0 à 90°)."""
-    c = abs(sum(a * b for a, b in zip(u, v)))
-    return math.degrees(math.acos(min(1.0, c)))
-
-
-def _solve3(a, b):
-    (a11, a12, a13), (a21, a22, a23), (a31, a32, a33) = a
-    det = (a11 * (a22 * a33 - a23 * a32) - a12 * (a21 * a33 - a23 * a31) + a13 * (a21 * a32 - a22 * a31))
-    if abs(det) < 1e-12:
-        raise GeometryError("Visées parallèles : impossible de les croiser.")
-    out = []
-    for k in range(3):
-        m = [row[:] for row in a]
-        for i in range(3):
-            m[i][k] = b[i]
-        (m11, m12, m13), (m21, m22, m23), (m31, m32, m33) = m
-        out.append((m11 * (m22 * m33 - m23 * m32) - m12 * (m21 * m33 - m23 * m31)
-                    + m13 * (m21 * m32 - m22 * m31)) / det)
-    return out
 
 
 def decompose(p, q, axis=None):

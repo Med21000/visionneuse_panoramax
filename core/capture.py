@@ -15,6 +15,7 @@ cartouche et enregistrement : hôte (capture.py du plugin, page web).
 """
 
 import math
+import re
 
 OUT_W, OUT_H = 1920, 1080
 BACKGROUND = (40, 40, 40)
@@ -128,13 +129,7 @@ def caption_for(item, heading):
     names = [p.get("name") for p in providers if isinstance(p, dict) and p.get("name")]
     author = names[0] if names else None
     date = (props.get("datetime") or "")[:10]
-    lic = None
-    for link in item.get("links", []) or []:
-        if link.get("rel") == "license":
-            lic = link.get("title") or _license_label(link.get("href", ""))
-            break
-    if not lic:
-        lic = props.get("license") or item.get("license")
+    lic = license_name(item)
     parts = ["Panoramax"]
     if author:
         parts.append("© " + author)
@@ -145,6 +140,22 @@ def caption_for(item, heading):
     if lic:
         parts.append(str(lic))
     return "  ·  ".join(parts)
+
+
+def license_name(item):
+    """Licence de la photo, réduite à sa catégorie (« etalab-2.0 », « CC-BY-SA-4.0 ») : champ
+    license de la fiche, sinon le code entre parenthèses du titre du lien (« License for this
+    object (etalab-2.0) »), sinon d'après l'adresse de la licence. None si inconnue."""
+    props = item.get("properties", {}) or {}
+    lic = props.get("license") or item.get("license")
+    if lic and lic != "proprietary":
+        return str(lic)
+    for link in item.get("links", []) or []:
+        if link.get("rel") == "license":
+            title = link.get("title") or ""
+            code = re.search(r"\(([^()]+)\)\s*$", title)
+            return code.group(1) if code else (title or _license_label(link.get("href", "")))
+    return str(lic) if lic else None
 
 
 def _license_label(href):

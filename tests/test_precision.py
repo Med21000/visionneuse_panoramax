@@ -29,8 +29,11 @@ def photo(i, noise=0.0, differential=True, sequence="seq", altitude=True):
 
 
 class FakeServices:
-    def __init__(self, photos, lidar=True, down=()):
+    def __init__(self, photos, lidar=True, down=(), bbox=False, fail_after=None):
+        """bbox : la recherche ne renvoie que les photos de son emprise (limite comprise) ;
+        fail_after : service d'altimétrie injoignable après autant de requêtes."""
         self.photos, self.lidar, self.down, self.calls = photos, lidar, set(down), []
+        self.bbox, self.fail_after = bbox, fail_after
 
     def __call__(self, url, callback, timeout_ms=None, prefer_cache=False):
         host = urlsplit(url).netloc
@@ -38,7 +41,15 @@ class FakeServices:
         if host in self.down:
             callback(None, "délai dépassé")
         elif "search" in url:
-            callback({"features": self.photos}, None)
+            photos = self.photos
+            if self.bbox:
+                query = parse_qs(urlsplit(url).query)
+                x0, y0, x1, y1 = (float(v) for v in query["bbox"][0].split(","))
+                photos = [p for p in photos if x0 <= p["geometry"]["coordinates"][0] <= x1
+                          and y0 <= p["geometry"]["coordinates"][1] <= y1][:int(query["limit"][0])]
+            callback({"features": photos}, None)
+        elif self.fail_after is not None and self.calls.count(host) > self.fail_after:
+            callback(None, "HTTP 429")
         else:
             lats = [float(v) for v in parse_qs(urlsplit(url).query)["lat"][0].split("|")]
             # Sol qui monte de 1 cm par photo (5 m), comme l'altitude des photos
@@ -77,12 +88,43 @@ class Check(unittest.TestCase):
         self.assertIn("1 écartée", res["reason"])
 
     def test_slow_drift_refused(self):
-        # GPS lisse mais qui dérive de 1,5 cm par photo (30 cm sur 100 m) : écart-type sous 10 cm,
+        # GPS lisse mais qui dérive de 2 cm par photo (40 cm sur 100 m) : écart-type sous 20 cm,
         # mais pas une hauteur de caméra constante
-        photos = [photo(i, 0.015 * i) for i in range(20)]
+        photos = [photo(i, 0.02 * i) for i in range(20)]
         res = self.check(photos[0], FakeServices(photos))
         self.assertFalse(res["precise"])
         self.assertIn("dérive", res["reason"])
+
+    def test_other_portion_verifies_sequence(self):
+        # Séquence de 1 km : hauteur de caméra dispersée autour de la photo (pont, défaut du
+        # LiDAR), constante plus loin : la séquence est vérifiée par une autre portion
+        rng = random.Random(3)
+        photos = [photo(i, rng.gauss(0, 0.5) if i < 30 else rng.gauss(0, 0.02)) for i in range(200)]
+        services, checker = FakeServices(photos, bbox=True), precision.PrecisionChecker()
+        res = self.check(photos[0], services, checker)
+        self.assertTrue(res["precise"])
+        self.assertIn("m de la photo (même séquence)", res["reason"])
+        self.assertTrue(checker.known(photos[5])["precise"])  # pour toute la séquence
+
+    def test_other_portions_refused(self):
+        rng = random.Random(4)
+        photos = [photo(i, rng.gauss(0, 0.5)) for i in range(200)]  # DGPS sur toute la séquence
+        services = FakeServices(photos, bbox=True)
+        res = self.check(photos[0], services)
+        self.assertFalse(res["precise"])
+        self.assertIn("2 autres portions de la séquence non vérifiées", res["reason"])
+        # Une recherche par portion (3), la recherche des autres portions, une requête LiDAR par portion
+        self.assertEqual(services.calls.count("data.geopf.fr"), 3)
+
+    def test_other_portion_service_down(self):
+        # Service d'altimétrie injoignable pendant les autres portions : résultat provisoire
+        rng = random.Random(5)
+        photos = [photo(i, rng.gauss(0, 0.5) if i < 30 else 0.0) for i in range(200)]
+        checker = precision.PrecisionChecker()
+        res = self.check(photos[0], FakeServices(photos, bbox=True, fail_after=1), checker)
+        self.assertFalse(res["precise"])
+        self.assertTrue(res["transient"])
+        self.assertIsNone(checker.known(photos[0]))  # refait à la prochaine photo
 
     def test_dgps_sequence_not_verified(self):
         rng = random.Random(2)

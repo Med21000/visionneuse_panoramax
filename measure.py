@@ -13,7 +13,6 @@
 """
 
 import math
-from datetime import datetime
 
 from qgis.core import (
     QgsCoordinateReferenceSystem,
@@ -29,7 +28,7 @@ from qgis.PyQt.QtCore import QPointF, QRectF, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen
 
 from . import output
-from .core import calibration, triangulation
+from .core import tools
 from .core.measures import _num
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -44,7 +43,6 @@ LAYER_NAME = "Panoramax – points triangulés"
 LAYER_FIELDS = (
     "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
     "&field=dist_max_m:double&field=gps_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
-LONE_RAY = 60.0  # longueur (m) d'une visée tant qu'elle n'en croise aucune autre
 
 
 
@@ -119,78 +117,15 @@ class SightingsItem(QgsMapCanvasItem):
             scene.removeItem(self)
 
 
-class Triangulator:
-    """Visées en cours, résultat et enregistrement dans la couche."""
+class Triangulator(tools.Triangulator):
+    """Visées dessinées sur la carte QGIS, point enregistré dans la couche."""
 
     def __init__(self, canvas):
+        super().__init__()
         self.canvas = canvas
-        self.sightings = []  # dicts : pic, lon, lat, heading, accuracy, precise
-        self.result = None
-        self.error = None
-        self.item = None
 
-    # ------------------------------------------------------------------
-    def add(self, sighting):
-        """Ajoute une visée (remplace celle déjà faite depuis la même photo)."""
-        self.sightings = [s for s in self.sightings if s["pic"] != sighting["pic"]] + [sighting]
-        self._compute()
-        return self.status()
-
-    def clear(self):
-        self.sightings, self.result, self.error = [], None, None
-        self._draw()
-
-    def remove(self):
-        if self.item is not None:
-            self.item.remove()
-            self.item = None
-
-    def _compute(self):
-        self.result, self.error = None, None
-        if len(self.sightings) >= 2:
-            try:
-                self.result = triangulation.solve(self.sightings)
-            except triangulation.TriangulationError as exc:
-                self.error = str(exc)
-        self._draw()
-
-    def _draw(self):
-        if self.item is None:
-            if not self.sightings:
-                return
-            self.item = SightingsItem(self.canvas)
-        rays = []
-        for i, s in enumerate(self.sightings):
-            length = self.result["distances"][i] * 1.15 + 3 if self.result else LONE_RAY
-            end = triangulation.offset(s["lon"], s["lat"], s["heading"], length)
-            rays.append((s["lon"], s["lat"]) + end)
-        self.item.set_data(rays, (self.result["lon"], self.result["lat"]) if self.result else None)
-
-    # ------------------------------------------------------------------
-    def status(self):
-        n = len(self.sightings)
-        if n == 0:
-            return ("Placez le réticule sur l'objet puis « Viser ». Recommencez depuis une autre "
-                    "photo, sur le côté de l'objet.")
-        if n == 1:
-            return "1 visée. Changez de photo, visez le même objet puis « Viser » à nouveau."
-        if self.error:
-            return "{} visées : {}".format(n, self.error)
-        r = self.result
-        text = "{} visées : point à {} m · croisement {}° · incertitude ±{} m".format(
-            n, " / ".join(_num(d) for d in r["distances"]), _num(r["angle"], 0), _num(r["uncertainty"]))
-        if n > 2:
-            text += " · écart des visées {} m".format(_num(r["rms"]))
-        text += " · GPS ±{} m".format(_num(r["gps"]))
-        if r["gps_assumed"]:
-            text += " (précision inconnue pour certaines photos : {} m supposés)".format(
-                _num(triangulation.GPS_ACCURACY, 0))
-        if r["angle"] < 15:
-            text += ". Croisement faible : une visée plus latérale améliorerait le point."
-        if r["gps"] > triangulation.GPS_WARNING:
-            text += (". Position GPS des photos imprécise (±{} m) : visez depuis des photos mieux "
-                     "positionnées, ou d'autres séquences.".format(_num(r["gps"])))
-        return text
+    def new_item(self):
+        return SightingsItem(self.canvas)
 
     def save(self, parent=None):
         """Enregistre le point courant. Retourne (succès, message) ; message None si
@@ -204,16 +139,7 @@ class Triangulator:
         r = self.result
         geom = QgsGeometry.fromPointXY(QgsPointXY(r["lon"], r["lat"]))
         geom.transform(QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance()))
-        values = {
-            "nb_visees": len(self.sightings),
-            "angle": round(r["angle"], 1),
-            "incert_m": round(r["uncertainty"], 2),
-            "ecart_m": round(r["rms"], 2),
-            "dist_max_m": round(max(r["distances"]), 1),
-            "gps_m": round(r["gps"], 1),
-            "photos": ",".join(s["pic"] for s in self.sightings),
-            "date_mesure": datetime.now().isoformat(timespec="seconds"),
-        }
+        values = self.attributes()
         feat = QgsFeature(layer.fields())
         feat.setGeometry(geom)
         for name, value in values.items():
@@ -387,194 +313,14 @@ class MeasureItem(QgsMapCanvasItem):
 # --------------------------------------------------------------------------
 # Calage : inclinaison et cap
 # --------------------------------------------------------------------------
-class CalibrationTool:
-    """Clics de calage (voir core/calibration.py) : pied et sommet d'objets verticaux
-    (inclinaison de la photo), ou repère cliqué dans la photo puis sur la carte
-    (cap de la séquence)."""
+class CalibrationTool(tools.CalibrationTool):
+    """Visées vers les repères dessinées sur la carte QGIS."""
+
+    MAP_NAME = "la carte QGIS"
 
     def __init__(self, canvas, calibration, current, reference=None):
+        super().__init__(calibration, current, reference)
         self.canvas = canvas
-        self.calibration = calibration
-        self.current = current  # () -> (photo, séquence) affichées
-        self.reference = reference  # () -> ("ground" | "height", longueur connue en m)
-        self.mode = "tilt"
-        self.clicks = []  # clics en attente (dicts de PanoramaxDock.photoClicked)
-        self.error = None
-        self.last = None  # résultat du dernier calage (texte)
-        self.new_camera = None  # hauteur de caméra de la séquence, juste calée (à reporter dans le panneau)
-        self.item = None
 
-    def set_mode(self, mode):
-        self.mode = mode
-        self.reset()
-
-    def needs_profile(self):
-        """Le prochain clic doit-il toucher le sol ? (hauteur de caméra, sauf sommet d'un objet)"""
-        if self.mode != "camera":
-            return False
-        return self._reference()[0] == "ground" or not self.clicks
-
-    def _reference(self):
-        return self.reference() if self.reference else ("ground", 0.0)
-
-    def waiting_map(self):
-        """Le repère cliqué dans la photo attend son clic sur la carte."""
-        return self.mode == "heading" and len(self.clicks) == 1
-
-    def add_click(self, click, notice=None):
-        self.error, self.last = None, None
-        if self.mode == "camera":
-            self._add_camera_click(click)
-        elif self.mode == "heading":
-            if not click.get("sequence"):
-                self.error = "Séquence de la photo inconnue : recalage du cap impossible."
-            else:
-                self.clicks = [click]
-        else:
-            if self.clicks and self.clicks[0]["pic"] != click["pic"]:
-                self.clicks = []  # le sommet doit être sur la même photo que le pied
-            self.clicks.append(click)
-            if len(self.clicks) == 2:
-                bottom, top = (tuple(c["raw"]) for c in self.clicks)
-                self.clicks = []
-                try:
-                    r = self.calibration.add_vertical(click["pic"], bottom, top)
-                except calibration.CalibrationError as exc:
-                    self.error = str(exc)
-                else:
-                    self.last = "Inclinaison de la photo : {}° vers {}°{}.".format(
-                        _num(r["tilt"], 2), _num(r["toward"], 0),
-                        "" if r["residual"] is None else ", écart des objets {}°".format(_num(r["residual"], 2)))
-                    if r["partial"]:
-                        self.last += (" Correction partielle : cliquez un autre objet vertical, à environ 90° "
-                                      "du premier, pour corriger toute l'inclinaison.")
-        self._draw()
-        return self.status()
-
-    def _add_camera_click(self, click):
-        if not click.get("sequence"):
-            self.error = "Séquence de la photo inconnue : calage de la hauteur impossible."
-            return
-        if self.clicks and self.clicks[0]["pic"] != click["pic"]:
-            self.clicks = []  # les deux clics se font sur la même photo
-        self.clicks.append(click)
-        if len(self.clicks) < 2:
-            return
-        clicks, self.clicks = self.clicks, []
-        kind, known = self._reference()
-        try:
-            r = self.calibration.add_camera_height(click["sequence"], kind, clicks, known)
-        except calibration.CalibrationError as exc:
-            self.error = str(exc)
-        else:
-            self.new_camera = self.calibration.camera(click["sequence"])["height"]
-            self.last = "Caméra à {} m (±{} m) d'après cette référence de {} m.".format(
-                _num(r["height"], 2), _num(r["sigma"], 2), _num(known, 2))
-            if self.calibration.camera(click["sequence"])["count"] > 1:
-                self.last += " Avec les références précédentes : {} m.".format(_num(self.new_camera, 2))
-            self.last += " Hauteur reportée dans le réglage « Caméra à »."
-            if r["sigma"] > 0.25:
-                self.last += " Référence trop loin ou trop courte pour être précise : prenez-en une plus proche."
-
-    def add_map_point(self, mlon, mlat):
-        """Repère cliqué sur la carte (WGS84), après son clic dans la photo."""
-        if not self.waiting_map():
-            return self.status()
-        c, self.clicks = self.clicks[0], []
-        # Position et précision GPS d'origine : le recalage ne doit pas partir d'une position déjà recalée
-        lon, lat = c.get("gps") or (c["lon"], c["lat"])
-        accuracy = c.get("gps_accuracy", c.get("accuracy"))
-        survey = bool(c.get("precise")) and accuracy is not None and accuracy <= triangulation.SURVEY_ACCURACY
-        try:
-            r = self.calibration.add_landmark(c["sequence"], c["pic"], lon, lat, c["raw"][0],
-                                              c["raw"][1], mlon, mlat, accuracy, survey)
-        except calibration.CalibrationError as exc:
-            self.error = str(exc)
-        else:
-            pose = self.calibration.pose(c["sequence"])
-            n = pose["count"]
-            self.last = "Repère {} à {} m (écart de cap brut {}°).".format(
-                n, _num(r["distance"], 0), _num(r["offset"], 2))
-            if pose["positioned"]:
-                self.last += " Position recalée à ±{} m, cap à ±{}°.".format(
-                    _num(pose["shift_sigma"], 2), _num(pose["sigma"], 2))
-            elif n >= 3:
-                self.last += (" Repères mal répartis pour recaler la position : ajoutez-en dans d'autres "
-                              "directions (devant, derrière, sur les côtés).")
-            else:
-                self.last += (" Cap corrigé à ±{}°. À partir de 3 repères bien répartis autour de la photo, "
-                              "la position est recalée aussi.".format(_num(pose["sigma"], 2)))
-        self._draw()
-        return self.status()
-
-    def reset(self):
-        """Abandonne les clics en attente (le calage déjà fait est conservé)."""
-        self.clicks, self.error, self.last = [], None, None
-        self._draw()
-
-    def clear(self):
-        """Efface le calage du mode : inclinaison de la photo ou cap de la séquence affichée."""
-        pic, sequence = self.current()
-        if self.mode == "tilt" and pic:
-            self.calibration.clear_tilt(pic)
-        elif self.mode == "heading" and sequence:
-            self.calibration.clear_heading(sequence)
-        elif self.mode == "camera" and sequence:
-            self.calibration.clear_camera(sequence)
-        self.reset()
-
-    def remove(self):
-        if self.item is not None:
-            self.item.remove()
-            self.item = None
-
-    def _draw(self):
-        """Carte : visées vers les repères de la séquence affichée (mode cap)."""
-        _, sequence = self.current()
-        obs = self.calibration.landmarks.get(sequence, []) if self.mode == "heading" else []
-        if self.item is None:
-            if not obs:
-                return
-            self.item = SightingsItem(self.canvas)
-        rays = [(o["lon"], o["lat"], o["mlon"], o["mlat"]) for o in obs]
-        self.item.set_data(rays, (obs[-1]["mlon"], obs[-1]["mlat"]) if obs else None)
-
-    def viewer_marks(self):
-        points = []
-        for c in self.clicks:
-            pos = c.get("pos") or [None, None]
-            points.append({"pic": c.get("pic"), "yaw": pos[0], "pitch": pos[1],
-                           "abs_yaw": c["raw"][0], "elev": c["raw"][1]})
-        return {"points": points, "label": "", "beside": self.mode in ("tilt", "camera")}
-
-    def status(self):
-        n = len(self.clicks)
-        text = ""
-        if self.error:
-            text = self.error + " "
-        elif self.last:
-            text = self.last + " "
-        if self.mode == "camera":
-            kind, known = self._reference()
-            if kind == "height":
-                if n == 1:
-                    return text + "Cliquez le sommet de l'objet, sur la même photo."
-                return text + ("Cliquez au pied d'un objet de hauteur connue ({} m), puis à son sommet. "
-                               "Choisissez-le proche (moins de 10–15 m).".format(_num(known, 2)))
-            if n == 1:
-                return text + "Cliquez la seconde extrémité, au sol, sur la même photo."
-            return text + ("Cliquez au sol les deux extrémités d'une longueur connue ({} m) : trait de marquage, "
-                           "place de stationnement, ou longueur mesurée sur la carte. Choisissez-la proche "
-                           "(moins de 10–15 m) et plutôt en travers de la vue : dans l'axe, elle est moins précise.".format(_num(known, 2)))
-        if self.mode == "tilt":
-            if n == 1:
-                return text + "Cliquez le sommet du même objet."
-            return text + ("Cliquez le pied puis le sommet d'un objet bien vertical (poteau, angle de façade). "
-                           "Deux objets à environ 90° l'un de l'autre corrigent toute l'inclinaison de la photo.")
-        if n == 1:
-            return text + ("Cliquez maintenant ce même repère sur la carte QGIS (glisser pour déplacer la carte, "
-                           "molette pour zoomer, Échap pour annuler).")
-        return text + ("Cliquez dans la photo un repère net, visible aussi sur la carte (poteau, angle de bâtiment). "
-                       "Un repère seul corrige le cap (choisissez-le lointain) ; trois repères ou plus, bien "
-                       "répartis autour de la photo, recalent aussi sa position. Le recalage vaut pour les photos "
-                       "de la séquence à moins de {} m.".format(_num(calibration.REACH, 0)))
+    def new_item(self):
+        return SightingsItem(self.canvas)

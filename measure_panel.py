@@ -9,8 +9,6 @@ photo affichée et ligne d'aide. Les widgets affichés suivent le mode choisi ; 
 réglages sont enregistrés et chaque modification est signalée au panneau.
 """
 
-import math
-
 from qgis.core import QgsSettings
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
@@ -24,7 +22,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .core import calibration
+from .core.tools import calibration_text
 from .measure_tool import FREE_SURFACES
 
 MEASURE_MODES = (
@@ -40,50 +38,8 @@ MEASURE_MODES = (
 
 GROUND_MODES = ("width", "road", "height", "free")  # mesures par lancer de rayon (GroundMeasure, FreeMeasure)
 STATUS_LINES = 3  # hauteur réservée à la ligne d'aide (voir set_status)
+REEXPORTED = (calibration_text,)  # importée d'ici par le panneau et les tests
 
-
-def calibration_text(cal, pic, sequence, lon, lat):
-    """Calage de la photo et de la séquence affichées (texte, vide sans calage)."""
-    parts = []
-    tilt = cal.tilt(pic) if pic else None
-    if tilt and tilt.get("source", "clics") == "clics":
-        parts.append("inclinaison {:.1f}° corrigée{} ({} objet{})".format(
-            tilt["tilt"], " en partie" if tilt["partial"] else "", tilt["count"],
-            "s" if tilt["count"] > 1 else "").replace(".", ","))
-    elif tilt and tilt["source"].startswith("clics + "):
-        parts.append("inclinaison {:.1f}° corrigée ({} objet{} cliqué{}, complété{} par {}, ±{:.1f}°)".format(
-            tilt["tilt"], tilt["count"], *(("s", "s", "s") if tilt["count"] > 1 else ("", "", "")),
-            "les verticales de la photo" if tilt["source"].endswith("verticales") else "le LiDAR HD",
-            max(tilt["sigma"], 0.1)).replace(".", ","))
-    elif tilt and tilt["source"] == "verticales":
-        parts.append("inclinaison {:.1f}° corrigée automatiquement ({} verticales de la photo, ±{:.1f}°)".format(
-            tilt["tilt"], tilt["count"], max(tilt["sigma"], 0.1)).replace(".", ","))
-    elif tilt:
-        parts.append("inclinaison {:.1f}° estimée par la pente et le dévers LiDAR HD (±{:.1f}°, modèle vérifié "
-                     "sur {} photos de la séquence)".format(tilt["tilt"], tilt["sigma"], tilt["count"]).replace(".", ","))
-    camera = cal.camera(sequence) if sequence else None
-    if camera:
-        text = "caméra à {:.2f} m (±{:.2f} m, {} référence{})".format(
-            camera["height"], camera["sigma"], camera["count"], "s" if camera["count"] > 1 else "").replace(".", ",")
-        if camera.get("legacy"):
-            text += (", dont {} d'une version précédente, sans l'inclinaison automatique : refaites le calage"
-                     .format(camera["legacy"]))
-        parts.append(text)
-    pose = cal.pose(sequence, lon, lat) if sequence else None
-    if pose:
-        text = "cap {:+.2f}° (±{:.2f}°)".format(pose["offset"], pose["sigma"])
-        if pose["positioned"]:
-            sx, sy = pose["shift"]
-            text += ", position décalée de {:.2f} m vers {:.0f}° (±{:.2f} m)".format(
-                math.hypot(sx, sy), math.degrees(math.atan2(sx, sy)) % 360, pose["shift_sigma"])
-        text += " · {} repère{}".format(pose["count"], "s" if pose["count"] > 1 else "")
-        if pose["count"] > 3:
-            text += ", écart {:.2f}°".format(pose["residual"])
-        parts.append(text.replace(".", ","))
-    elif sequence and cal.landmarks.get(sequence):
-        parts.append("recalage de la séquence hors de portée (photo à plus de {:.0f} m des repères)".format(
-            calibration.REACH))
-    return "Calage : " + " · ".join(parts) if parts else ""
 
 
 class MeasurePanel(QWidget):

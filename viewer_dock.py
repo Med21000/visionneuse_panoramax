@@ -41,8 +41,8 @@ import math
 import os
 import re
 
-from . import altitude, api, qgis_host
-from .core import autotilt, precision
+from . import api, qgis_host
+from .core import autotilt, precision, tools
 from .core.calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
@@ -493,21 +493,6 @@ class PanoramaxDock(QDockWidget):
         except (KeyError, TypeError, ValueError, IndexError):
             return None, None
 
-    def _recalibrated(self, sequence, lon, lat, item):
-        """Position de la photo (recalée si possible) et sa précision en m."""
-        fixed = self.calibration.position(sequence, lon, lat)
-        if fixed:
-            return fixed
-        return lon, lat, self._accuracy(item)
-
-    # Précision GPS des photos (voir core/precision.py) --------------------------------
-    def _accuracy(self, item):
-        """Précision de la position de la photo affichée : vérifiée, sinon celle des métadonnées."""
-        q = self._quality
-        if q and q["precise"] and q["accuracy"] is not None and item is self._current_item:
-            return q["accuracy"]
-        return api.item_accuracy(item)
-
     def _on_precision(self, pic, res):
         if pic != self._current_pic:
             return  # photo déjà dépassée
@@ -538,18 +523,7 @@ class PanoramaxDock(QDockWidget):
     def _tilt_state(self):
         """(texte, manquante) : inclinaison de la photo affichée, pour la ligne d'état."""
         pic = self._current_pic
-        tilt = self.calibration.tilt(pic) if pic else None
-        if tilt:
-            if tilt["source"] == "clics":
-                return "inclinaison calée à la main", False
-            if tilt["source"].startswith("clics + "):
-                return "inclinaison calée à la main et automatiquement (±{:.1f}°)".format(
-                    max(tilt["sigma"], 0.1)).replace(".", ","), False
-            how = "verticales de la photo" if tilt["source"] == "verticales" else "pente et dévers LiDAR HD"
-            return "inclinaison calée ({}, ±{:.1f}°)".format(how, max(tilt["sigma"], 0.1)).replace(".", ","), False
-        if pic and self.tilts.pending(pic):
-            return "inclinaison en cours de calcul…", False
-        return "inclinaison non calée", True
+        return tools.tilt_state(self.calibration, pic, bool(pic) and self.tilts.pending(pic))
 
     def _warn_if_degraded(self):
         """À l'activation de la mesure, sur une photo en mode dégradé : fenêtre d'avertissement,
@@ -582,27 +556,9 @@ class PanoramaxDock(QDockWidget):
         if not item or item.get("id") != self._current_pic or (pic and pic != self._current_pic):
             self.message.emit("Photo en cours de chargement : cliquez à nouveau.", 1, "")
             return
-        try:
-            lon, lat = item["geometry"]["coordinates"][:2]
-        except (KeyError, TypeError, ValueError):
-            return
-        axis, axis_source = api.sequence_axis(item), "séquence"
-        if axis is None:
-            axis, axis_source = api.item_heading(item), "orientation de la photo"
-        pic_id, sequence = item.get("id", ""), item.get("collection")
-        lon, lat = float(lon), float(lat)
-        cyaw, celev = self.calibration.correct(pic_id, sequence, float(yaw), float(elev), lon, lat)
-        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        # Position vérifiée précise : altitude NGF de la caméra (hauteur de caméra sans calage,
-        # voir core/measures.MeasureTool.camera_info)
-        precise = bool(self._quality and self._quality["precise"])
-        camera_alt = altitude.ngf_altitude(lon, lat, api.item_altitude(item)) if precise else None
-        self.photoClicked.emit({"pic": pic_id, "lon": clon, "lat": clat, "camera_alt": camera_alt,
-                                "gps": [lon, lat], "gps_accuracy": self._accuracy(item),
-                                "yaw": cyaw, "elev": celev, "raw": [float(yaw) % 360, float(elev)],
-                                "sequence": sequence, "accuracy": accuracy,
-                                "precise": api.precise_heading(item) is not None,
-                                "axis": axis, "axis_source": axis_source, "pos": pos})
+        click = tools.photo_click(item, yaw, elev, self.calibration, self._quality, pos, api.sequence_axis(item))
+        if click is not None:
+            self.photoClicked.emit(click)
 
     def _on_native_click(self, yaw, elev):
         if self.btn_measure.isChecked() and self.measure_mode() != "tri":
@@ -663,10 +619,6 @@ class PanoramaxDock(QDockWidget):
         item = self._current_item
         if not item or item.get("id") != self._current_pic:
             return None  # fiche de la photo pas encore reçue
-        try:
-            lon, lat = item["geometry"]["coordinates"][:2]
-        except (KeyError, TypeError, ValueError):
-            return None
         precise = api.precise_heading(item)
         pitch = 0.0  # visionneuse de secours : centre de la vue sur l'horizon
         if self.web is None:
@@ -682,13 +634,7 @@ class PanoramaxDock(QDockWidget):
             heading = precise if precise is not None else api.item_heading(item)
         if heading is None:
             return None
-        pic_id, sequence = item.get("id", ""), item.get("collection")
-        lon, lat = float(lon), float(lat)
-        heading, _ = self.calibration.correct(pic_id, sequence, float(heading), pitch, lon, lat)
-        clon, clat, accuracy = self._recalibrated(sequence, lon, lat, item)
-        return {"pic": pic_id, "sequence": sequence, "lon": clon, "lat": clat, "heading": heading,
-                "accuracy": accuracy, "precise": precise is not None,
-                "heading_error": self.calibration.heading_error(sequence, lon, lat)}
+        return tools.photo_sighting(item, heading, pitch, self.calibration, self._quality)
 
     def _aim(self):
         sighting = self.current_sighting()

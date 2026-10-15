@@ -57,6 +57,23 @@ def segments(band, row0, height, width, azimuth):
     gx[:, 1:-1] = band[:, 2:] - band[:, :-2]
     slopes = np.linspace(-SLOPE_RANGE, SLOPE_RANGE, SLOPES)
     offs = np.arange(rows) - (rows - 1) / 2.0
+    # Somme le long de x + b·(r − milieu), interpolée entre deux colonnes : pour chaque pente,
+    # la ligne r est lue décalée de base[r] (poids 1 − frac[r]) et de base[r] + 1 (frac[r]).
+    # Les décalages entiers possibles sont peu nombreux : chaque fenêtre est décalée une fois
+    # pour chacun, puis chaque pente lit d'un coup ses lignes dans ces copies et en fait la
+    # somme pondérée (einsum). Mêmes calculs qu'une ligne après l'autre, en 2 appels à numpy
+    # par pente au lieu de 4 par ligne : environ 3 fois plus rapide en Python natif, et bien
+    # plus dans le navigateur (Pyodide, où chaque appel coûte cher et où le produit matriciel
+    # n'est pas optimisé).
+    plan = []
+    for b in slopes:
+        shift = b * offs
+        base = np.floor(shift).astype(int)
+        frac = (shift - base).astype(np.float32)
+        plan.append((np.stack([base, base + 1]), np.stack([1 - frac, frac])))
+    low = min(int(p[0].min()) for p in plan)
+    high = max(int(p[0].max()) for p in plan)
+    lines = np.arange(rows)
     out = []
 
     def direction(px, py):
@@ -64,16 +81,10 @@ def segments(band, row0, height, width, azimuth):
 
     for top in range(0, band.shape[0] - rows + 1, rows // 2):
         win = gx[top:top + rows]
+        shifted = np.stack([np.roll(win, -d, axis=1) for d in range(low, high + 1)])  # (décalage, ligne, x)
         acc = np.empty((SLOPES, width), np.float32)
-        for k, b in enumerate(slopes):
-            shift = b * offs
-            base = np.floor(shift).astype(int)
-            frac = (shift - base).astype(np.float32)
-            s = np.zeros(width, np.float32)
-            for r in range(rows):  # somme le long de x + b·(r − milieu), interpolée
-                row = win[r]
-                s += (1 - frac[r]) * np.roll(row, -base[r]) + frac[r] * np.roll(row, -base[r] - 1)
-            acc[k] = s
+        for k, (shifts, weights) in enumerate(plan):
+            acc[k] = np.einsum("kr,krx->x", weights, shifted[shifts - low, lines])
         acc = np.abs(acc)
         best = acc.argmax(axis=0)
         peak = acc[best, np.arange(width)]

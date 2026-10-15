@@ -10,7 +10,9 @@ photo est jugée précise (au décimètre) :
   vérifie sur sa séquence : pour les photos voisines, l'altitude GPS (convertie en NGF)
   moins le sol LiDAR HD sous la photo, c'est-à-dire la hauteur de la caméra, est constante
   à MAX_SPREAD près, sans dériver de plus de MAX_DRIFT. Un GPS non recalé (DGPS, GPS
-  simple) varie de plusieurs décimètres.
+  simple) varie de plusieurs décimètres. Si la portion de séquence autour de la photo est
+  refusée (pont, défaut du LiDAR), d'autres portions de la séquence sont essayées : une
+  seule vérifiée suffit pour toute la séquence.
   C'est le cas des photos imajbox du CD21 (RTK et centrale inertielle : 4,7 cm sur 100
   photos à Pouilly-en-Auxois).
 
@@ -34,6 +36,11 @@ PRECISE_ACCURACY = 0.20  # m : précision déclarée suffisante pour la hauteur 
 VERIFIED_ACCURACY = 0.10  # m : précision retenue pour une séquence vérifiée
 CHECK_RADIUS = 60.0  # m autour de la photo pour les photos voisines de la séquence
 CHECK_PHOTOS = 20
+# Portion autour de la photo refusée : autres portions de la même séquence essayées (une
+# seule vérifiée suffit, la séquence est relevée avec le même matériel)
+OTHER_PORTIONS = 2
+OTHER_RADIUS = 1000.0  # m
+OTHER_SEARCH = 100  # photos de la séquence parmi lesquelles choisir les autres portions
 MIN_PHOTOS = 8
 # Hauteur de caméra entre photos voisines : écart-type et dérive maximaux. Le sol LiDAR HD
 # (±10 cm), les bordures, le dévers et la suspension du véhicule la font varier de plus
@@ -240,9 +247,32 @@ class PrecisionChecker:
         host.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
 
     def _check_sequence(self, item, sequence, lon, lat, done):
+        """Portion de la séquence autour de la photo ; en cas d'échec, d'autres portions (voir
+        _other_portions) : une seule vérifiée suffit pour toute la séquence."""
+        def first(kind, value):
+            if kind == "photos":
+                self._check_lidar(lon, lat, done, "photos voisines indisponibles ({})".format(value), transient=True)
+            elif kind == "few":
+                self._check_lidar(lon, lat, done, "altitude GPS inexploitable ({} photos voisines)".format(value))
+            elif kind == "ground":
+                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(value), transient=True))
+            elif value["precise"] or value["lidar"] is not True:
+                done(value)  # vérifiée, ou pas de LiDAR HD ici : rien à chercher ailleurs
+            else:
+                self._other_portions(sequence, lon, lat, value, done)
+
+        self._portion(sequence, lon, lat, first)
+
+    def _portion(self, sequence, lon, lat, callback):
+        """Vérifie la portion de séquence autour de (lon, lat) : callback(genre, valeur), genre
+        « photos » ou « ground » (service injoignable, valeur : l'erreur), « few » (trop peu
+        d'altitudes GPS, valeur : leur nombre) ou « result » (valeur : résultat)."""
         def got_photos(data, error):
+            if error:
+                callback("photos", error)
+                return
             photos = []
-            for feat in ((data or {}).get("features") or []) if not error else []:
+            for feat in (data or {}).get("features") or []:
                 try:
                     plon, plat = (float(v) for v in feat["geometry"]["coordinates"][:2])
                 except (KeyError, TypeError, ValueError):
@@ -250,23 +280,77 @@ class PrecisionChecker:
                 ngf = host.ngf_altitude(plon, plat, metadata.item_altitude(feat))
                 if ngf is not None and feat.get("collection", sequence) == sequence:
                     photos.append((plon, plat, ngf))
-            if error:
-                self._check_lidar(lon, lat, done, "photos voisines indisponibles ({})".format(error), transient=True)
-                return
             if len(photos) < MIN_PHOTOS:
-                self._check_lidar(lon, lat, done, "altitude GPS inexploitable ({} photos voisines)".format(len(photos)))
+                callback("few", len(photos))
                 return
             host.fetch_json(lidar_url([(p[0], p[1]) for p in photos]),
                            lambda data, error: got_ground(photos, data, error), timeout_ms=terrain.TIMEOUT_MS)
 
         def got_ground(photos, data, error):
             if error:
-                done(result(False, reason="service d'altimétrie IGN indisponible ({})".format(error), transient=True))
+                callback("ground", error)
                 return
             pts = [(plon, plat, ngf - g) for (plon, plat, ngf), g in zip(photos, _ground(data)) if g is not None]
             if len(pts) < MIN_PHOTOS:
-                done(result(False, lidar=False, reason="pas de LiDAR HD pour vérifier la position"))
+                callback("result", result(False, lidar=False, reason="pas de LiDAR HD pour vérifier la position"))
                 return
-            done(verify_heights(pts))
+            callback("result", verify_heights(pts))
 
         host.fetch_json(metadata.search_url(lon, lat, CHECK_RADIUS, CHECK_PHOTOS, sequence, host.api_url), got_photos)
+
+    def _other_portions(self, sequence, lon, lat, failed, done):
+        """Portion autour de la photo refusée (failed) : jusqu'à OTHER_PORTIONS autres portions de
+        la séquence, à moins de OTHER_RADIUS, essayées l'une après l'autre (le service d'altimétrie
+        limite les rafales). La première vérifiée vaut pour toute la séquence ; si aucune ne
+        l'est, failed est retenu."""
+        def got_photos(data, error):
+            if error:
+                done(dict(failed, transient=True))  # à refaire plus tard
+                return
+            centers, taken = [], [(lon, lat)]
+            candidates = []
+            for feat in (data or {}).get("features") or []:
+                try:
+                    plon, plat = (float(v) for v in feat["geometry"]["coordinates"][:2])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if feat.get("collection", sequence) == sequence:
+                    candidates.append((plon, plat))
+            # Les plus éloignées d'abord, assez loin les unes des autres pour ne pas se recouvrir
+            candidates.sort(key=lambda p: -_metres(p, (lon, lat)))
+            for p in candidates:
+                if len(centers) < OTHER_PORTIONS and all(_metres(p, q) >= 2 * CHECK_RADIUS for q in taken):
+                    centers.append(p)
+                    taken.append(p)
+            try_next(centers, 0)
+
+        def try_next(centers, tried):
+            if not centers:
+                if tried:
+                    plural = "s" if tried > 1 else ""
+                    done(dict(failed, reason="{} ; {} autre{p} portion{p} de la séquence non vérifiée{p}".format(
+                        failed["reason"], tried, p=plural)))
+                else:
+                    done(failed)
+                return
+            (clon, clat), rest = centers[0], centers[1:]
+
+            def got(kind, value):
+                if kind in ("photos", "ground"):
+                    done(dict(failed, transient=True))
+                elif kind == "result" and value["precise"]:
+                    distance = _metres((clon, clat), (lon, lat))
+                    done(dict(value, reason="{}, à {:.0f} m de la photo (même séquence)".format(
+                        value["reason"], round(distance, -1))))
+                else:
+                    try_next(rest, tried + 1)
+
+            self._portion(sequence, clon, clat, got)
+
+        host.fetch_json(metadata.search_url(lon, lat, OTHER_RADIUS, OTHER_SEARCH, sequence, host.api_url), got_photos)
+
+
+def _metres(a, b):
+    """Distance (m) entre deux (lon, lat) proches."""
+    dx = (b[0] - a[0]) * 111320.0 * math.cos(math.radians((a[1] + b[1]) / 2))
+    return math.hypot(dx, (b[1] - a[1]) * 111320.0)

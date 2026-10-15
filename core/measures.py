@@ -140,18 +140,34 @@ class Measure:
 
     def relocate(self, index, lon, lat):
         """Recale le point n° index à la position (lon, lat) cliquée sur la carte. Son plan
-        vertical est orienté face à la photo qui l'a visé."""
-        c = self.clicks[index]
-        x, y = triangulation._local(lon, lat, c["lon"], c["lat"])
+        vertical est orienté face à la photo qui l'a visé. Sur le plan vertical (hauteur), le
+        pied et le sommet se déplacent ensemble, du même décalage : la mesure garde sa forme,
+        seule sa place change."""
         state = dict(self.overrides), set(self.aimed)
-        self.overrides[index] = (lon, lat, math.degrees(math.atan2(x, y)))
-        self.aimed.discard(index)  # le point est là où on l'a lâché
+        for k, (lon_k, lat_k) in self._moved(index, lon, lat).items():
+            c = self.clicks[k]
+            x, y = triangulation._local(lon_k, lat_k, c["lon"], c["lat"])
+            self.overrides[k] = (lon_k, lat_k, math.degrees(math.atan2(x, y)))
+            self.aimed.discard(k)  # le point est là où on l'a lâché
         self.compute()
         if self.error:
             error = self.error
             self.overrides, self.aimed = state
             self.compute()
             self.error = error
+
+    def _moved(self, index, lon, lat):
+        """Points déplacés quand le point n° index est lâché en (lon, lat) : {n° : (lon, lat)}.
+        Sur le plan vertical, tous ceux de la mesure, du même décalage horizontal."""
+        if self.surface != "vertical" or len(self.clicks) < self.needed():
+            return {index: (lon, lat)}
+        try:
+            pts, _, origin, _ = self.points()
+        except ERRORS:
+            return {index: (lon, lat)}
+        x, y = triangulation._local(lon, lat, origin[0], origin[1])
+        dx, dy = x - pts[index][0], y - pts[index][1]
+        return {k: geometry.to_geographic((p[0] + dx, p[1] + dy, 0.0), origin)[:2] for k, p in enumerate(pts)}
 
     def reaim(self, index, click):
         """Vise à nouveau le point n° index : le nouveau clic remplace le sien. Si la mesure a

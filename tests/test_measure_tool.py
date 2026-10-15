@@ -187,6 +187,24 @@ class Relocation(Base):
         self.assertValue(m, 4.0)
         self.assertEqual(len(m.picks()), 1)  # seul le pied est recalable
 
+    def test_height_moves_as_one(self):
+        # Pied et sommet (décalé de côté) glissés ensemble du même décalage : la hauteur garde sa
+        # forme sur la carte, puis une nouvelle visée de chaque point reste à cette profondeur
+        m = self.measure("height", [click((5.0, 5.0, 0.0)), click((3.0, 5.0, 4.0))])
+        before = m.points()[0]
+        m.relocate(0, *point(5.0, 8.0))
+        after = m.points()[0]
+        for p, q in zip(before, after):
+            self.assertAlmostEqual(q[0] - p[0], 0.0, places=6)
+            self.assertAlmostEqual(q[1] - p[1], 3.0, places=6)
+        top = after[1]
+        m.reaim(1, click((top[0], top[1], 4.0)))
+        m.reaim(0, click((5.0, 8.0, 0.3)))
+        foot, top = m.points()[0]
+        self.assertLess(math.hypot(top[0] - after[1][0], top[1] - after[1][1]), 1e-6)
+        self.assertLess(math.hypot(foot[0] - 5.0, foot[1] - 8.0), 1e-6)
+        self.assertValue(m, 3.7)
+
     def test_width_relocated(self):
         m = self.measure("width", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         m.relocate(1, *point(4.0, 20.0))

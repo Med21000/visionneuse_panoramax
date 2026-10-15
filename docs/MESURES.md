@@ -301,7 +301,7 @@ Le recalage combine les deux en deux gestes, que l'on peut alterner librement :
 
 Le curseur devient une main au survol d'un point déplaçable. L'outil précédent revient quand on arrête de mesurer ou qu'on passe en triangulation ou en calage.
 
-**Points concernés.** Tous les points des mesures affichées, mesures terminées comprises. Pour une hauteur (plan vertical face à la caméra), seul le **pied** se glisse : le sommet en découle.
+**Points concernés.** Tous les points des mesures affichées, mesures terminées comprises. Pour une hauteur (plan vertical face à la caméra), seul le **pied** se glisse, mais le **sommet le suit du même décalage** : la mesure garde sa forme sur la carte, seule sa place change, et les deux points sont recalés. Une nouvelle visée de l'un ou l'autre dans la visionneuse reste ensuite à cette profondeur (section 5.5).
 
 **Calcul d'un point glissé.** Sa position horizontale est celle de la carte ; son altitude est celle du **rayon de visée** à cette distance de la caméra :
 

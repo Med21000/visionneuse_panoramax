@@ -15,7 +15,7 @@ altitude = module("altitude")
 
 class NgfAltitude(unittest.TestCase):
     def test_pouilly_en_auxois(self):
-        # Photo imajbox du CD21 : altitude GPS 440,90 m, sol LiDAR HD 391,43 m sous la caméra
+        # Photo imajbox à position RTK : altitude GPS 440,90 m, sol LiDAR HD 391,43 m sous la caméra
         z = altitude.ngf_altitude(4.554558, 47.262279, 440.90)
         if z is None:
             self.skipTest("grille RAF20 indisponible (réseau ?)")

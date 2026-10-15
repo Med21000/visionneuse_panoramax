@@ -3,7 +3,7 @@
 Journal des revues et des choix d'architecture, à lire avant un travail de fond. Le plus
 récent en premier. Non livré avec le plugin (exclu du zip de release).
 
-## 2026-10-12 — Revue de code, corrections, application web pour les agents
+## 2026-10-12 — Revue de code, corrections, application web
 
 ### Revue de code (version 1.2.0)
 
@@ -65,9 +65,9 @@ explore.panoramax.fr — page HTML locale chargeant `@panoramax/web-viewer`, dia
 Python par QWebChannel (événements au lieu d'interrogations), API publique au lieu
 d'internes.
 
-### Application web pour les agents (au bureau)
+### Application web (au bureau, sans QGIS)
 
-Besoin : des agents qui n'utilisent pas QGIS, au bureau (poste fixe, grand écran, souris,
+Besoin : des utilisateurs sans QGIS, au bureau (poste fixe, grand écran, souris,
 connexion filaire), pour préparer et vérifier leurs interventions. Pas de tablette ni de
 4G à prévoir.
 
@@ -96,7 +96,7 @@ Condition préalable, utile au plugin quelle que soit la suite : **séparer le c
 - Cible : un paquet `core` sans import QGIS, recevant une fonction d'accès réseau en
   paramètre, et des adaptateurs fins (QGIS : `QgsNetworkAccessManager` ; web : `fetch`).
 
-À vérifier tôt : depuis un poste d'agent, que le proxy ou le pare-feu du département laisse
+À vérifier tôt : depuis un poste d'entreprise, que le proxy ou le pare-feu laisse
 passer, depuis le navigateur, Panoramax, la Géoplateforme IGN et les services d'altitude de
 secours (Open-Meteo), y compris leurs en-têtes CORS.
 

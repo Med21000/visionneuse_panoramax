@@ -84,7 +84,7 @@ Le plugin ne connaît ni la **hauteur de la caméra** au-dessus du sol, ni son *
 
 L'API Panoramax arrondit `view:azimuth` au degré, soit jusqu'à 0,5° d'erreur de visée (17 cm à 20 m). Quand l'EXIF contient `GPSImgDirection` au centième et qu'il concorde à moins de 1° avec `view:azimuth` (même mesure, non arrondie), le plugin l'utilise. La visionneuse web s'oriente sur la valeur arrondie : le plugin corrige l'écart dans ses calculs.
 
-Sur les photos IMAJING imajbox 360 HD du Conseil départemental de la Côte-d'Or, le cap EXIF suit la trajectoire du véhicule à 0,33° près (écart-type sur 700 photos en ligne droite), avec un décalage constant de 3,2° dû au montage de la caméra : l'EXIF décrit bien l'orientation de l'image (vérifié sur le point de fuite d'une route droite).
+Sur les photos IMAJING imajbox 360 HD à position RTK, le cap EXIF suit la trajectoire du véhicule à 0,33° près (écart-type sur 700 photos en ligne droite), avec un décalage constant de 3,2° dû au montage de la caméra : l'EXIF décrit bien l'orientation de l'image (vérifié sur le point de fuite d'une route droite).
 
 ### 2.5 Position de la caméra
 
@@ -115,10 +115,10 @@ Dans cet ordre :
 
 ### 2.7 Précision GPS vérifiée et mode dégradé
 
-Panoramax annonce souvent une précision générique (2 m pour le matériel de relevé), alors que certaines photos ont une position recalée en post-traitement (GNSS RTK et centrale inertielle), comme celles de l'imajbox 360 HD du conseil départemental de la Côte-d'Or. Le plugin vérifie la précision de chaque séquence d'après les **métadonnées des photos** (`core/precision.py`) :
+Panoramax annonce souvent une précision générique (2 m pour le matériel de relevé), alors que certaines photos ont une position recalée en post-traitement (GNSS RTK et centrale inertielle), comme celles de l'imajbox 360 HD à position RTK. Le plugin vérifie la précision de chaque séquence d'après les **métadonnées des photos** (`core/precision.py`) :
 
 - si l'EXIF déclare une précision (`GPSHPositioningError`) d'au plus 0,20 m, elle est retenue telle quelle ;
-- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 20 cm près (écart-type) sur au moins 8 photos, **la même sur les deux moitiés** de la portion vérifiée à 15 cm près (un GPS non recalé peut être lisse sur quelques photos, mais il dérive), et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Les photos dont la hauteur s'écarte de plus de 4 écarts médians absolus (pont, défaut du LiDAR) sont écartées avant le calcul. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence CD21 de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m. Les seuils, d'abord de 10 cm, refusaient 5 points sur 72 dans Pouilly-en-Auxois (sept séquences imajbox RTK) : 10,5 à 19,8 cm d'écart-type, ou 11 cm de dérive. Le sol LiDAR HD (±10 cm), les bordures, le dévers et la suspension du véhicule suffisent à faire varier la hauteur de caméra de plus de 10 cm. Si la portion autour de la photo est refusée alors que le LiDAR HD y est publié, **deux autres portions** de la même séquence, choisies à moins d'un kilomètre et les plus éloignées possible, sont essayées l'une après l'autre : une seule vérifiée suffit pour toute la séquence, relevée avec le même matériel. Le RTK peut perdre sa correction par endroits (arbres, façades hautes) ; sur les imajbox, la centrale inertielle limite alors l'écart.
+- sinon, si la position a reçu une **correction différentielle** (`GPSDifferential`), la vérification se fait sur les photos voisines de la séquence (jusqu'à 20, à moins de 60 m) : leur altitude GPS (`GPSAltitude`, ellipsoïdale), convertie en altitude NGF-IGN69 par la grille du géoïde **RAF20** de l'IGN (téléchargée à la demande par PROJ via QGIS), moins le sol LiDAR HD sous chaque photo, donne la hauteur de la caméra. Constante à 20 cm près (écart-type) sur au moins 8 photos, **la même sur les deux moitiés** de la portion vérifiée à 15 cm près (un GPS non recalé peut être lisse sur quelques photos, mais il dérive), et plausible (0,5 à 4 m), elle prouve une position recalée : la séquence est jugée précise à **0,10 m**. Les photos dont la hauteur s'écarte de plus de 4 écarts médians absolus (pont, défaut du LiDAR) sont écartées avant le calcul. Un GPS simple ou un DGPS varie de plusieurs décimètres. Sur la séquence imajbox RTK de Pouilly-en-Auxois : 2 cm sur 20 photos, caméra à 1,87 m. Les seuils, d'abord de 10 cm, refusaient 5 points sur 72 dans Pouilly-en-Auxois (sept séquences imajbox RTK) : 10,5 à 19,8 cm d'écart-type, ou 11 cm de dérive. Le sol LiDAR HD (±10 cm), les bordures, le dévers et la suspension du véhicule suffisent à faire varier la hauteur de caméra de plus de 10 cm. Si la portion autour de la photo est refusée alors que le LiDAR HD y est publié, **deux autres portions** de la même séquence, choisies à moins d'un kilomètre et les plus éloignées possible, sont essayées l'une après l'autre : une seule vérifiée suffit pour toute la séquence, relevée avec le même matériel. Le RTK peut perdre sa correction par endroits (arbres, façades hautes) ; sur les imajbox, la centrale inertielle limite alors l'écart.
 
 La vérification se fait une fois par séquence, en arrière-plan à l'affichage de la photo (deux requêtes : fiches des photos voisines, environ 100 Ko ; altitudes LiDAR, moins de 1 Ko), et son résultat est gardé pour la session.
 
@@ -221,7 +221,7 @@ Elle ne compte pas l'erreur du GPS, qui déplace la mesure entière sans changer
 
   La largeur est d'abord calculée avec la direction du véhicule (« lecture de la BD TOPO… »), puis recalculée dès que l'axe arrive. Le résultat indique la source : « axe 47° (BD TOPO, D977BIS) ».
 
-  **Validation** (séquence CD21 de Pouilly-en-Auxois, 12/10/2026). Sur 419 points, BD TOPO et trajectoire du véhicule s'accordent à 0,4° en ligne droite et 0,8° en courbe (médianes) ; aux carrefours où le véhicule tourne, l'orthophoto montre que la BD TOPO suit la route et la trajectoire la coupe. Largeur simulée 15 m devant la caméra, comparée à la direction de la route à cet endroit (trajectoire lissée sur 30 m) :
+  **Validation** (séquence imajbox RTK de Pouilly-en-Auxois, 12/10/2026). Sur 419 points, BD TOPO et trajectoire du véhicule s'accordent à 0,4° en ligne droite et 0,8° en courbe (médianes) ; aux carrefours où le véhicule tourne, l'orthophoto montre que la BD TOPO suit la route et la trajectoire la coupe. Largeur simulée 15 m devant la caméra, comparée à la direction de la route à cet endroit (trajectoire lissée sur 30 m) :
 
   | | Axe BD TOPO au point mesuré | Direction du véhicule à la caméra |
   |---|---|---|
@@ -247,7 +247,7 @@ Elle ne compte pas l'erreur du GPS, qui déplace la mesure entière sans changer
 
 #### Validation des façades (12/10/2026)
 
-Référence : points de façades triangulés entre deux photos RTK consécutives du CD21 (5 m d'écart, inclinaison automatique calée), appariés automatiquement (SIFT) et regroupés en plans verticaux ; erreur sur la distance au mur, en médiane (90 % des points sous) :
+Référence : points de façades triangulés entre deux photos imajbox RTK consécutives (5 m d'écart, inclinaison automatique calée), appariés automatiquement (SIFT) et regroupés en plans verticaux ; erreur sur la distance au mur, en médiane (90 % des points sous) :
 
 | | Pouilly-en-Auxois (14 façades) | Autour de Dijon (21) | Nuits-Saint-Georges et Semur-en-Auxois (90) |
 |---|---|---|---|
@@ -283,7 +283,7 @@ avec `tᵢ` la distance de la photo au point, `εᵢ` l'erreur de visée (1°, 0
 
 **Géométrie favorable.** L'erreur vaut à peu près `σ / sin θ` (θ : angle de croisement) : viser avec au moins 30° de croisement, idéalement 60 à 90°, depuis des photos proches de l'objet.
 
-**Ordre de grandeur.** Sur 15 points simulés à partir de vraies photos imajbox du CD21 (visées à 5–30 m), l'écart médian au point visé est de 3 cm (11 cm au plus) avec le cap EXIF précis et la pondération, contre 8 cm (29 cm) auparavant. Ces écarts sont relatifs aux positions GPS des photos : la position absolue reste à la précision du GPS, sauf recalage (section 6.3).
+**Ordre de grandeur.** Sur 15 points simulés à partir de vraies photos imajbox à position RTK (visées à 5–30 m), l'écart médian au point visé est de 3 cm (11 cm au plus) avec le cap EXIF précis et la pondération, contre 8 cm (29 cm) auparavant. Ces écarts sont relatifs aux positions GPS des photos : la position absolue reste à la précision du GPS, sauf recalage (section 6.3).
 
 ### 4.5 Mesure libre 3D
 
@@ -456,7 +456,7 @@ Le calage à la main sur deux objets ou plus l'emporte sur l'inclinaison automat
 
 ### 6.1 bis Inclinaison automatique, par photo
 
-**Constat.** Diagnostic du 12/10/2026 sur 28 photos imajbox du CD21 (Pouilly-en-Auxois) : les panoramas ne sont pas mis à niveau. La caméra penche de 1 à 3° avec le véhicule ; le tangage suit la pente de la route (corrélation 0,95), le roulis son dévers. Sans correction, un point au sol à 6 m est déplacé d'environ 37 cm par degré.
+**Constat.** Diagnostic du 12/10/2026 sur 28 photos imajbox (Pouilly-en-Auxois) : les panoramas ne sont pas mis à niveau. La caméra penche de 1 à 3° avec le véhicule ; le tangage suit la pente de la route (corrélation 0,95), le roulis son dévers. Sans correction, un point au sol à 6 m est déplacé d'environ 37 cm par degré.
 
 **Quand.** Dès que la mesure est active, pour chaque photo 360° affichée qui n'a pas d'inclinaison calée à la main sur deux objets ou plus : le plugin télécharge la photo HD (7 à 8 Mo pour l'imajbox) et calcule en arrière-plan (3 à 5 s). Seule la photo affichée est analysée : quittée avant la fin, son téléchargement est interrompu et rien n'est enregistré (elle sera reprise si on y revient). Le résultat est conservé dans le profil QGIS, dans un fichier à part (`visionneuse_panoramax/inclinaisons.json`, une entrée par photo analysée) : une photo n'est analysée qu'une fois. Les clics faits sur la photo avant la fin du calcul sont corrigés à son arrivée, et leurs mesures recalculées.
 

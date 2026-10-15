@@ -13,7 +13,7 @@ photo est jugée précise (au décimètre) :
   simple) varie de plusieurs décimètres. Si la portion de séquence autour de la photo est
   refusée (pont, défaut du LiDAR), d'autres portions de la séquence sont essayées : une
   seule vérifiée suffit pour toute la séquence.
-  C'est le cas des photos imajbox du CD21 (RTK et centrale inertielle : 4,7 cm sur 100
+  C'est le cas des photos imajbox 360 HD (RTK et centrale inertielle : 4,7 cm sur 100
   photos à Pouilly-en-Auxois).
 
 Une photo précise donne la hauteur de caméra par son altitude (voir

@@ -4,7 +4,7 @@
 """Inclinaison d'une photo 360° calculée d'après ses verticales, sans clic.
 
 Une caméra montée sur un véhicule penche avec lui (pente de la route, dévers, virages) : 1 à
-3° sur les photos imajbox du CD21, autant d'erreur de visée. Sur une photo équirectangulaire
+3° sur les photos imajbox, autant d'erreur de visée. Sur une photo équirectangulaire
 de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent
 verticales dans l'image ; la caméra penchée, elles s'inclinent selon une loi connue.
 

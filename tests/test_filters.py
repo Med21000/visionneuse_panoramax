@@ -12,7 +12,7 @@ install_qgis_stub()
 filters = module("filters")
 PhotoFilter = filters.PhotoFilter
 
-FULL = PhotoFilter(since="2024-01-15", kind="360", max_gps=2.0, producer=("acc-1", "CD21"))
+FULL = PhotoFilter(since="2024-01-15", kind="360", max_gps=2.0, producer=("acc-1", "Producteur A"))
 
 
 class FakeSettings:
@@ -29,7 +29,7 @@ class FakeSettings:
 def item(datetime="2025-05-28T10:00:00Z", fov=360, gps=1.5, producer="acc-1", in_properties=False):
     props = {"datetime": datetime, "pers:interior_orientation": {"field_of_view": fov},
              "quality:horizontal_accuracy": gps}
-    providers = [{"name": "CD21", "id": producer, "roles": ["producer"]}] if producer else []
+    providers = [{"name": "Producteur A", "id": producer, "roles": ["producer"]}] if producer else []
     out = {"id": "p1", "properties": props}
     if in_properties:
         props["providers"] = providers
@@ -88,13 +88,13 @@ class Matches(unittest.TestCase):
 
 class Describe(unittest.TestCase):
     def test_describe(self):
-        self.assertEqual(FULL.describe(), "depuis le 15/01/2024, 360°, GPS ≤ 2 m, producteur « CD21 »")
+        self.assertEqual(FULL.describe(), "depuis le 15/01/2024, 360°, GPS ≤ 2 m, producteur « Producteur A »")
         self.assertEqual(PhotoFilter(kind="flat", max_gps=4.5).describe(), "classiques, GPS ≤ 4,5 m")
         self.assertEqual(PhotoFilter().describe(), "")
 
     def test_item_producer(self):
-        self.assertEqual(filters.item_producer(item()), ("acc-1", "CD21"))
-        self.assertEqual(filters.item_producer(item(in_properties=True)), ("acc-1", "CD21"))
+        self.assertEqual(filters.item_producer(item()), ("acc-1", "Producteur A"))
+        self.assertEqual(filters.item_producer(item(in_properties=True)), ("acc-1", "Producteur A"))
         self.assertIsNone(filters.item_producer(item(producer=None)))
         self.assertIsNone(filters.item_producer(None))
         other = {"providers": [{"name": "Hébergeur", "id": "h", "roles": ["host"]}]}

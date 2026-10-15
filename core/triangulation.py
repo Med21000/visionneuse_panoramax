@@ -22,7 +22,7 @@ import math
 EARTH_RADIUS = 6371008.8
 HEADING_ERROR = 1.0  # erreur de visée supposée (degrés) pour l'incertitude affichée
 # Matériel de relevé (GPS corrigé à SURVEY_ACCURACY m ou mieux, cap EXIF au centième) :
-# sur les photos imajbox du CD21, le cap suit la trajectoire à 0,33° près (écart-type).
+# sur les photos imajbox à position RTK, le cap suit la trajectoire à 0,33° près (écart-type).
 SURVEY_HEADING_ERROR = 0.5
 SURVEY_ACCURACY = 2.0
 MIN_ANGLE = 3.0  # en dessous, les visées sont jugées parallèles

@@ -7,7 +7,7 @@ Pour une hauteur dont le pied est caché (voiture, haie, muret), ou pour défini
 d'un seul clic : le mur est le premier bord de bâtiment du cadastre (Parcellaire Express,
 service WFS de la Géoplateforme) que coupe la visée horizontale depuis la photo.
 
-Tests du 12/10/2026 (façades triangulées entre photos RTK du CD21 ; erreur sur la distance au
+Tests du 12/10/2026 (façades triangulées entre photos imajbox RTK ; erreur sur la distance au
 mur) : à Nuits-Saint-Georges et Semur-en-Auxois (90 façades), cadastre à 0,18 m en médiane,
 90 % sous 0,8 m ; autour de Dijon, 0,08 m ; mais 0,8 m à Pouilly-en-Auxois, et des erreurs
 grossières (2 à 18 m) quand le mur visé manque au cadastre (annexe, clôture). Le MNS du LiDAR

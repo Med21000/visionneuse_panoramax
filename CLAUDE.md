@@ -2,7 +2,7 @@
 
 Plugin QGIS 4 (Python, Qt6) qui intègre la visionneuse Panoramax et permet des mesures à
 l'écran (largeurs, hauteurs, distances 3D, triangulation, calage des photos). Auteur :
-Cédric COCHART. Utilisé dans un contexte de conseil départemental (voirie).
+Cédric COCHART. Usage : mesures sur les photos Panoramax, notamment de voirie.
 
 Historique des décisions, revue de code et feuille de route : `docs/feuille-de-route.md`.
 À lire avant tout travail de fond sur le plugin ou sur l'application web envisagée.

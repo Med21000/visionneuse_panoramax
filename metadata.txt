@@ -28,7 +28,7 @@ changelog=1.3.0
     - Vérification RTK plus robuste ; triangulation tenant compte des erreurs communes à une séquence ; capture HD redressée
     - Corrections : commentaire des mesures enregistrées conservé, réponses réseau périmées ignorées, moins d'appels aux services
     1.2.0
-    - Précision GPS des photos vérifiée d'après leurs métadonnées (précision déclarée, ou correction différentielle contrôlée sur la séquence) ; position recalée par RTK reconnue (photos imajbox du CD21)
+    - Précision GPS des photos vérifiée d'après leurs métadonnées (précision déclarée, ou correction différentielle contrôlée sur la séquence) ; position recalée par RTK reconnue (photos imajbox, par exemple)
     - Hauteur de caméra déduite de l'altitude GPS pour une position vérifiée, sans calage
     - Altitudes du terrain par le MNT LiDAR HD de l'IGN là où il est publié
     - Mode de mesure dégradé annoncé à l'activation de la mesure quand il manque la position vérifiée ou le LiDAR HD ; ligne d'état sous les boutons de mesure

@@ -38,7 +38,7 @@ def png():
 IMAGE = png()
 
 
-def item(pid, sequence="seq", prev=None, nxt=None, producer=("prod-1", "CD21")):
+def item(pid, sequence="seq", prev=None, nxt=None, producer=("prod-1", "Producteur A")):
     links = [{"rel": rel, "href": "https://x/api/collections/{}/items/{}".format(sequence, p)}
              for rel, p in (("prev", prev), ("next", nxt)) if p]
     return {"id": pid, "collection": sequence, "geometry": {"type": "Point", "coordinates": [5.0415, 47.322]},
@@ -216,7 +216,7 @@ class Filter(Base):
         row.cmb_producer.setCurrentIndex(row.cmb_producer.findData("prod-1"))
         row.cmb_producer.activated.emit(row.cmb_producer.currentIndex())
         flt = self.dock.photo_filter()
-        self.assertEqual((flt.kind, flt.producer), ("360", ("prod-1", "CD21")))
+        self.assertEqual((flt.kind, flt.producer), ("360", ("prod-1", "Producteur A")))
         self.assertTrue(self.dock.btn_filter.text().startswith("Filtre ●"))
         self.assertEqual(self.emitted("filterChanged")[-1][0], flt)
         self.button("Aucun filtre").click()

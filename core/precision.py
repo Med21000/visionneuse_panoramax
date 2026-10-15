@@ -9,7 +9,8 @@ photo est jugée précise (au décimètre) :
 - ou si sa position a reçu une correction différentielle (GPSDifferential) et que cela se
   vérifie sur sa séquence : pour les photos voisines, l'altitude GPS (convertie en NGF)
   moins le sol LiDAR HD sous la photo, c'est-à-dire la hauteur de la caméra, est constante
-  à MAX_SPREAD près. Un GPS non recalé (DGPS, GPS simple) varie de plusieurs décimètres.
+  à MAX_SPREAD près, sans dériver de plus de MAX_DRIFT. Un GPS non recalé (DGPS, GPS
+  simple) varie de plusieurs décimètres.
   C'est le cas des photos imajbox du CD21 (RTK et centrale inertielle : 4,7 cm sur 100
   photos à Pouilly-en-Auxois).
 
@@ -34,7 +35,13 @@ VERIFIED_ACCURACY = 0.10  # m : précision retenue pour une séquence vérifiée
 CHECK_RADIUS = 60.0  # m autour de la photo pour les photos voisines de la séquence
 CHECK_PHOTOS = 20
 MIN_PHOTOS = 8
-MAX_SPREAD = 0.10  # m : écart-type maximal de la hauteur de caméra entre photos voisines
+# Hauteur de caméra entre photos voisines : écart-type et dérive maximaux. Le sol LiDAR HD
+# (±10 cm), les bordures, le dévers et la suspension du véhicule la font varier de plus
+# de 10 cm sur des séquences RTK (Pouilly-en-Auxois, 2026-10-15 : 5 points sur 72 refusés
+# à 10 cm, de 10,5 à 19,8 cm, ou dérive de 11 cm) ; un GPS non recalé varie de plusieurs
+# décimètres.
+MAX_SPREAD = 0.20  # m : écart-type
+MAX_DRIFT = 0.15  # m : écart entre les deux moitiés de la portion vérifiée
 OUTLIER = 4.0  # photos écartées au-delà de OUTLIER écarts médians absolus (corrigés)
 MIN_MAD = 0.02  # m : écart médian minimal (photos très régulières)
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m)
@@ -134,7 +141,7 @@ def verify_heights(pts):
     Robuste : les photos dont la hauteur s'écarte de plus de OUTLIER écarts (écart médian
     absolu) sont écartées (pont, défaut du LiDAR, arrêt sous un arbre) ; la dispersion des
     autres doit rester sous MAX_SPREAD. La hauteur doit aussi être la même sur les deux
-    moitiés de la portion vérifiée (à MAX_SPREAD près) : un GPS non recalé peut être lisse
+    moitiés de la portion vérifiée (à MAX_DRIFT près) : un GPS non recalé peut être lisse
     sur quelques photos, mais il dérive."""
     heights = [h for _, _, h in pts]
     median = statistics.median(heights)
@@ -156,13 +163,13 @@ def verify_heights(pts):
     half = len(order) // 2
     drift = abs(statistics.median(kept[i][2] for i in order[:half]) -
                 statistics.median(kept[i][2] for i in order[half:]))
-    precise = spread <= MAX_SPREAD and drift <= MAX_SPREAD and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
+    precise = spread <= MAX_SPREAD and drift <= MAX_DRIFT and CAMERA_RANGE[0] <= height <= CAMERA_RANGE[1]
     dropped = len(pts) - len(kept)
     note = " ({} écartée{})".format(dropped, "s" if dropped > 1 else "") if dropped else ""
     if precise:
         reason = "position vérifiée : hauteur de caméra constante à {:.0f} cm près sur {} photos{}".format(
             spread * 100, len(kept), note)
-    elif drift > MAX_SPREAD and spread <= MAX_SPREAD:
+    elif drift > MAX_DRIFT and spread <= MAX_SPREAD:
         reason = "position non vérifiée : hauteur de caméra qui dérive de {:.0f} cm le long de la séquence".format(
             drift * 100)
     else:

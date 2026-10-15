@@ -77,9 +77,9 @@ class Check(unittest.TestCase):
         self.assertIn("1 écartée", res["reason"])
 
     def test_slow_drift_refused(self):
-        # GPS lisse mais qui dérive de 1,5 cm par photo (30 cm sur 100 m) : écart-type sous 10 cm,
+        # GPS lisse mais qui dérive de 2 cm par photo (40 cm sur 100 m) : écart-type sous 20 cm,
         # mais pas une hauteur de caméra constante
-        photos = [photo(i, 0.015 * i) for i in range(20)]
+        photos = [photo(i, 0.02 * i) for i in range(20)]
         res = self.check(photos[0], FakeServices(photos))
         self.assertFalse(res["precise"])
         self.assertIn("dérive", res["reason"])

@@ -6,8 +6,7 @@
 Sources, essayées dans l'ordre jusqu'à la première qui répond :
 1. le service d'altimétrie de la Géoplateforme IGN : MNT du LiDAR HD (50 cm) là où il
    est publié, sinon RGE ALTI (1 m, France) ;
-2. des services en ligne de secours, plus grossiers : OpenTopoData EU-DEM 25 m
-   (Europe) puis Open-Meteo Copernicus 90 m (monde) ;
+2. un service en ligne de secours, plus grossier : Open-Meteo Copernicus 90 m (monde) ;
 3. à défaut, un sol plat et horizontal.
 Un profil est une liste [(distance horizontale en m, altitude)], depuis la photo.
 
@@ -25,9 +24,10 @@ Sur un pont, le MNT de terrain nu donne le fond du cours d'eau sous le tablier :
 l'option « Mesure sur un pont » du panneau prend alors un sol plat et horizontal
 (bridge), sans interroger les services.
 
-Les services de secours ont des mailles de 25 à 90 m : seule leur pente générale
-a un sens. Ce sont aussi des modèles de surface (bâtiments compris) : une pente
-invraisemblable écarte la source.
+Le service de secours a une maille de 90 m : seule sa pente générale a un sens.
+C'est aussi un modèle de surface (bâtiments compris) : une pente invraisemblable
+l'écarte. OpenTopoData (EU-DEM 25 m) a été retiré le 15/10/2026 : il ne répondait
+plus et n'envoie pas les en-têtes CORS qu'exige l'application web.
 Google Elevation n'est pas proposé : clé API et facturation obligatoires, et
 ses conditions interdisent l'usage des données hors d'une carte Google.
 """
@@ -55,12 +55,10 @@ MIN_COVERAGE = 0.8  # part minimale d'altitudes valides pour suivre le profil r�
 NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
 TIMEOUT_MS = 5000  # au-delà, on passe à la source suivante
 
-# Services de secours : altitudes ponctuelles, ajustées par une droite (pente générale).
+# Service de secours : altitudes ponctuelles, ajustées par une droite (pente générale).
 # Échantillons de 60 m derrière la photo à 120 m devant : assez large pour qu'une
 # maille de 90 m donne une pente, et sous la limite de 100 points par requête.
 COARSE_FROM, COARSE_TO, COARSE_STEP = -60.0, 120.0, 7.5
-OPENTOPODATA_URL = "https://api.opentopodata.org/v1/eudem25m"
-OPENTOPODATA_LABEL = "EU-DEM 25 m (OpenTopoData), pente générale"
 OPENMETEO_URL = "https://api.open-meteo.com/v1/elevation"
 OPENMETEO_LABEL = "Copernicus 90 m (Open-Meteo), pente générale"
 # Ces modèles sont des modèles de surface (bâtiments, arbres compris) : en ville, la
@@ -112,7 +110,6 @@ class TerrainProvider:
         self._waiting[key] = [callback]
         cell = _cell(lon, lat)
         steps = [(name, step) for name, step in (("lidar", self._lidar_step), ("ign", self._ign_step),
-                                                  ("opentopodata", self._opentopodata_step),
                                                   ("openmeteo", self._openmeteo_step))
                  if (name, cell) not in self._uncovered]
         reasons = []
@@ -217,28 +214,13 @@ class TerrainProvider:
         return dists, values
 
     # ------------------------------------------------------------------
-    # Services de secours (mailles de 25 à 90 m) : pente générale
+    # Service de secours (maille de 90 m) : pente générale
     # ------------------------------------------------------------------
     @staticmethod
     def _coarse_points(lon, lat, yaw):
         n = int(round((COARSE_TO - COARSE_FROM) / COARSE_STEP)) + 1
         dists = [COARSE_FROM + i * COARSE_STEP for i in range(n)]
         return dists, [triangulation.offset(lon, lat, yaw, s) for s in dists]
-
-    def _opentopodata_step(self, lon, lat, yaw, ok, failed):
-        dists, pts = self._coarse_points(lon, lat, yaw)
-        url = OPENTOPODATA_URL + "?" + urlencode({
-            "locations": "|".join("{:.7f},{:.7f}".format(p[1], p[0]) for p in pts),
-            "interpolation": "bilinear",
-        }, safe="|,")
-
-        def done(data, error):
-            values = None
-            if not error and isinstance(data, dict) and data.get("status") == "OK":
-                values = [r.get("elevation") for r in data.get("results") or []]
-            self._coarse_done(dists, values, error, OPENTOPODATA_LABEL, "OpenTopoData", ok, failed)
-
-        host.fetch_json(url, done, timeout_ms=TIMEOUT_MS)
 
     def _openmeteo_step(self, lon, lat, yaw, ok, failed):
         dists, pts = self._coarse_points(lon, lat, yaw)

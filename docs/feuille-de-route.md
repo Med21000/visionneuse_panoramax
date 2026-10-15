@@ -98,7 +98,7 @@ Condition préalable, utile au plugin quelle que soit la suite : **séparer le c
 
 À vérifier tôt : depuis un poste d'agent, que le proxy ou le pare-feu du département laisse
 passer, depuis le navigateur, Panoramax, la Géoplateforme IGN et les services d'altitude de
-secours (OpenTopoData, Open-Meteo), y compris leurs en-têtes CORS.
+secours (Open-Meteo), y compris leurs en-têtes CORS.
 
 Étapes :
 

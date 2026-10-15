@@ -127,7 +127,7 @@ class MeasurePanel(QWidget):
         self.chk_bridge.setToolTip(
             "Photo prise sur un pont : sol plat et horizontal sous la caméra. Les altitudes du terrain (RGE ALTI de "
             "l'IGN, terrain nu) donnent sinon le fond du cours d'eau sous le tablier. Décoché : altitudes IGN, "
-            "puis services de secours (OpenTopoData, Open-Meteo), puis sol plat.")
+            "puis service de secours (Open-Meteo), puis sol plat.")
         self.chk_bridge.toggled.connect(self.terrainChanged)
         tlay.addWidget(self.chk_bridge)
         self.chk_wall = QCheckBox("Façade du cadastre")

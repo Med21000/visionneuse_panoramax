@@ -225,6 +225,23 @@ class Relocation(Base):
         self.assertIsNone(m.reference)
         self.assertIn("2 points recalés sur la carte", m.status())
 
+    def test_lift(self):
+        # Sommet monté de 3 cm puis descendu de 1 cm au clavier : 4,02 m, repère déplacé vers le
+        # haut dans la photo ; une nouvelle visée annule le décalage ; sommet jamais sous le pied
+        m = self.measure("height", [click((5.0, 5.0, 0.0)), click((5.0, 5.0, 4.0))])
+        m.anchor(*point(5.0, 5.0), 0.1, "A")
+        for dz in (0.01, 0.01, 0.01, -0.01):
+            m.lift(1, dz)
+        self.assertValue(m, 4.02)
+        self.assertIn("sommet monté de 2 cm au clavier", m.status())
+        self.assertGreater(m.result["shifts"][1][1], 0.0)
+        m.lift(1, -10.0)
+        self.assertIsNotNone(m.error)
+        self.assertAlmostEqual(m.result["value"], 4.02, places=6)
+        m.reaim(1, click((5.0, 5.0, 4.0)))
+        self.assertValue(m, 4.0)
+        self.assertEqual(m.lifts, {})
+
     def test_width_relocated(self):
         m = self.measure("width", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         m.relocate(1, *point(4.0, 20.0))

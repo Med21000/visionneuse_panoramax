@@ -113,6 +113,7 @@ class Measure:
         self.aimed = set()  # points visés à nouveau après un recalage : sur le plan calé de la mesure
         # Point triangulé sur lequel la mesure est calée (voir anchor) : lon, lat, uncertainty (m), name
         self.reference = None
+        self.lifts = {}  # n° de point -> décalage vertical (m) donné au clavier (voir lift)
         self.result = None
         self.error = None
         self.notice = None  # avertissement sur la source d'altitude
@@ -188,14 +189,27 @@ class Measure:
         été calée sur la carte, le point est pris sur son plan calé (profondeur de la carte,
         position fine de la photo), qu'il ait été lui-même recalé ou non ; sinon, sur la
         surface de la mesure."""
-        state = list(self.clicks), set(self.aimed)
+        state = list(self.clicks), set(self.aimed), dict(self.lifts)
         self.clicks[index] = click
+        self.lifts.pop(index, None)  # le point est là où on l'a visé
         if self.overrides:
             self.aimed.add(index)
         self.compute()
         if self.error:
             error = self.error
-            self.clicks, self.aimed = state
+            self.clicks, self.aimed, self.lifts = state
+            self.compute()
+            self.error = error
+
+    def lift(self, index, dz):
+        """Monte (dz > 0) ou descend le point n° index de dz m à la verticale, au clavier :
+        réglage fin après la visée. Refusé si la mesure devient impossible (sommet sous le pied)."""
+        state = dict(self.lifts)
+        self.lifts[index] = self.lifts.get(index, 0.0) + dz
+        self.compute()
+        if self.error:
+            error = self.error
+            self.lifts = state
             self.compute()
             self.error = error
 
@@ -282,6 +296,8 @@ class Measure:
                 pts.append(fixed(len(pts), p, c))
                 sources.append(c)
                 incidence = angle if incidence is None else min(incidence, angle)
+        if self.lifts:  # points montés ou descendus au clavier
+            pts = [(p[0], p[1], p[2] + self.lifts.get(k, 0.0)) for k, p in enumerate(pts)]
         return pts, incidence, origin, sources
 
     @property
@@ -587,6 +603,11 @@ class Measure:
             if self.aimed:
                 text += ", dont {} visé{} à nouveau dans son plan".format(
                     len(self.aimed), "s" if len(self.aimed) > 1 else "")
+        moved = {k: dz for k, dz in self.lifts.items() if abs(dz) >= 0.005}
+        if moved:
+            text += " · " + ", ".join("{} {} de {} cm".format(
+                "pied" if self.kind == "height" and k == 0 else "sommet" if self.kind == "height" else "point {}".format(k + 1),
+                "monté" if dz > 0 else "descendu", _num(abs(dz) * 100, 0)) for k, dz in sorted(moved.items())) + " au clavier"
         if self.incidence is not None and self.incidence < geometry.GRAZING:
             text += ". Visée rasante sur le plan ({}°) : mesure imprécise, prenez une photo plus en face".format(
                 _num(self.incidence, 0))

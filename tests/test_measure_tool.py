@@ -205,6 +205,26 @@ class Relocation(Base):
         self.assertLess(math.hypot(foot[0] - 5.0, foot[1] - 8.0), 1e-6)
         self.assertValue(m, 3.7)
 
+    def test_height_anchored_on_triangulated_point(self):
+        # Hauteur de caméra fausse, mais pied calé sur le point triangulé : hauteur exacte, et
+        # incertitude croissante avec celle de la triangulation
+        clicks = [click((5.0, 5.0, 0.0)), click((5.0, 5.0, 4.0))]
+        self.tool.camera_height = 1.5
+        m = self.measure("height", clicks)
+        m.anchor(*point(5.0, 5.0), 0.1, "A")
+        self.assertValue(m, 4.0)
+        self.assertIn("calée sur le point triangulé A (±0,10 m)", m.status())
+        self.assertIn("hauteur de caméra sans effet", m.status())
+        close = m.result["uncertainty"]
+        m.anchor(*point(5.0, 5.0), 1.0, "A")
+        self.assertValue(m, 4.0)
+        # 1 m de profondeur en plus ou en moins sur 7 m : environ 4/7 m sur la hauteur
+        self.assertGreater(m.result["uncertainty"], close + 0.4)
+        # Pied glissé ensuite à la main : le point triangulé ne vaut plus
+        m.relocate(0, *point(5.0, 6.0))
+        self.assertIsNone(m.reference)
+        self.assertIn("2 points recalés sur la carte", m.status())
+
     def test_width_relocated(self):
         m = self.measure("width", [click((-3.0, 8.0, 0.0)), click((4.0, 12.0, 0.0))])
         m.relocate(1, *point(4.0, 20.0))

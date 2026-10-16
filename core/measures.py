@@ -18,7 +18,8 @@ La mesure libre 3D (façade, plans, triangulation 3D entre deux photos) a été 
 Un point peut être recalé après coup sur la carte : sa position horizontale vient
 alors de la carte, et son altitude du rayon de visée de la photo à cette distance.
 La mesure est recalculée ; pour une hauteur, elle ne dépend plus ni du terrain ni
-de la hauteur de caméra.
+de la hauteur de caméra. Une hauteur peut aussi être calée sur un point triangulé au
+pied de l'objet (anchor) : même calcul, avec l'incertitude de la triangulation.
 """
 
 import math
@@ -110,6 +111,8 @@ class Measure:
         # qui l'a visé au moment du recalage)
         self.overrides = {}
         self.aimed = set()  # points visés à nouveau après un recalage : sur le plan calé de la mesure
+        # Point triangulé sur lequel la mesure est calée (voir anchor) : lon, lat, uncertainty (m), name
+        self.reference = None
         self.result = None
         self.error = None
         self.notice = None  # avertissement sur la source d'altitude
@@ -142,7 +145,8 @@ class Measure:
         """Recale le point n° index à la position (lon, lat) cliquée sur la carte. Son plan
         vertical est orienté face à la photo qui l'a visé. Sur le plan vertical (hauteur), le
         pied et le sommet se déplacent ensemble, du même décalage : la mesure garde sa forme,
-        seule sa place change."""
+        seule sa place change. Un point glissé à la main remplace le point triangulé (anchor)."""
+        self.reference = None
         state = dict(self.overrides), set(self.aimed)
         for k, (lon_k, lat_k) in self._moved(index, lon, lat).items():
             c = self.clicks[k]
@@ -155,6 +159,16 @@ class Measure:
             self.overrides, self.aimed = state
             self.compute()
             self.error = error
+
+    def anchor(self, lon, lat, uncertainty, name=""):
+        """Cale la mesure terminée sur un point triangulé au pied de l'objet (lon, lat ;
+        uncertainty : son incertitude en m) : le pied y est recalé comme sur la carte (pied et
+        sommet ensemble pour une hauteur), mais l'incertitude de sa position est celle de la
+        triangulation, commune à tous les points de la mesure."""
+        self.relocate(0, lon, lat)
+        if not self.error:
+            self.reference = {"lon": lon, "lat": lat, "uncertainty": float(uncertainty), "name": name}
+            self.compute()  # incertitude de la triangulation
 
     def _moved(self, index, lon, lat):
         """Points déplacés quand le point n° index est lâché en (lon, lat) : {n° : (lon, lat)}.
@@ -356,14 +370,21 @@ class Measure:
                     moved[i][key] += sign * step
                     variants.append({"clicks": moved})
                 groups.append(variants)
-        for k, (lon, lat, azimuth) in self.overrides.items():
+        if self.reference is not None:  # tous les points calés ensemble sur le point triangulé
+            sigma = self.reference["uncertainty"]
             for dx, dy in ((1, 0), (0, 1)):
-                variants = []
-                for sign in (-1, 1):
-                    moved = dict(self.overrides)
-                    moved[k] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (azimuth,)
-                    variants.append({"overrides": moved})
-                groups.append(variants)
+                groups.append([{"overrides": {
+                    k: triangulation._geographic(sign * dx * sigma, sign * dy * sigma, lon, lat) + (azimuth,)
+                    for k, (lon, lat, azimuth) in self.overrides.items()}} for sign in (-1, 1)])
+        else:
+            for k, (lon, lat, azimuth) in self.overrides.items():
+                for dx, dy in ((1, 0), (0, 1)):
+                    variants = []
+                    for sign in (-1, 1):
+                        moved = dict(self.overrides)
+                        moved[k] = triangulation._geographic(sign * dx * MAP_ERROR, sign * dy * MAP_ERROR, lon, lat) + (azimuth,)
+                        variants.append({"overrides": moved})
+                    groups.append(variants)
         if self.wall and not self.overrides:
             err = WALL_ERROR_UNCHECKED if self.wall.get("warning") else WALL_ERROR
             groups.append([{"wall_shift": s * err} for s in (-1, 1)])
@@ -557,7 +578,10 @@ class Measure:
             elif self.tool.use_wall:
                 text += (" · lecture du cadastre…" if self.wall_pending else
                          " · aucune façade du cadastre dans la visée : pied cliqué")
-        if self.overrides:
+        if self.reference is not None:
+            text += " · calée sur le point triangulé {}(±{} m)".format(
+                self.reference["name"] + " " if self.reference["name"] else "", _num(self.reference["uncertainty"], 2))
+        elif self.overrides:
             text += " · {} point{} recalé{} sur la carte".format(
                 len(self.overrides), *(("s", "s") if len(self.overrides) > 1 else ("", "")))
             if self.aimed:
@@ -566,6 +590,8 @@ class Measure:
         if self.incidence is not None and self.incidence < geometry.GRAZING:
             text += ". Visée rasante sur le plan ({}°) : mesure imprécise, prenez une photo plus en face".format(
                 _num(self.incidence, 0))
+        if self.reference is not None and not self.aimed and len(self.overrides) == len(self.clicks):
+            return text + ". Profondeur du point triangulé : terrain et hauteur de caméra sans effet."
         labels = {c.get("terrain") for c in self.clicks if c.get("terrain")}
         height, source = self.tool.camera_info(self.clicks[0], _ground_z(self.clicks)[self.clicks[0].get("pic")])
         text += ". Terrain : {}, caméra à {} m{}.".format(" + ".join(sorted(labels)) or ground.FLAT,

@@ -109,12 +109,12 @@ class PerpendicularWidth(measures.Measure):
         if index == 0:
             self.error = "Le point de référence ne se vise pas ici : « Nouveau point de référence »."
             return
-        state = self.clicks[1]
-        self.clicks[1] = click
+        state = list(self.clicks)
+        self.clicks = [self._edge_mark(click), click]  # repère de A dans la photo du nouveau clic
         self.compute()
         if self.error:
             error = self.error
-            self.clicks[1] = state
+            self.clicks = state
             self.compute()
             self.error = error
 

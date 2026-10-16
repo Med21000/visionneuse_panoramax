@@ -120,6 +120,17 @@ class Width(Base):
         m = widths.PerpendicularWidth(self.tool, edge(), BDTOPO, click())
         m.reaim(1, click(target=(-4.0, 10.0)))
         self.assertAlmostEqual(m.result["value"], 9.0, places=4)
+        # Depuis une autre photo : repère de A recalculé pour elle
+        other = dict(click(camera=(0.0, 20.0), target=(-4.0, 10.0)), pic="p2")
+        m.reaim(1, other)
+        self.assertAlmostEqual(m.result["value"], 9.0, places=4)
+        marks = m.viewer_marks()["points"]
+        self.assertEqual([p["pic"] for p in marks], ["p2", "p2"])
+        self.assertAlmostEqual(marks[0]["abs_yaw"], bearing(point(0.0, 20.0), point(5.0, 10.0)), places=6)
+        # Visée refusée : la largeur reste celle d'avant
+        m.reaim(1, dict(click(camera=(0.0, 10.0)), pic="p3"))
+        self.assertIn("parallèle", m.error)
+        self.assertAlmostEqual(m.result["value"], 9.0, places=4)
         m.reaim(0, click())
         self.assertIn("point de référence", m.error)
 

@@ -22,11 +22,16 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 - Capture Full HD de la vue (« 📷 Capture HD »), recalculée à partir de la photo originale.
 - Capture vignette (« 🖼 Capture vignette ») : la visionneuse telle qu'affichée, mesures comprises, enregistrée en PNG et copiée dans le presse-papiers.
 - Option « Filtrage anisotrope » (décochée par défaut, mémorisée) : atténue le crénelage et le scintillement des détails fins vus de loin en gardant l'image nette, au prix d'une navigation un peu moins fluide.
-- Sans QtWebEngine ou sans WebGL, une visionneuse native intégrée prend le relais, en **mode dégradé** (voir ci-dessous).
+- Sans QtWebEngine ou sans WebGL, le panneau explique ce qui manque (voir ci-dessous).
 
-### Visionneuse intégrée (mode dégradé)
+### Composants nécessaires : QtWebEngine et WebGL
 
-Si QtWebEngine n'est pas disponible dans votre installation de QGIS, ou si son moteur web ne prend pas en charge WebGL (pilote graphique), le plugin affiche les photos avec une visionneuse native de secours. C'est un **mode dégradé** : la photo est affichée en définition réduite, sans l'interface Panoramax (navigation par les boutons « ◀ Précédente », « Suivante ▶ » et « ⟲ 45° / 45° ⟳ » ; la visionneuse complète reste accessible par le bouton « Navigateur »), et **les mesures ne sont pas disponibles**. Pour mesurer, utiliser une installation de QGIS qui fournit QtWebEngine avec WebGL.
+La visionneuse Panoramax est une page web : le plugin l'affiche avec le moteur web de Qt, **QtWebEngine** (module Python PyQt6-WebEngine), qui doit prendre en charge **WebGL** (accélération graphique). S'il manque l'un ou l'autre sur le poste, le panneau affiche, à la place de la visionneuse, un message qui dit ce qui manque et comment l'installer :
+
+- QtWebEngine absent : sous Windows, relancer l'installateur OSGeo4W en mode avancé et ajouter le paquet *python3-pyqt6-webengine* (ou *qt6-webengine*) ; sous Linux, installer le paquet de la distribution (*python3-pyqt6.qtwebengine* sous Debian et Ubuntu, *python3-pyqt6-webengine* sous Fedora) ; sous macOS, l'installateur officiel de QGIS le fournit. Redémarrer ensuite QGIS.
+- WebGL absent : mettre à jour le pilote de la carte graphique, vérifier que l'accélération 3D n'est pas désactivée (bureau à distance, machine virtuelle, pilote générique), puis redémarrer QGIS.
+
+En attendant, le bouton « Ouvrir la visionneuse dans le navigateur » ouvre la photo choisie sur la carte ; le curseur de vue, le filtre et la capture HD restent disponibles, **pas les mesures** ni la capture vignette.
 
 ## Mesures
 

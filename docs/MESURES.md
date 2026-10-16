@@ -101,7 +101,6 @@ Le plugin ne connaît ni la **hauteur de la caméra** au-dessus du sol, ni son *
 ### 2.3 D'un clic à une direction
 
 - **Visionneuse web** (Photo Sphere Viewer) : la visionneuse calcule par lancer de rayon sur la sphère la position du clic dans la photo. Le cap absolu vaut cet angle plus le cap de la photo. Un second calcul, à partir de la position du clic à l'écran, sert de contrôle (journal QGIS « Panoramax »).
-- **Visionneuse de secours** (sans QtWebEngine) : l'image équirectangulaire est affichée directement, la direction d'un pixel s'en déduit linéairement.
 - **Visée au réticule** (triangulation) : direction du centre de la vue.
 
 ### 2.4 Cap précis

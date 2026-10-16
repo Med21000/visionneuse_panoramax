@@ -3,10 +3,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Tests du panneau (viewer_dock.py et ses modules) avec le vrai QGIS, hors écran.
 
-La visionneuse web (QtWebEngine) ne fonctionne pas hors écran : le panneau est testé avec
-la visionneuse de secours (native_viewer.py), qui n'a pas de mesure ; les files de la
-visionneuse web (clics, touches, bouton « Valider ») sont simulées. Les services sont
-simulés : liste des instances, fiches et images des photos, vérification de la précision GPS.
+La visionneuse web (QtWebEngine) ne fonctionne pas hors écran : le panneau est testé sans
+elle (message des composants manquants, pas de mesure) ; les files de la visionneuse web
+(clics, touches, bouton « Valider ») sont simulées. Les services sont simulés : liste des instances, fiches et images
+des photos, vérification de la précision GPS.
 """
 
 import json
@@ -103,7 +103,7 @@ class Base(unittest.TestCase):
         for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoPointed", "keyPressed",
                      "keepRequested", "newReferenceRequested", "itemChanged",
                      "measureSaveRequested", "measureClearRequested", "measureClearAllRequested",
-                     "cameraHeightChanged", "filterChanged", "message", "tiltChanged"):
+                     "cameraHeightChanged", "filterChanged", "message", "tiltChanged", "viewChanged"):
             getattr(self.dock, name).connect(lambda *args, n=name: self.signals.append((n, args)))
         self.dock.resize(1092, 990)
         self.dock.show()
@@ -203,9 +203,9 @@ class Compact(Base):
         self.assertFalse(self.visible(dock.instance_row))
         self.assertFalse(self.visible(dock.options_row))
         self.assertFalse(self.visible(dock.measure_box.measure_status))
-        # Visionneuse de secours : pas de mesure, la bulle le dit (avec la visionneuse web, elle
-        # reprend la ligne d'aide)
-        self.assertIn("visionneuse web", dock.btn_measure.toolTip())
+        # Sans la visionneuse web : pas de mesure, la bulle le dit (avec elle, la bulle reprend la
+        # ligne d'aide)
+        self.assertIn("QtWebEngine ou WebGL", dock.btn_measure.toolTip())
         heights = {b.height() for b in dock._labels}
         self.assertLessEqual(max(heights) - min(heights), 2)  # boutons alignés (🖼 compris)
         dock.btn_compact.setChecked(False)
@@ -233,27 +233,37 @@ class Filter(Base):
         self.assertEqual(self.dock.btn_filter.text(), "Filtre")
 
 
-class NativeViewer(Base):
-    def test_picture_and_navigation(self):
-        dock = self.dock
-        dock.show_picture("p1", 5.0415, 47.322)
-        self.assertIn("Photo p1", dock.native.meta.text())
-        self.assertEqual(self.emitted("pictureChanged")[-1][0], "p1")
-        self.assertTrue(dock.native.btn_next.isEnabled())
-        self.assertFalse(dock.native.btn_prev.isEnabled())
-        dock.native.btn_next.click()
-        self.assertEqual(self.requests[-1], "p2")
-        self.assertIn("Photo p2", dock.native.meta.text())
-        dock.show_location(5.0, 47.0)
-        self.assertEqual(dock.native.meta.text(), "")
+class Unavailable(Base):
+    """Sans QtWebEngine : message d'explication à la place de la visionneuse, pas de mesure."""
 
-    def test_no_measure(self):
-        # Mesures (points triangulés, repères, clavier) : visionneuse web seulement
+    def test_message(self):
         dock = self.dock
+        text = dock.unavailable_label.text()
+        self.assertIn("QtWebEngine", text)
+        self.assertIn("PyQt6-WebEngine", text)
+        self.assertIn("redémarrer QGIS", text)
+        self.button("🌐 Ouvrir la visionneuse dans le navigateur")
         self.assertFalse(dock.btn_measure.isEnabled())
-        self.assertIn("visionneuse web", dock.btn_measure.toolTip())
+        self.assertIn("QtWebEngine ou WebGL", dock.btn_measure.toolTip())
+
+    def test_picture_still_followed(self):
+        # La carte (curseur de vue, filtre, précision) suit encore la photo choisie
+        dock = self.dock
         dock.show_picture("p1", 5.0415, 47.322)
+        self.assertEqual(self.emitted("pictureChanged")[-1][0], "p1")
         self.assertEqual(self.emitted("itemChanged")[-1][0]["id"], "p1")
+        self.assertTrue(self.emitted("viewChanged"))
+        self.assertIn("p1", dock.current_url)
+
+    def test_no_photo_nearby(self):
+        self.dock.show_location(5.0, 47.0)
+        self.assertEqual(self.emitted("message")[-1][0], "Aucune photo Panoramax à proximité de ce point.")
+
+    def test_webgl_missing(self):
+        dock = self.dock
+        dock._switch_to_unavailable()
+        self.assertIn("WebGL", dock.unavailable_label.text())
+        self.assertIn("pilote de la carte graphique", dock.unavailable_label.text().replace("<b>", "").replace("</b>", ""))
 
     def test_calibration_line(self):
         dock = self.dock
@@ -271,7 +281,8 @@ class StableImage(Base):
 
     def photo_top(self):
         APP.processEvents()
-        return self.dock.img.mapTo(self.dock, self.dock.img.rect().topLeft()).y()
+        view = self.dock.unavailable_label  # à la place de la visionneuse web
+        return view.mapTo(self.dock, view.rect().topLeft()).y()
 
     def test_status_and_calibration_lines(self):
         dock = self.dock

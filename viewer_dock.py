@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Panneau ancré contenant la visionneuse Panoramax.
 
-Deux modes :
-- QtWebEngine disponible : la vraie visionneuse explore.panoramax.fr est
-  embarquée, et ses changements d'URL (photo courante) sont suivis ;
-- sinon : visualiseur intégré (image de la photo + navigation dans la
-  séquence) et bouton pour ouvrir la visionneuse dans le navigateur.
+La vraie visionneuse explore.panoramax.fr est embarquée (QtWebEngine), et ses changements
+d'URL (photo courante) sont suivis. Sans QtWebEngine, ou sans WebGL dans son moteur, le
+panneau explique ce qui manque sur le poste et propose d'ouvrir la visionneuse dans le
+navigateur ; la carte, le curseur de vue et la capture HD restent disponibles.
 
 Le panneau assemble : la barre d'outils, le choix de l'instance, la ligne du filtre
 (filter_row.py), la zone des mesures (measure_panel.py), les options et la
-visionneuse, web (scripts dans viewer_js.py) ou de secours (native_viewer.py). Il
+visionneuse web (scripts dans viewer_js.py). Il
 relaie au plugin les demandes de l'utilisateur et les clics dans la photo.
 """
 
@@ -45,7 +44,6 @@ from .core import autotilt, precision, tools
 from .core.calibration import Calibration
 from .filter_row import FilterRow
 from .measure_panel import MeasurePanel, calibration_text
-from .native_viewer import NativeViewer
 from .viewer_js import (
     ANISO_JS,
     CLICKS_JS,
@@ -100,13 +98,29 @@ except Exception:
 WEBGL_OK = None
 
 NO_WEBENGINE_TEXT = (
-    "QtWebEngine n'est pas disponible dans cette installation de QGIS : "
-    "la visionneuse interactive s'ouvre dans le navigateur (bouton « Navigateur »), "
-    "et la photo sélectionnée s'affiche ci-dessous.")
+    "<h3>Visionneuse Panoramax indisponible</h3>"
+    "<p>Le composant <b>QtWebEngine</b> (module Python <b>PyQt6-WebEngine</b>) n'est pas "
+    "installé avec QGIS sur ce poste. La visionneuse Panoramax est une page web : le plugin "
+    "a besoin de ce moteur pour l'afficher dans QGIS et y faire les mesures.</p>"
+    "<p>Pour l'installer :</p><ul>"
+    "<li><b>Windows (OSGeo4W)</b> : relancer l'installateur OSGeo4W, mode avancé, et "
+    "ajouter le paquet <i>python3-pyqt6-webengine</i> (ou <i>qt6-webengine</i>) ;</li>"
+    "<li><b>Linux</b> : installer le paquet de la distribution, par exemple "
+    "<i>python3-pyqt6.qtwebengine</i> (Debian, Ubuntu) ou <i>python3-pyqt6-webengine</i> "
+    "(Fedora) ;</li>"
+    "<li><b>macOS</b> : utiliser l'installateur officiel de QGIS, qui le fournit.</li></ul>"
+    "<p>Puis redémarrer QGIS. En attendant, la visionneuse s'ouvre dans le navigateur "
+    "(bouton ci-dessous) ; la carte et la capture HD restent disponibles, "
+    "<b>pas les mesures</b>.</p>")
 NO_WEBGL_TEXT = (
-    "WebGL n'est pas disponible dans le moteur web de QGIS (pilote graphique non pris en "
-    "charge) : visionneuse intégrée au plugin. La visionneuse complète reste accessible "
-    "par le bouton « Navigateur ».")
+    "<h3>Visionneuse Panoramax indisponible</h3>"
+    "<p>Le moteur web de QGIS (QtWebEngine) ne prend pas en charge <b>WebGL</b> sur ce "
+    "poste : la visionneuse Panoramax ne peut pas afficher les photos 360°.</p>"
+    "<p>WebGL demande l'accélération graphique : mettre à jour le <b>pilote de la carte "
+    "graphique</b>, vérifier qu'il n'est pas désactivé (bureau à distance, machine virtuelle "
+    "sans accélération 3D, pilote générique), puis redémarrer QGIS.</p>"
+    "<p>En attendant, la visionneuse s'ouvre dans le navigateur (bouton ci-dessous) ; la "
+    "carte et la capture HD restent disponibles, <b>pas les mesures</b>.</p>")
 
 
 class PanoramaxDock(QDockWidget):
@@ -291,15 +305,15 @@ class PanoramaxDock(QDockWidget):
             self._poll.start()
         else:
             text = NO_WEBGL_TEXT if HAS_WEBENGINE else NO_WEBENGINE_TEXT
-            layout.addWidget(self._build_fallback(root, text), 1)
+            layout.addWidget(self._build_unavailable(root, text), 1)
 
         self.setWidget(root)
 
     # ------------------------------------------------------------------
-    # Mode de secours (sans QtWebEngine)
+    # Composants manquants (QtWebEngine, WebGL)
     # ------------------------------------------------------------------
     def _check_webgl(self, ok=True):
-        """Après chargement : si WebGL est absent, bascule sur la visionneuse native."""
+        """Après chargement : si WebGL est absent, explique ce qui manque."""
         if self.web is None or WEBGL_OK is False:
             return
         if WEBGL_OK is None:
@@ -319,29 +333,36 @@ class PanoramaxDock(QDockWidget):
             return
         WEBGL_OK = bool(result)
         if not WEBGL_OK:
-            self._switch_to_native()
+            self._switch_to_unavailable()
 
-    def _switch_to_native(self):
+    def _switch_to_unavailable(self):
         if self._poll is not None:
             self._poll.stop()
         if self.web is not None:
             self._layout.removeWidget(self.web)
             self.web.deleteLater()
             self.web = None
-        self._layout.addWidget(self._build_fallback(self._root, NO_WEBGL_TEXT), 1)
-        if self._current_pic:
-            api.get_item(self._current_pic, self._on_item)
+        self._layout.addWidget(self._build_unavailable(self._root, NO_WEBGL_TEXT), 1)
 
-    def _build_fallback(self, parent, text):
-        self.native = NativeViewer(text, parent)
-        self.img = self.native.img
-        self.img.viewChanged.connect(self.viewChanged)
-        self.native.pictureRequested.connect(lambda pid: api.get_item(pid, self._on_item))
+    def _build_unavailable(self, parent, text):
+        """Message à la place de la visionneuse : composant manquant et comment l'installer."""
+        box = QWidget(parent)
+        lay = QVBoxLayout(box)
+        self.unavailable_label = QLabel(text, box)
+        self.unavailable_label.setTextFormat(Qt.TextFormat.RichText)
+        self.unavailable_label.setWordWrap(True)
+        self.unavailable_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.unavailable_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(self.unavailable_label)
+        button = QPushButton("🌐 Ouvrir la visionneuse dans le navigateur", box)
+        button.clicked.connect(self.open_in_browser)
+        lay.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+        lay.addStretch(1)
         # Mesures (points triangulés, repères, clavier) : avec la visionneuse web seulement
         self.btn_measure.setChecked(False)
         self.btn_measure.setEnabled(False)
-        self.btn_measure.setToolTip("Mesures disponibles avec la visionneuse web (QtWebEngine et WebGL) seulement")
-        return self.native
+        self.btn_measure.setToolTip("Mesures indisponibles : il manque QtWebEngine ou WebGL (voir le panneau)")
+        return box
 
     # ------------------------------------------------------------------
     # Mesures
@@ -562,7 +583,7 @@ class PanoramaxDock(QDockWidget):
     def _update_measure_tooltip(self):
         """En mode compact, la ligne d'aide de la mesure passe dans la bulle d'aide du bouton."""
         if not self.btn_measure.isEnabled():
-            return  # visionneuse de secours : pas de mesure (voir _build_fallback)
+            return  # visionneuse absente : pas de mesure (voir _build_unavailable)
         text = self.measure_box.status() if self.btn_compact.isChecked() else ""
         self.btn_measure.setToolTip(text or "Hauteur, largeur ou mesure libre, appuyées sur des points triangulés")
 
@@ -577,10 +598,7 @@ class PanoramaxDock(QDockWidget):
     def _current_view(self, item):
         """(cap, inclinaison, champ vertical) de la vue affichée."""
         ratio = 1080.0 / 1920.0
-        if self.web is None:
-            heading, hfov = self.img.current_view()
-            pitch = 0.0
-        elif self._view is not None:
+        if self._view is not None:
             heading, pitch = self._view["heading"], self._view["pitch"]
             if self._view.get("vfov"):
                 return heading, pitch, self._view["vfov"]
@@ -608,9 +626,12 @@ class PanoramaxDock(QDockWidget):
         """Capture d'écran de la visionneuse, mesures et réticule compris."""
         from qgis.PyQt.QtWidgets import QApplication
 
-        widget = self.web if self.web is not None else getattr(self, "img", None)
+        widget = self.web
         item = self._current_item
-        if widget is None or not item:
+        if widget is None:
+            self.message.emit("Vignette impossible sans la visionneuse intégrée : utilisez « Capture HD ».", 1, "")
+            return
+        if not item:
             self.message.emit("Aucune photo affichée : choisissez d'abord une photo.", 1, "")
             return
         img = widget.grab().toImage()
@@ -767,7 +788,7 @@ class PanoramaxDock(QDockWidget):
         if self.web is not None:
             self.web.setUrl(QUrl(self.current_url))
         else:
-            self.native.show_message("Aucune photo Panoramax à proximité de ce point.")
+            self.message.emit("Aucune photo Panoramax à proximité de ce point.", 0, "")
 
     def open_in_browser(self):
         if self.web is not None:
@@ -858,8 +879,8 @@ class PanoramaxDock(QDockWidget):
 
     def _on_item(self, item, error):
         if error or not item:
-            if self.web is None:
-                self.native.show_error(error)
+            if self.web is None and error:
+                self.message.emit("Photo Panoramax illisible : {}".format(error), 1, "")
             return
         pic_id = item.get("id", "")
         if pic_id != api.requested_id():
@@ -888,5 +909,5 @@ class PanoramaxDock(QDockWidget):
                 self.viewChanged.emit(heading % 360, item_fov if item_fov and item_fov < 360 else 90.0)
         else:
             self.current_url = api.explore_url(pic_id=pic_id, lat=lat, lon=lon)
-            heading = api.precise_heading(item) or heading  # clics et visées au cap précis
-            self.native.show_item(item, heading, item_fov)
+            if heading is not None:  # curseur de vue sur la carte
+                self.viewChanged.emit(heading % 360, item_fov if item_fov and item_fov < 360 else 90.0)

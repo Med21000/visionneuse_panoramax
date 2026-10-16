@@ -469,6 +469,8 @@ class PanoramaxPlugin:
         return self.cursor
 
     def _on_picture_changed(self, pic_id, lon, lat, heading):
+        if self.calibrator is not None:
+            self.calibrator.refresh()  # visées des repères pris depuis cette photo seulement
         cursor = self._ensure_cursor()
         cursor.set_position(lon, lat)
         if heading is not None:

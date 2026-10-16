@@ -142,6 +142,14 @@ class Heading(Base):
         self.assertEqual((obs["lon"], obs["lat"]), gps)
         self.assertEqual(obs["prior"], calibration.SURVEY_PRIOR)  # cap précis et GPS ≤ 2 m
         self.assertIsNotNone(self.tool.item.data)  # visée dessinée sur la carte
+        self.assertEqual(len(self.tool.item.data[0]), 1)
+        # Autre photo de la séquence : la visée de ce repère n'y est pas dessinée
+        self.shown = ("p2", "s1")
+        self.tool.refresh()
+        self.assertEqual(self.tool.item.data, ([], None))
+        self.shown = ("p1", "s1")
+        self.tool.refresh()
+        self.assertEqual(len(self.tool.item.data[0]), 1)
         self.tool.clear()
         self.assertNotIn("s1", self.cal.landmarks)
 

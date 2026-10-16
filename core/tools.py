@@ -384,10 +384,17 @@ class CalibrationTool:
             self.item.remove()
             self.item = None
 
+    def refresh(self):
+        """Photo affichée changée : la carte montre les visées de ses repères (voir _draw)."""
+        self._draw()
+
     def _draw(self):
-        """Carte : visées vers les repères de la séquence affichée (mode cap)."""
-        _, sequence = self.current()
-        obs = self.calibration.landmarks.get(sequence, []) if self.mode == "heading" else []
+        """Carte : visées vers les repères pris depuis la photo affichée (mode cap). Ceux des
+        autres photos de la séquence calent aussi celle-ci, mais leurs tracés encombreraient la
+        carte et feraient croire qu'ils partent d'elle."""
+        pic, sequence = self.current()
+        obs = [o for o in self.calibration.landmarks.get(sequence, []) if o["pic"] == pic] \
+            if self.mode == "heading" else []
         if self.item is None:
             if not obs:
                 return

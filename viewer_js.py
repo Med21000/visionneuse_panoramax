@@ -4,9 +4,10 @@
 """Scripts injectés dans la visionneuse web Panoramax (voir viewer_dock.py).
 
 Chaînes JavaScript exécutées par QWebEngineView.page().runJavaScript : test de WebGL,
-lecture de la vue, filtrage anisotrope, réticule, clics de mesure, repères des
-mesures et blocage de la navigation pendant une mesure. Les marqueurs __XXX__ sont
-remplacés avant exécution.
+lecture de la vue, filtrage anisotrope, clics et touches de mesure, repères des
+mesures, navigation pendant une mesure et habillage de la visionneuse (liseré, état,
+consigne, bouton « Valider le point triangulé »). Les marqueurs __XXX__ sont remplacés
+avant exécution.
 """
 
 WEBGL_TEST_JS = (
@@ -60,7 +61,9 @@ LIVE_VIEW_JS = r"""
           var kids = parent.children || [];
           for (var k = 0; k < kids.length; k++) {
             var c = kids[k];
-            if (c !== node && !keep[c.tagName] && c.id !== 'qgis-crosshair') c.style.setProperty('display', 'none', 'important');
+            // Éléments du plugin (habillage de la mesure) : gardés
+            if (c !== node && !keep[c.tagName] && !(c.id && c.id.indexOf('qgis-') === 0))
+              c.style.setProperty('display', 'none', 'important');
           }
           var holder = (parent instanceof ShadowRoot) ? parent.host : parent;
           if (holder && holder.style && holder !== document.documentElement) {
@@ -142,38 +145,32 @@ ANISO_JS = r"""
 })()
 """
 
-# Réticule de visée (triangulation), centré sur la vue : c'est la direction lue
-# par getXYZ(). Ajouté au document, au-dessus de la visionneuse et sans capter la souris.
-CROSSHAIR_JS = r"""
-(function(show){
-  var e = document.getElementById('qgis-crosshair');
-  if (!show) { if (e) e.remove(); return; }
-  if (!document.body) return;
-  var html = '<svg width="48" height="48" viewBox="0 0 48 48" fill="none">'
-    + '<circle cx="24" cy="24" r="21.5" stroke="#ffeb00" stroke-width="1.5"/>'  // jaune vif, la croix entière à l'intérieur
-    + '<path d="M24 4v16M24 28v16M4 24h16M28 24h16" stroke="#ff8a80" stroke-width="1.5"/>'
-    + '<circle cx="24" cy="24" r="1.2" fill="#fff"/></svg>';
-  if (e) { if (e.innerHTML !== html) e.innerHTML = html; return; }  // mis à jour si la page l'a déjà
-  e = document.createElement('div');
-  e.id = 'qgis-crosshair';
-  e.innerHTML = html;
-  e.style.cssText = 'position:fixed;left:50%;top:50%;width:48px;height:48px;margin:-24px 0 0 -24px;'
-    + 'pointer-events:none;z-index:2147483647';
-  document.body.appendChild(e);
-})(__SHOW__)
-"""
-
-# Clics dans la visionneuse (mesures au sol) : un clic sans glisser est mis en file
-# avec l'orientation de la vue à cet instant et sa position par rapport au centre
-# de la visionneuse. La file est relue (et vidée) par la lecture régulière.
+# Clics et touches dans la visionneuse pendant une mesure : un clic sans glisser est mis en file
+# avec l'orientation de la vue à cet instant, sa position par rapport au centre de la
+# visionneuse et son bouton (droit : sélection d'un point) ; pas un clic sur une flèche de
+# navigation ni sur le bouton du plugin. Les flèches du clavier et Entrée sont mises en file
+# quand un point est sélectionné (__qgisKeyGrab), sans aller à la visionneuse ; le bouton
+# « Valider le point triangulé » met « keep » en file d'actions. Les files sont relues (et
+# vidées) par la lecture régulière : {"c": clics, "k": touches, "a": actions}.
 CLICKS_JS = r"""
 (function(){
   if (!window.__qgisClickHook) {
     window.__qgisClickHook = true;
     window.__qgisClicks = [];
+    window.__qgisKeys = [];
+    window.__qgisActions = window.__qgisActions || [];
     var down = null;
+    function skip(e){  // flèche de navigation ou élément du plugin : pas un clic de mesure
+      var path = e.composedPath ? e.composedPath() : [];
+      for (var i = 0; i < path.length; i++) {
+        var el = path[i];
+        if (el.classList && el.classList.contains('psv-virtual-tour-link')) return true;
+        if (el.id && String(el.id).indexOf('qgis-') === 0 && el.id !== 'qgis-border') return true;
+      }
+      return false;
+    }
     window.addEventListener('pointerdown', function(e){
-      down = {x: e.clientX, y: e.clientY, t: Date.now()};
+      down = skip(e) ? null : {x: e.clientX, y: e.clientY, t: Date.now(), b: e.button};
     }, true);
     window.addEventListener('pointerup', function(e){
       if (!window.__qgisClickOn || !down) return;
@@ -188,34 +185,27 @@ CLICKS_JS = r"""
       try { pos = v.psv.getPositionFromEvent ? v.psv.getPositionFromEvent(e) : null; } catch (err) {}
       window.__qgisClicks.push({
         pic: v.psv.getPictureId ? (v.psv.getPictureId() || '') : '',
-        pyaw: pos ? pos.yaw : null, ppitch: pos ? pos.pitch : null,
+        pyaw: pos ? pos.yaw : null, ppitch: pos ? pos.pitch : null, right: down.b === 2,
         x: p.x, y: p.y, z: p.z || 0, vfov: (v.psv.state && v.psv.state.vFov) || null,
         dx: e.clientX - (r.left + r.width / 2), dy: e.clientY - (r.top + r.height / 2),
         w: r.width, h: r.height});
     }, true);
+    window.addEventListener('contextmenu', function(e){ if (window.__qgisClickOn) e.preventDefault(); }, true);
+    var KEYS = {ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Enter: 'enter'};
+    window.addEventListener('keydown', function(e){
+      var key = KEYS[e.key];
+      if (!key || !window.__qgisClickOn || !window.__qgisKeyGrab) return;
+      if (e.target && e.target.closest && e.target.closest('input, select, textarea')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.__qgisKeys.push(key);
+    }, true);
   }
   window.__qgisClickOn = true;
-  // Curseur fin de mesure sur la photo (la visionneuse impose sinon main / flèche)
-  var v = window.__pnxViewer;
-  var box = v && v.psv && v.psv.container;
-  var root = box && box.getRootNode ? box.getRootNode() : null;
-  if (root) {
-    var css = '.psv-container, .psv-container * { cursor: url("data:image/svg+xml;utf8,'
-      + "<svg xmlns='http://www.w3.org/2000/svg' width='33' height='33'>"
-      + "<circle cx='16.5' cy='16.5' r='15.5' fill='none' stroke='%23ffeb00' stroke-width='1.5'/>"
-      + "<path d='M16.5 2v11M16.5 20v11M2 16.5h11M20 16.5h11' stroke='%23ff8a80' stroke-width='1.5'/>"
-      + "<circle cx='16.5' cy='16.5' r='1' fill='white'/></svg>"
-      + '") 16 16, crosshair !important; }';
-    var st = root.getElementById ? root.getElementById('qgis-cursor-style') : null;
-    if (!st) {
-      st = document.createElement('style');
-      st.id = 'qgis-cursor-style';
-      (root === document ? document.head : root).appendChild(st);
-    }
-    if (st.textContent !== css) st.textContent = css;  // mis à jour si la page l'a déjà
-  }
-  var out = JSON.stringify(window.__qgisClicks || []);
+  var out = JSON.stringify({c: window.__qgisClicks || [], k: window.__qgisKeys || [], a: window.__qgisActions || []});
   window.__qgisClicks = [];
+  window.__qgisKeys = [];
+  window.__qgisActions = [];
   return out;
 })()
 """
@@ -223,31 +213,29 @@ CLICKS_OFF_JS = r"""
 (function(){
   window.__qgisClickOn = false;
   window.__qgisClicks = [];
-  var v = window.__pnxViewer;
-  var box = v && v.psv && v.psv.container;
-  var root = box && box.getRootNode ? box.getRootNode() : document;
-  var st = root.getElementById ? root.getElementById('qgis-cursor-style') : null;
-  if (st) st.remove();
+  window.__qgisKeys = [];
+  window.__qgisActions = [];
 })()
 """
 
-# Repères de mesure dans la visionneuse (module de repères du moteur 360°) : points
-# de départ et d'arrivée, trait entre eux et étiquette du résultat. Ils sont accrochés
-# à la photo et suivent la vue. Redessinés seulement si l'état ou la photo change, ou
-# si la visionneuse les a effacés (elle vide ses repères en changeant de photo).
+# Repères de mesure dans la visionneuse (module de repères du moteur 360°), accrochés à la
+# photo : croix jaunes des points de mesure (bleues pour les visées de triangulation), trait
+# rouge et étiquette du résultat ; lignes guides en tirets, sans croix et sous les traits :
+# droite de mesure d'une largeur (bleue), verticale d'une hauteur (verte). Point sélectionné :
+# cercle autour de sa croix. Redessinés seulement si l'état ou la photo change, ou si la
+# visionneuse les a effacés (elle vide ses repères en changeant de photo).
 MARKS_JS = r"""
 (function(state){
   var v = window.__pnxViewer;
   var M = v && v.psv && v.psv._myMarkers;
   if (!M || !M.addMarker) return;
   var pic = v.psv.getPictureId ? (v.psv.getPictureId() || '') : '';
-  // Mesures de la photo affichée : celles prises sur d'autres photos restent en attente
+  // Repères de la photo affichée : ceux d'autres photos attendent
   var measures = (state.measures || []).map(function(m){
-    return {label: m.label, beside: m.beside,
+    return {label: m.label, beside: m.beside, guide: !!m.guide, vertical: !!m.vertical, sighting: !!m.sighting,
             pts: (m.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; })};
   }).filter(function(m){ return m.pts.length; });
-  // Étiquette à côté du trait (hauteur) : du côté du centre de la vue, recalculé quand
-  // la vue tourne de l'autre côté du trait
+  // Étiquette à côté du trait (hauteur) : du côté du centre de la vue
   var view = v.psv.getPosition ? v.psv.getPosition().yaw : 0;
   measures.forEach(function(m){
     m.side = '';
@@ -259,24 +247,25 @@ MARKS_JS = r"""
     }
   });
   var key = JSON.stringify(measures) + '|' + pic;
-  var present = !measures.length || !!(M.markers && M.markers['qgis-m0-p0']);
+  var present = !measures.length || !!(M.markers && window.__qgisMarkIds && window.__qgisMarkIds.length
+                                       && M.markers[window.__qgisMarkIds[0]]);
   if (key === window.__qgisMarkKey && present) return;
   window.__qgisMarkKey = key;
-  // Repères précédents, y compris ceux d'une version antérieure du plugin
-  var old = (window.__qgisMarkIds || []).concat(['qgis-ext0', 'qgis-ext1', 'qgis-line-halo', 'qgis-line',
-             'qgis-h0', 'qgis-h1', 'qgis-p0', 'qgis-p1', 'qgis-label']);
-  old.forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
+  (window.__qgisMarkIds || []).forEach(function(id){ if (M.markers && M.markers[id]) M.removeMarker(id); });
   var ids = [];
   function add(marker){ ids.push(marker.id); M.addMarker(marker); }
-  // Points en croix jaune vif fines (visibles sur la peinture routière blanche) centrées sur le clic, le trait va d'un centre à l'autre.
-  // Les traits passent devant toutes les croix : ajoutés après elles (même couche SVG,
-  // ordre d'ajout), avec un zIndex plus haut, et replacés en fin de leur conteneur.
+  // Guides d'abord (dessous), en tirets
+  measures.forEach(function(m, k){
+    if (!m.guide || m.pts.length < 2) return;
+    add({id: 'qgis-m' + k + '-guide', polyline: m.pts.map(function(p){ return [p.yaw, p.pitch]; }), zIndex: 0,
+         svgStyle: {stroke: m.vertical ? '#2ecc40' : '#00bce6', strokeWidth: '2px', strokeDasharray: '8 5', fill: 'none'}});
+  });
   var cross = 'M0 9H18M9 0V18';
   measures.forEach(function(m, k){
+    if (m.guide) return;
     m.pts.forEach(function(p, i){
       add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
-           anchor: 'center center', svgStyle: {stroke: '#ffeb00', strokeWidth: '1.5px', fill: 'none'}});
-      // Point sélectionné pour être visé à nouveau : cercle jaune autour de la croix
+           anchor: 'center center', svgStyle: {stroke: m.sighting ? '#00bce6' : '#ffeb00', strokeWidth: '1.5px', fill: 'none'}});
       if (p.sel) add({id: 'qgis-m' + k + '-s' + i, position: {yaw: p.yaw, pitch: p.pitch}, zIndex: 3,
                       path: 'M1 12a11 11 0 1 0 22 0a11 11 0 1 0 -22 0', anchor: 'center center',
                       svgStyle: {stroke: '#ffd54f', strokeWidth: '2.5px', fill: 'none'}});
@@ -284,20 +273,20 @@ MARKS_JS = r"""
   });
   var lines = [];
   measures.forEach(function(m, k){
-    if (m.pts.length !== 2) return;
+    if (m.guide || m.pts.length !== 2) return;
     var id = 'qgis-m' + k + '-line';
     add({id: id, polyline: [[m.pts[0].yaw, m.pts[0].pitch], [m.pts[1].yaw, m.pts[1].pitch]], zIndex: 2,
          svgStyle: {stroke: '#ff5f52', strokeWidth: '2.5px', fill: 'none'}});
     lines.push(id);
   });
-  lines.forEach(function(id){
+  lines.forEach(function(id){  // traits devant les croix
     var mk = M.markers && M.markers[id];
     var el = mk && (mk.domElement || mk.element || mk.$el);
     if (el && el.parentNode) el.parentNode.appendChild(el);
   });
   measures.forEach(function(m, k){
     var pts = m.pts, prefix = 'qgis-m' + k + '-';
-    if (!m.label) return;
+    if (m.guide || !m.label) return;
     var at = pts[0];
     if (pts.length === 2) {  // milieu du trait (moyenne des directions)
       var x = 0, y = 0, z = 0;
@@ -307,9 +296,6 @@ MARKS_JS = r"""
       at = {yaw: Math.atan2(x, z), pitch: Math.atan2(y, Math.sqrt(x * x + z * z))};
     }
     var text = String(m.label).replace(/[&<>]/g, function(c){ return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c]; });
-    // Flèche de tête allongée au double dans son sens. ↔ (largeur) : la flèche cachée en double
-    // réserve exactement la place, la visible est étirée depuis le bord gauche. ↕ (hauteur) :
-    // une ligne de 2em lui fait la place, l'étiquette grandit d'autant.
     text = text.replace(/^↔/, '<span style="position:relative;display:inline-block">'
       + '<span style="visibility:hidden">↔↔</span><span style="position:absolute;left:0;top:0;'
       + 'transform:scaleX(2);transform-origin:0 50%">↔</span></span>');
@@ -327,28 +313,28 @@ MARKS_JS = r"""
 })(__STATE__)
 """
 
-# Pendant une mesure par clics (largeur, hauteur ; pas la triangulation, qui
-# demande de changer de photo), un clic ne doit pas changer de photo : on écarte l'événement
-# « click » du moteur 360° (la visionneuse y va à la photo voisine dans la direction
-# cliquée) sans toucher au glisser, et on masque les flèches de navigation au sol
-# ainsi que le curseur « aller ici » qui suit la souris sur le sol.
+# Navigation pendant une mesure : un clic sur la photo ne change pas de photo (on écarte
+# l'événement « click » du moteur 360°, sauf sur une flèche de navigation), sans toucher au
+# glisser ; flèches de navigation masquées pendant la prise de mesure (pas pendant les visées,
+# qui demandent de changer de photo) ; curseur « aller ici » qui suit la souris sur le sol masqué.
 NAV_BLOCK_JS = r"""
-(function(on, hideCursor){
-  // on : mesure par clics (clic sans navigation, flèches masquées) ;
-  // hideCursor : curseur au sol masqué (aussi en triangulation, où il gêne la visée)
+(function(on, hideArrows, hideCursor){
   window.__qgisBlockNav = on;
   var v = window.__pnxViewer;
-  if (v && v.psv && !v.psv.__qgisNavPatch) {
+  if (v && v.psv && !v.psv.__qgisNavPatch2) {
     var orig = v.psv.dispatchEvent;
     v.psv.dispatchEvent = function(e){
-      if (window.__qgisBlockNav && e && e.type === 'click') return true;
+      if (window.__qgisBlockNav && e && e.type === 'click') {
+        var t = e.data && e.data.target;
+        var arrow = t && t.closest && t.closest('.psv-virtual-tour-link');
+        if (!arrow) return true;
+      }
       return orig.call(this, e);
     };
-    v.psv.__qgisNavPatch = true;
+    v.psv.__qgisNavPatch2 = true;
   }
   // Curseur au sol : image ajoutée au conteneur du moteur 360°, en position absolue,
-  // au-dessus (z-index 10) et sans souris ; sa taille varie avec l'inclinaison.
-  // La visionneuse change son « display » à chaque mouvement : on joue sur « visibility ».
+  // au-dessus (z-index 10) et sans souris ; « visibility », la visionneuse changeant « display »
   var box = v && v.psv && v.psv.container;
   var kids = box ? box.children : [];
   for (var k = 0; k < kids.length; k++) {
@@ -363,19 +349,108 @@ NAV_BLOCK_JS = r"""
   }
   // Flèches : reprises à chaque changement d'état, puis chaque seconde (photo suivante)
   var now = Date.now();
-  if (window.__qgisNavState === on && now - (window.__qgisNavTime || 0) < 1000) return;
-  window.__qgisNavState = on;
+  if (window.__qgisNavState === hideArrows && now - (window.__qgisNavTime || 0) < 1000) return;
+  window.__qgisNavState = hideArrows;
   window.__qgisNavTime = now;
   var roots = [document];
   while (roots.length) {
     var r = roots.pop();
     var arrows = r.querySelectorAll ? r.querySelectorAll('.psv-virtual-tour-arrows') : [];
     for (var i = 0; i < arrows.length; i++) {
-      if (on) arrows[i].style.setProperty('visibility', 'hidden', 'important');
+      if (hideArrows) arrows[i].style.setProperty('visibility', 'hidden', 'important');
       else arrows[i].style.removeProperty('visibility');
     }
     var els = r.querySelectorAll ? r.querySelectorAll('*') : [];
     for (var j = 0; j < els.length; j++) { if (els[j].shadowRoot) roots.push(els[j].shadowRoot); }
   }
-})(__ON__, __CURSOR__)
+})(__ON__, __ARROWS__, __CURSOR__)
+"""
+
+# Habillage de la visionneuse pendant une mesure, comme l'application web : liseré (bleu pendant
+# les visées, jaune pendant la prise de mesure, orange en calage), état animé en haut à gauche,
+# consigne en haut au centre, bouton « ✔ Valider le point triangulé » (halo) dessous quand les
+# visées donnent un point, pointeur de mesure (cercle de la couleur du liseré, vert en mesure si
+# l'inclinaison est calée) ; rien hors mesure. state : {kind: "visee" | "prise" | "calage" | "",
+# label, hint, point, tilted, grab} ; grab : un point est sélectionné (flèches et Entrée captées).
+OVERLAY_JS = r"""
+(function(state){
+  window.__qgisKeyGrab = !!state.grab;
+  var body = document.body;
+  if (!body) return;
+  var COLORS = {visee: '#00bce6', prise: '#ffeb00', calage: '#ff6f00'};
+  var color = COLORS[state.kind] || '';
+  if (!document.getElementById('qgis-overlay-style')) {
+    var st = document.createElement('style');
+    st.id = 'qgis-overlay-style';
+    st.textContent = '#qgis-border{position:fixed;inset:0;border:4px solid;pointer-events:none;z-index:2147483640}'
+      + '#qgis-top{position:fixed;top:8px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;'
+      + 'align-items:center;gap:5px;max-width:56%;pointer-events:none;z-index:2147483641;font-family:sans-serif}'
+      + '#qgis-hint{margin:0;padding:5px 12px;border-radius:5px;background:rgba(32,33,36,.55);color:#fff;'
+      + 'font:600 15px/1.3 sans-serif;text-align:center;text-shadow:0 0 2px rgba(0,0,0,.9)}'
+      + '#qgis-keep{pointer-events:auto;padding:6px 14px;border:2px solid #00bce6;border-radius:5px;background:#00bce6;'
+      + 'color:#fff;font:600 14px sans-serif;cursor:pointer;text-shadow:0 0 2px rgba(0,0,0,.6);'
+      + 'animation:qgishalo 1.6s ease-in-out infinite}'
+      + '#qgis-keep:hover{background:#0098bb;border-color:#0098bb}'
+      + '@keyframes qgishalo{0%,100%{box-shadow:0 1px 4px rgba(0,0,0,.5),0 0 0 0 rgba(0,188,230,.55)}'
+      + '50%{box-shadow:0 1px 4px rgba(0,0,0,.5),0 0 10px 5px rgba(0,188,230,.55)}}'
+      + '#qgis-state{position:fixed;top:8px;left:10px;display:flex;align-items:center;padding:3px 8px;'
+      + 'border-radius:4px;background:rgba(32,33,36,.55);font:500 13px sans-serif;pointer-events:none;'
+      + 'z-index:2147483641;text-shadow:0 0 2px rgba(0,0,0,.9)}'
+      + '#qgis-state::before{content:"";width:10px;height:10px;margin-right:6px;border-radius:50%;'
+      + 'background:currentColor;animation:qgispulse 1.2s ease-in-out infinite}'
+      + '@keyframes qgispulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.7)}}';
+    document.head.appendChild(st);
+  }
+  function el(id, tag, parent){
+    var e = document.getElementById(id);
+    if (!e) { e = document.createElement(tag); e.id = id; parent.appendChild(e); }
+    return e;
+  }
+  var border = el('qgis-border', 'div', body);
+  border.style.display = color ? 'block' : 'none';
+  border.style.borderColor = color;
+  var top = el('qgis-top', 'div', body);
+  top.style.display = state.hint || state.point ? 'flex' : 'none';
+  var hint = el('qgis-hint', 'p', top);
+  hint.textContent = state.hint || '';
+  hint.style.display = state.hint ? 'block' : 'none';
+  var keep = el('qgis-keep', 'button', top);
+  keep.textContent = '✔ Valider le point triangulé';
+  keep.style.display = state.point ? 'inline-block' : 'none';
+  if (!keep.__qgis) {
+    keep.__qgis = true;
+    keep.addEventListener('click', function(e){
+      e.stopPropagation();
+      (window.__qgisActions = window.__qgisActions || []).push('keep');
+    });
+  }
+  var lab = el('qgis-state', 'div', body);
+  lab.textContent = state.label || '';
+  lab.style.display = state.label ? 'flex' : 'none';
+  lab.style.color = color;
+  // Pointeur de mesure dans la visionneuse (son shadow DOM)
+  var v = window.__pnxViewer;
+  var box = v && v.psv && v.psv.container;
+  var root = box && box.getRootNode ? box.getRootNode() : null;
+  if (root) {
+    var css = '';
+    if (state.kind) {
+      var ring = state.kind === 'prise' && state.tilted ? '#2ecc40' : color;
+      css = '.psv-container, .psv-container * { cursor: url("data:image/svg+xml;utf8,'
+        + "<svg xmlns='http://www.w3.org/2000/svg' width='33' height='33'>"
+        + "<circle cx='16.5' cy='16.5' r='15' fill='none' stroke='" + ring.replace('#', '%23') + "' stroke-width='2.5'/>"
+        + "<path d='M16.5 2v11M16.5 20v11M2 16.5h11M20 16.5h11' stroke='%23ff8a80' stroke-width='1.5'/>"
+        + "<circle cx='16.5' cy='16.5' r='1' fill='white'/></svg>"
+        + '") 16 16, crosshair !important; } .psv-container .psv-virtual-tour-link,'
+        + ' .psv-container .psv-virtual-tour-link * { cursor: pointer !important; }';
+    }
+    var cs = root.getElementById ? root.getElementById('qgis-cursor-style') : null;
+    if (!cs && css) {
+      cs = document.createElement('style');
+      cs.id = 'qgis-cursor-style';
+      (root === document ? document.head : root).appendChild(cs);
+    }
+    if (cs && cs.textContent !== css) cs.textContent = css;
+  }
+})(__STATE__)
 """

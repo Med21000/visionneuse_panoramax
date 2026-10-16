@@ -2,8 +2,11 @@
 
 Ce document explique en détail comment la Visionneuse Panoramax mesure à partir des photos 360° : le modèle de caméra, le moteur de calcul commun à toutes les mesures, chaque mode de mesure, le recalage d'une mesure dans un plan défini sur la carte QGIS, les fonctions de calage des photos, les sources d'erreur et les pistes d'amélioration. Le mode d'emploi résumé se trouve dans le [README](../README.md).
 
+> **Refonte d'octobre 2026 : mesures appuyées sur des points triangulés.** Malgré le calage, la profondeur tirée d'une seule photo (sol, plan vertical) rendait les mesures trop sensibles au moindre décalage. Les mesures de l'interface s'appuient désormais sur des **points triangulés** (section [0](#0-mesures-appuyées-sur-des-points-triangulés)) ; la logique est commune au plugin et à l'application web (`core/session.py`). La largeur et la longueur sur une seule photo, la façade du cadastre, le calage de la hauteur de caméra et « Mesure sur un pont » sont retirés de l'interface : les sections qui les décrivent (4.1, 4.2, la façade en 4.3, 5, 6.2) restent comme référence des calculs, toujours présents dans le cœur et utilisés par les recalages.
+
 Sommaire :
 
+0. [Mesures appuyées sur des points triangulés](#0-mesures-appuyées-sur-des-points-triangulés)
 1. [Vue d'ensemble](#1-vue-densemble)
 2. [Le modèle de caméra](#2-le-modèle-de-caméra)
 3. [Le moteur de mesure](#3-le-moteur-de-mesure)
@@ -15,6 +18,28 @@ Sommaire :
 9. [Pistes d'amélioration des calculs](#9-pistes-damélioration-des-calculs)
 10. [Pistes d'amélioration de la prise de vues](#10-pistes-damélioration-de-la-prise-de-vues)
 11. [Annexe : paramètres du code](#11-annexe--paramètres-du-code)
+
+---
+
+## 0. Mesures appuyées sur des points triangulés
+
+Un **point triangulé** est visé depuis au moins deux photos (un clic par photo) ; sa position est l'intersection pondérée des visées (section [4.4](#44-triangulation-dun-objet)), avec son incertitude. Il donne la **profondeur** que la photo seule donnait mal, sans terrain ni hauteur de caméra.
+
+### 0.1 Hauteur d'un objet
+
+Le point de référence est le **pied** de l'objet, triangulé. Sur une photo qui a servi à le viser, le pied est cette visée ; l'utilisateur clique seulement le sommet (sur une autre photo : pied puis sommet). La mesure (`measures.Measure`, plan vertical face à la caméra) est ensuite **calée sur le point de référence** (`Measure.anchor`) : le pied est placé à sa position horizontale, le sommet dans le plan vertical qui passe par lui, chacun à l'altitude de son rayon de visée à cette distance. Pied et sommet étant vus de la même caméra, la hauteur vaut `d · (tan e_sommet − tan e_pied)`, où `d` est la distance horizontale de la caméra au point : **ni le terrain ni la hauteur de caméra n'interviennent**. L'incertitude combine l'inclinaison de la photo, la visée des clics et la position du point de référence, déplacée d'un bloc (pied et sommet ensemble) de ±son incertitude. Un même point de référence sert à plusieurs hauteurs (objets superposés au même endroit), depuis n'importe quelle photo.
+
+### 0.2 Largeur perpendiculaire à la chaussée
+
+Le premier bord `A` est triangulé. L'axe de la route en `A` est lu dans la BD TOPO (tronçon qui longe la trajectoire de la photo), sinon pris sur la trajectoire de la séquence. La **droite de mesure** passe par `A`, perpendiculairement à cet axe. Le second bord `B` est l'intersection de cette droite et de la **direction horizontale** d'un clic (`widths.cross`) : seule la direction compte. La largeur est `|AB|`, calcul à plat (`core/widths.py`). La visée doit couper la droite franchement : le clic se fait depuis une photo prise quelques mètres avant ou après `A`, pas juste en face (refusé sous 10°, signalé rasant sous 25°). L'incertitude combine, en somme quadratique : la position de `A` (±son incertitude, en est et en nord), l'axe de la route (±2° pour la BD TOPO, ±3° pour la trajectoire, estimations à confirmer), le cap du clic (visée et cap de la photo) et la position de la photo.
+
+### 0.3 Mesure libre
+
+Distance horizontale entre deux points triangulés successifs, incertitudes des deux points combinées.
+
+### 0.4 Validation
+
+Deux photos imajbox à position RTK (±0,10 m) de Pouilly-en-Auxois, distantes de 5 m, cibles connues (essais de l'application web `tests/essai-rtk.html`, `essai-largeur.html`, `essai-libre.html`) : point de référence à ±0,17 m (visées croisées à 54°) ; hauteur 3,46 m ± 0,11 m pour 3,464 m ; largeur 8,00 m ± 0,48 m pour 8 m (clic à 40° de la droite : l'axe pèse 0,36 m, la position de `A` le long de la route 0,26 m) ; distance 3,60 m ± 0,24 m pour 3,606 m. Avec un GPS grand public (±4 m), le point de référence est à ±5 m et une hauteur à ±2 à 3 m : les mesures restent possibles mais sont signalées comme probablement incohérentes.
 
 ---
 

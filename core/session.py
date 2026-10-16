@@ -43,16 +43,19 @@ RTK_WARNING = (" ⚠ Photo sans position GPS RTK vérifiée : mesure probablemen
 
 
 class Session:
-    def __init__(self, notify=None, tool=None, triangulator=None, calibrator=None, calibration_store=None):
+    def __init__(self, notify=None, tool=None, triangulator=None, calibrator=None, calibration_store=None,
+                 precision_checker=None, tilt_checker=None):
         """notify : fonction de l'hôte, appelée quand une lecture réseau ou un calcul aboutit
         après coup. tool, triangulator, calibrator : outils de l'hôte (sous-classes de
         measures.MeasureTool, tools.Triangulator, tools.CalibrationTool qui dessinent sur sa
-        carte), sinon ceux du cœur ; calibration_store : calage de l'hôte (calibration.Calibration)."""
+        carte), sinon ceux du cœur ; calibration_store : calage de l'hôte (calibration.Calibration) ;
+        precision_checker, tilt_checker : vérificateurs de l'hôte, partagés pour ne pas refaire ses
+        requêtes (precision.PrecisionChecker, autotilt.TiltChecker)."""
         self.notify = notify or (lambda: None)
         self.calibration = calibration_store if calibration_store is not None else calibration.Calibration()
         self.roads = roads.RoadAxisProvider()
-        self.precision = precision.PrecisionChecker()
-        self.tilts = autotilt.TiltChecker()
+        self.precision = precision_checker if precision_checker is not None else precision.PrecisionChecker()
+        self.tilts = tilt_checker if tilt_checker is not None else autotilt.TiltChecker()
         self.roads.ready = self._roads_ready
         self.tool = tool if tool is not None else measures.MeasureTool(None)
         self.tool.calibration = self.calibration

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Outil de mesure du plugin : la logique de calcul du cœur (core/measures.py), dessinée sur
-la carte QGIS (measure.MeasureItem) et enregistrée dans la couche « Panoramax – mesures »."""
+"""Outil de mesure du plugin : la logique de calcul du cœur (core/measures.py, hauteurs ;
+core/widths.py, largeurs), dessinée sur la carte QGIS (measure.MeasureItem) et enregistrée dans
+la couche « Panoramax – mesures », avec les distances entre points triangulés (save_links)."""
 
 from datetime import datetime
 
@@ -24,7 +25,7 @@ from qgis.core import (
 from qgis.PyQt.QtGui import QColor
 
 from . import output
-from .core import ground, measures
+from .core import measures
 from .core.measures import CAMERA_SOURCES, KIND_NAMES, SURFACE_NAMES, _ground_z
 from .measure import COLOR, WGS84, MeasureItem
 
@@ -32,7 +33,7 @@ LAYER_NAME = "Panoramax – mesures"
 LAYER_FIELDS = (
     "field=type:string&field=surface:string&field=valeur_m:double&field=incert_m:double"
     "&field=horiz_m:double&field=vert_m:double&field=long_route_m:double&field=travers_m:double"
-    "&field=dist_photo_m:double&field=camera_m:double&field=camera_calee:integer&field=terrain:string"
+    "&field=dist_photo_m:double&field=camera_m:double&field=camera_calee:integer&field=axe_route:string"
     "&field=recales:integer&field=photos:string&field=date_mesure:string&field=commentaire:string")
 
 
@@ -87,7 +88,7 @@ def feature(m, layer):
         "dist_photo_m": num(max(r["ranges"]), 1),
         "camera_m": num(height),
         "camera_calee": CAMERA_SOURCES.get(source, 0),
-        "terrain": " + ".join(sorted({c.get("terrain") for c in m.clicks if c.get("terrain")})) or ground.FLAT,
+        "axe_route": m.axis_source if m.kind == "road" else None,
         "recales": len(m.overrides),
         "photos": ",".join(dict.fromkeys(c.get("pic") or "" for c in m.clicks)),
         "date_mesure": datetime.now().isoformat(timespec="seconds"),
@@ -141,3 +142,36 @@ class MeasureTool(measures.MeasureTool):
         if updated:
             parts.append("{} mise{} à jour".format(updated, "s" if updated > 1 else ""))
         return True, "{} dans « {} ».".format(" et ".join(parts).capitalize(), layer.name())
+
+
+def save_links(points, links, saved, parent=None):
+    """Enregistre dans la couche « Panoramax – mesures » les distances entre points triangulés de
+    la session (n°, n°, attributs) qui ne le sont pas encore ; saved : ensemble des couples de
+    noms déjà enregistrés, complété. Retourne (nombre ajouté, message d'erreur ou None ; "" si
+    l'utilisateur a renoncé à créer la couche)."""
+    todo = [(i, j, v) for i, j, v in links if (points[i][2]["nom"], points[j][2]["nom"]) not in saved]
+    if not todo:
+        return 0, None
+    layer, error = output.ensure_layer("measures", LAYER_NAME, "mesures", "LineString", LAYER_FIELDS,
+                                       _style_measures, parent)
+    if layer is None:
+        return 0, error or ""
+    to_layer = QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance())
+    for i, j, v in todo:
+        (lon1, lat1, v1), (lon2, lat2, v2) = points[i], points[j]
+        geom = QgsGeometry.fromPolylineXY([QgsPointXY(lon1, lat1), QgsPointXY(lon2, lat2)])
+        geom.transform(to_layer)
+        values = {"type": "distance entre points triangulés", "valeur_m": v["valeur_m"], "incert_m": v["incert_m"],
+                  "horiz_m": v["valeur_m"], "recales": 0,
+                  "photos": ",".join(dict.fromkeys(p for w in (v1, v2) for p in w.get("photos", "").split(",") if p)),
+                  "date_mesure": datetime.now().isoformat(timespec="seconds"), "commentaire": v.get("commentaire", "")}
+        feat = QgsFeature(layer.fields())
+        feat.setGeometry(geom)
+        for name, value in values.items():
+            if layer.fields().indexOf(name) >= 0:
+                feat.setAttribute(name, value)
+        if output.write_feature(layer, feat) is None:
+            return 0, "Impossible d'ajouter la distance {}–{} à la couche « {} ».".format(
+                v1["nom"], v2["nom"], layer.name())
+        saved.add((v1["nom"], v2["nom"]))
+    return len(todo), None

@@ -134,6 +134,30 @@ class Width(Base):
         m.reaim(0, click())
         self.assertIn("point de référence", m.error)
 
+    def test_nudge(self):
+        # Bord décalé de 3 cm puis ramené de 1 cm : 8,02 m, repère déplacé dans la photo
+        m = widths.PerpendicularWidth(self.tool, edge(), BDTOPO, click())
+        for step in (0.01, 0.01, 0.01, -0.01):
+            m.nudge(step)
+        self.assertAlmostEqual(m.result["value"], 8.02, places=4)
+        self.assertLess(distance(m.result["points"][1], point(-3.02, 10.0)), 1e-3)
+        self.assertIn("décalé de 2 cm", m.status())
+        dyaw, _ = m.result["shifts"][1]
+        self.assertLess(dyaw, 0.0)  # bord poussé vers l'ouest : vu plus à gauche
+        # Jamais au-delà du point de référence ; une nouvelle visée annule le décalage
+        m.nudge(-20.0)
+        self.assertAlmostEqual(m.result["value"], widths.MIN_WIDTH, places=6)
+        m.reaim(1, click())
+        self.assertAlmostEqual(m.result["value"], 8.0, places=4)
+        self.assertEqual(m.side(), -1.0)
+
+    def test_move_edge(self):
+        a = edge()
+        widths.move_edge(a, 0.0, -0.5)  # 50 cm vers l'ouest
+        self.assertLess(distance((a["lon"], a["lat"]), point(4.5, 10.0)), 1e-3)
+        m = widths.PerpendicularWidth(self.tool, a, BDTOPO, click())
+        self.assertAlmostEqual(m.result["value"], 7.5, places=4)
+
     def test_guide(self):
         a, b = widths.guide(edge(), 0.0)
         self.assertLess(distance(a, point(-10.0, 10.0)), 1e-3)

@@ -26,6 +26,7 @@ AXIS_ERROR_TRACK = 3.0
 MIN_ANGLE = 10.0  # angle minimal (degrés) entre la visée et la droite perpendiculaire
 GRAZING_ANGLE = 25.0  # en dessous, visée signalée comme rasante
 GUIDE_LENGTH = 15.0  # m de part et d'autre de A : droite tracée sur la carte et dans la photo
+MIN_WIDTH = 0.01  # m : le bord décalé au clavier ne dépasse pas le point de référence
 
 
 def axis_error(source):
@@ -83,6 +84,7 @@ class PerpendicularWidth(measures.Measure):
         self.road = road  # axe de la route en A : dict axis, source (voir roads.py)
         self.clicks = [self._edge_mark(click), click]
         self.angle = None
+        self.offset = 0.0  # décalage du bord (m) le long de la droite, au clavier : allonge la largeur
         self.compute()
 
     def _edge_mark(self, click):
@@ -109,14 +111,27 @@ class PerpendicularWidth(measures.Measure):
         if index == 0:
             self.error = "Le point de référence ne se vise pas ici : « Nouveau point de référence »."
             return
-        state = list(self.clicks)
+        state = list(self.clicks), self.offset
         self.clicks = [self._edge_mark(click), click]  # repère de A dans la photo du nouveau clic
+        self.offset = 0.0
         self.compute()
         if self.error:
             error = self.error
-            self.clicks = state
+            self.clicks, self.offset = state
             self.compute()
             self.error = error
+
+    def nudge(self, step):
+        """Décale le bord de `step` m le long de la droite de mesure (positif : la largeur
+        s'allonge), sans aller au-delà du point de référence."""
+        if self.result:
+            self.offset = max(self.offset + step, MIN_WIDTH - self.result["value"] + self.offset)
+            self.compute()
+
+    def side(self):
+        """Côté du bord sur la droite de mesure, vu du point de référence : 1 dans la direction
+        perpendicular(axe), -1 à l'opposé."""
+        return 1.0 if self._width()[1] >= 0 else -1.0
 
     def _width(self, da=(0.0, 0.0), daxis=0.0, dheading=0.0, dcam=(0.0, 0.0)):
         click = self.clicks[1]
@@ -128,6 +143,18 @@ class PerpendicularWidth(measures.Measure):
         try:
             (bx, by), t, s, self.angle = self._width()
             click = self.clicks[1]
+            cam = triangulation._local(click["lon"], click["lat"], self.edge["lon"], self.edge["lat"])
+            shifts = [(0.0, 0.0), (0.0, 0.0)]
+            if self.offset:  # bord décalé au clavier : le long de la droite, son repère suit
+                ux, uy = perpendicular(self.road["axis"])
+                k = self.offset if t >= 0 else -self.offset
+                ox, oy = bx + k * ux, by + k * uy
+                height = self.tool.camera_for(click)
+                d0, d1 = math.hypot(bx - cam[0], by - cam[1]), math.hypot(ox - cam[0], oy - cam[1])
+                dyaw = math.degrees(math.atan2(ox - cam[0], oy - cam[1]) - math.atan2(bx - cam[0], by - cam[1]))
+                shifts[1] = ((dyaw + 540) % 360 - 180,
+                             math.degrees(math.atan2(height, d0) - math.atan2(height, max(d1, 0.1))))
+                bx, by, t, s = ox, oy, t + k, d1
             sigma_a, sigma_cam = self.edge["uncertainty"], click.get("accuracy") or triangulation.GPS_ACCURACY
             groups = [[{"da": (k * sigma_a, 0.0)} for k in (-1, 1)], [{"da": (0.0, k * sigma_a)} for k in (-1, 1)],
                       [{"daxis": k * axis_error(self.road["source"])} for k in (-1, 1)],
@@ -144,11 +171,10 @@ class PerpendicularWidth(measures.Measure):
                 total += worst * worst
             a = (self.edge["lon"], self.edge["lat"])
             b = triangulation._geographic(bx, by, *a)
-            cam = triangulation._local(click["lon"], click["lat"], *a)
             self.result = {"value": abs(t), "uncertainty": math.sqrt(total),
                            "decomposition": {"horizontal": abs(t), "vertical": 0.0, "along": 0.0, "across": abs(t)},
                            "ranges": [math.hypot(*cam), s], "points": [a, b], "extra": None, "picks": [a, b],
-                           "shifts": [(0.0, 0.0), (0.0, 0.0)]}
+                           "shifts": shifts}
         except geometry.GeometryError as exc:
             self.error = str(exc)
         self._draw()
@@ -163,9 +189,18 @@ class PerpendicularWidth(measures.Measure):
                 "· visée à {}° de la droite").format(
             measures._num(r["value"], 2), measures._num(r["uncertainty"], 2), self.edge.get("name") or "",
             measures._num(self.road["axis"] % 180, 0), self.road["source"], measures._num(self.angle, 0))
+        if self.offset:
+            text += " · bord décalé de {} cm au clavier".format(measures._num(self.offset * 100, 0))
         if self.angle < GRAZING_ANGLE:
             text += ". Visée rasante : un clic depuis une photo plus éloignée le long de la route sera plus précis"
         return text + ". Terrain et hauteur de caméra sans effet."
+
+
+def move_edge(edge, axis, distance):
+    """Déplace le point de référence edge (dict lon, lat, modifié) de `distance` m le long
+    de la droite perpendiculaire à l'axe `axis` (positif : dans la direction perpendicular)."""
+    ux, uy = perpendicular(axis)
+    edge["lon"], edge["lat"] = triangulation._geographic(distance * ux, distance * uy, edge["lon"], edge["lat"])
 
 
 def guide(edge, axis, length=GUIDE_LENGTH):

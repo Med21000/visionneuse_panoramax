@@ -142,6 +142,11 @@ class Triangulator:
     """Visées en cours et point d'intersection. Le dessin des visées sur la carte vient de
     l'hôte (new_item), l'enregistrement aussi (attributes donne les valeurs)."""
 
+    # Consignes de visée : réticule au centre de la vue et bouton dans le plugin, clic sur
+    # l'objet dans l'application web
+    AIM = "Placez le réticule sur l'objet puis « Viser »"
+    AIM_AGAIN = "visez le même objet puis « Viser » à nouveau"
+
     def __init__(self):
         self.sightings = []  # dicts : pic, lon, lat, heading, accuracy, precise
         self.result = None
@@ -194,10 +199,9 @@ class Triangulator:
     def status(self):
         n = len(self.sightings)
         if n == 0:
-            return ("Placez le réticule sur l'objet puis « Viser ». Recommencez depuis une autre "
-                    "photo, sur le côté de l'objet.")
+            return "{}. Recommencez depuis une autre photo, sur le côté de l'objet.".format(self.AIM)
         if n == 1:
-            return "1 visée. Changez de photo, visez le même objet puis « Viser » à nouveau."
+            return "1 visée. Changez de photo, {}.".format(self.AIM_AGAIN)
         if self.error:
             return "{} visées : {}".format(n, self.error)
         r = self.result

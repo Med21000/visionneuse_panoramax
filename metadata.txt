@@ -5,7 +5,7 @@ qgisMaximumVersion=4.99
 supportsQt6=True
 description=Visionneuse Panoramax dans QGIS avec mesures à l'écran appuyées sur des points triangulés : hauteurs, largeurs de chaussée, distances.
 about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement). Mesures directement dans la photo, toutes appuyées sur des points triangulés (visés depuis plusieurs photos) : hauteur d'un objet, largeur perpendiculaire à la chaussée, distance entre points. Mesures et points triangulés enregistrés dans des couches (GeoPackage ou couche temporaire). Points ajustables dans la photo (clic, clavier au centimètre) ou sur la carte QGIS, calage des photos (inclinaison, cap et position). Filtre des photos (date, 360° ou classiques, précision GPS, producteur). Synchronisation carte-visionneuse avec curseur de vue, choix de l'instance, captures Full HD et vignette. Nécessite QtWebEngine avec WebGL : s'ils manquent, le panneau explique comment les installer.
-version=1.4.1
+version=1.4.2
 author=Cédric COCHART
 email=cedric.cochart@gmail.com
 homepage=https://github.com/medlab-code/visionneuse_panoramax
@@ -16,7 +16,9 @@ category=Web
 icon=icon.png
 experimental=False
 deprecated=False
-changelog=1.4.1
+changelog=1.4.2
+    - Nettoyage : profil du terrain (RGE ALTI, service de secours) et façade du cadastre retirés, plus utilisés depuis les mesures sur points triangulés ; le LiDAR HD reste pour la vérification RTK et l'inclinaison automatique
+    1.4.1
     - Fenêtre d'avertissement, une fois par séquence pendant la mesure, quand la position des photos n'est pas vérifiée RTK : la localisation est trop imprécise, un GPS avec corrections RTK est requis
     1.4.0
     - Mesures refondues : toutes s'appuient sur des points triangulés (visés depuis au moins deux photos), la profondeur ne dépend plus du terrain ni de la hauteur de caméra

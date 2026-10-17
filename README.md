@@ -39,7 +39,7 @@ Cliquer sur « 📐 Mesure » puis choisir le mode. Toutes les mesures s'appuien
 
 La précision dépend donc de celle de la position et du cap des photos : les mesures sont fiables sur des photos à **position GPS RTK vérifiée** (comme celles de l'imajbox). Ailleurs, elles restent possibles, mais le résultat prévient qu'elles seront probablement incohérentes.
 
-![Mesures dans la visionneuse : hauteur d'une porte (2,53 m), largeur du passage piéton (5,00 m) et d'une bande (0,47 m), points en croix jaunes](docs/images/mesures.png)
+![Mesures dans la visionneuse de QGIS, à Châteauneuf : hauteur d'une borne (0,83 m) et largeur de la chaussée (5,48 m) depuis les points triangulés A et B, droite de mesure en tirets bleus, bouton « Nouvelle mesure depuis B »](docs/images/mesures.jpg)
 
 ### Viser un point
 

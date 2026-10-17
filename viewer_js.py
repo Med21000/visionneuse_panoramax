@@ -222,7 +222,7 @@ CLICKS_OFF_JS = r"""
 # photo : croix jaunes des points de mesure (bleues pour les visées de triangulation), trait
 # rouge et étiquette du résultat ; lignes guides en tirets, sans croix et sous les traits :
 # droite de mesure d'une largeur (bleue), verticale d'une hauteur (verte) ; nom d'un point
-# triangulé (A, B…), étiquette seule au-dessus à gauche de sa croix. Point sélectionné :
+# triangulé (A, B…), étiquette seule à côté de sa croix, du côté opposé à la mesure. Point sélectionné :
 # cercle autour de sa croix. Redessinés seulement si l'état ou la photo change, ou si la
 # visionneuse les a effacés (elle vide ses repères en changeant de photo).
 MARKS_JS = r"""
@@ -234,7 +234,7 @@ MARKS_JS = r"""
   // Repères de la photo affichée : ceux d'autres photos attendent
   var measures = (state.measures || []).map(function(m){
     return {label: m.label, beside: m.beside, guide: !!m.guide, vertical: !!m.vertical, sighting: !!m.sighting,
-            name: !!m.name,
+            name: !!m.name, name_side: m.side || '',
             pts: (m.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; })};
   }).filter(function(m){ return m.pts.length; });
   // Étiquette à côté du trait (hauteur) : du côté du centre de la vue
@@ -290,9 +290,11 @@ MARKS_JS = r"""
     var pts = m.pts, prefix = 'qgis-m' + k + '-';
     if (m.guide || !m.label) return;
     var at = pts[0];
-    if (m.name) {  // nom du point : au-dessus à gauche de sa croix, bordeaux comme sur la carte
-      add({id: prefix + 'name', position: {yaw: at.yaw, pitch: at.pitch}, anchor: 'bottom right', zIndex: 100,
-           html: '<div style="margin:0 6px 6px 0;padding:1px 6px;border-radius:4px;background:rgba(142,27,27,.92);'
+    if (m.name) {  // nom du point : du côté opposé à la mesure, bordeaux comme sur la carte
+      var place = {left: ['center right', 'margin-right:10px;'], right: ['center left', 'margin-left:10px;'],
+                   above: ['bottom center', 'margin-bottom:10px;']}[m.name_side] || ['top center', 'margin-top:10px;'];
+      add({id: prefix + 'name', position: {yaw: at.yaw, pitch: at.pitch}, anchor: place[0], zIndex: 100,
+           html: '<div style="' + place[1] + 'padding:1px 6px;border-radius:4px;background:rgba(142,27,27,.92);'
              + 'color:#fff;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
              + String(m.label).replace(/[&<>]/g, '') + '</div>'});
       return;

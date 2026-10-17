@@ -970,24 +970,33 @@ class Session:
     def _name_marks(self, marks):
         """Étiquettes des noms des points triangulés dans la photo affichée, sans croix (« name ») :
         point de référence des largeurs et des hauteurs, à sa croix (repère du point de référence
-        en cours, point 0 de ses mesures) ; points gardés de la mesure libre."""
+        en cours, point 0 de ses mesures) ; points gardés de la mesure libre. side : côté de la
+        croix opposé à la mesure (« left », « right », « above », « below »), pour ne pas la
+        masquer ; dessous par défaut (une hauteur monte, une largeur s'étend sur les côtés)."""
         pic = self.item.get("id")
-        at = {}  # nom -> repère
+        at = {}  # nom -> (repère, repère de l'autre bout de la mesure ou None)
         ref = self.ref_point
         if ref is not None and self.active and self.mode in REF_MODES:
             mark = self._reference_mark()
             if mark:
-                at[ref["name"]] = mark["points"][0]
+                at[ref["name"]] = (mark["points"][0], None)
         for w in self._widths():
-            at.setdefault(w.edge.get("name"), self._width_points(w)[0])
+            points = self._width_points(w)
+            at.setdefault(w.edge.get("name"), (points[0], points[1]))
         for m in self._heights():
             if m.reference and m.reference.get("name"):
-                at.setdefault(m.reference["name"], self._height_points(m)[0])
+                points = self._height_points(m)
+                at.setdefault(m.reference["name"], (points[0], points[1] if len(points) > 1 else None))
+        partner = {}
+        for i, j, _ in self.links:  # mesure libre : à l'opposé du point relié
+            partner.setdefault(i, j)
+            partner.setdefault(j, i)
         for k, (_, _, values) in enumerate(self.points):
             if values["nom"] not in at:
-                at[values["nom"]] = self._free_mark_point(k)
-        return [{"points": [dict(p, pic=pic, sel=False)], "label": name, "name": True}
-                for name, p in at.items() if name and p is not None]
+                other = self._free_mark_point(partner[k]) if k in partner else None
+                at[values["nom"]] = (self._free_mark_point(k), other)
+        return [{"points": [dict(p, pic=pic, sel=False)], "label": name, "name": True, "side": _away(p, other)}
+                for name, (p, other) in at.items() if name and p is not None]
 
     def _calibration_text(self):
         """Consigne des modes de calage, étape par étape, avec ce qui est déjà fait."""
@@ -1118,7 +1127,8 @@ class Session:
                 out.append({"points": [[p["yaw"], p["pitch"], bool(p.get("sel"))] for p in points],
                             "label": m.get("label", ""), "beside": m.get("beside", False),
                             "sighting": m.get("sighting", False), "guide": m.get("guide", False),
-                            "vertical": m.get("vertical", False), "name": m.get("name", False)})
+                            "vertical": m.get("vertical", False), "name": m.get("name", False),
+                            "side": m.get("side", "")})
         return out
 
     def focus(self):
@@ -1272,3 +1282,15 @@ def _point_name(n):
         n, r = divmod(n - 1, 26)
         name = chr(65 + r) + name
     return name
+
+
+def _away(p, other):
+    """Côté de la croix p opposé au point other (repères {yaw, pitch} de la photo, radians) :
+    « left », « right », « above » ou « below » ; « below » sans other."""
+    if other is None or other.get("yaw") is None or p.get("yaw") is None:
+        return "below"
+    dyaw = ((p["yaw"] - other["yaw"] + math.pi) % (2 * math.pi) - math.pi) * math.cos(p["pitch"])
+    dpitch = p["pitch"] - other["pitch"]
+    if abs(dyaw) >= abs(dpitch):
+        return "right" if dyaw > 0 else "left"  # le cap croît vers la droite de l'écran
+    return "above" if dpitch > 0 else "below"

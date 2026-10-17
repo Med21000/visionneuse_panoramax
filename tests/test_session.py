@@ -63,6 +63,7 @@ class Height(Base):
         self.assertTrue(text.startswith("Hauteur : 4,00 m"), text)
         self.assertIn("calée sur le point triangulé A", text)
         self.assertEqual(names(), [("A", 1)])  # toujours au pied, une fois la hauteur faite
+        self.assertEqual([m["side"] for m in self.s.viewer_marks() if m["name"]], ["below"])  # sous le pied
         # Hauteur faite : un autre clic ne mesure pas, seules ses croix s'ajustent
         self.assertEqual(self.s.state()["new_measure"], "A")
         text = self.s.click(*direction(6.0, (5.0, 3.0, 2.0)))
@@ -130,6 +131,8 @@ class Width(Base):
         text = self.s.click(*direction(6.0, (-3.0, 3.0, 0.0)))
         self.assertIn("Nouvelle mesure depuis A", text)
         self.assertEqual(self.s.state()["new_measure"], "A")
+        # Vue vers le sud depuis (0, 6) : A (est) à gauche de B (ouest), son nom à sa gauche
+        self.assertEqual([(m["label"], m["side"]) for m in self.s.viewer_marks() if m["name"]], [("A", "left")])
         # Autre clic hors des croix : pas d'autre largeur, consigne d'ajustement
         text = self.s.click(*direction(6.0, (-6.0, 3.0, 0.0)))
         self.assertTrue(text.startswith("Largeur mesurée depuis le point A"), text)

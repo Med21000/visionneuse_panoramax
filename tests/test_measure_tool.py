@@ -23,8 +23,8 @@ CAMERA = 1.9
 class FakeItem:
     """Dessin sur la carte remplacé : garde seulement les dernières données."""
 
-    def __init__(self, canvas, wall=False):
-        self.data, self.wall = None, wall
+    def __init__(self, canvas):
+        self.data = None
 
     def set_data(self, *data):
         self.data = data
@@ -356,51 +356,6 @@ class Uncertainty(Base):
         single = [dict(c) for c in m.clicks]
         single[1]["elev"] += 1.0
         self.assertGreater(north, 1.8 * abs(m._value(clicks=single) - 7.0))
-
-    def test_cadastre_wall(self):
-        self.calibrated(0.1)
-        clicks = [click((8.0, 0.0, 1.0)), click((12.0, 0.0, 6.5))]
-        wall = dict(CadastreWall.WALL)
-        self.tool.wall_lookup = lambda *args: wall
-        self.tool.use_wall = True
-        confirmed = self.measure("height", clicks).result["uncertainty"]
-        self.tool.clear_all()
-        wall["warning"] = True
-        unchecked = self.measure("height", [dict(c) for c in clicks]).result["uncertainty"]
-        self.assertGreater(unchecked, confirmed)
-        self.assertGreater(confirmed, 0.5 * (6.5 - CAMERA) / 12)  # mur à ±0,5 m, vu sous tan e = 0,38
-
-
-class CadastreWall(Base):
-    """Façade du cadastre (buildings.py) : hauteur au pied caché, façade d'un seul clic."""
-
-    WALL = {"distance": 12.0, "points": [point(12.0, -5.0), point(12.0, 5.0)],
-            "check": "façade confirmée par le LiDAR HD", "warning": False}
-
-    def test_hidden_foot(self):
-        # Pied du mur caché par une voiture : le clic tombe sur sa carrosserie, 8 m devant
-        clicks = [click((8.0, 0.0, 1.0)), click((12.0, 0.0, 6.5))]
-        m = self.measure("height", clicks)
-        self.assertGreater(abs(m.result["value"] - 6.5), 0.5)  # pied pris au sol derrière la voiture
-        self.tool.wall_lookup = lambda lon, lat, yaw: self.WALL
-        self.assertEqual(self.tool.set_use_wall(True), 1)
-        self.assertValue(m, 6.5)
-        self.assertIn("façade du cadastre à 12,0 m (façade confirmée par le LiDAR HD)", m.status())
-        self.assertEqual(m.wall_item.data[0], self.WALL["points"])  # façade tracée sur la carte
-        self.tool.set_use_wall(False)
-        self.assertGreater(abs(m.result["value"] - 6.5), 0.5)
-        self.assertEqual(m.wall_item.data[0], [])
-
-    def test_pending_and_missing(self):
-        answer = ["pending"]
-        self.tool.wall_lookup = lambda *args: answer[0]
-        self.tool.use_wall = True
-        m = self.measure("height", [click((12.0, 0.0, 0.0)), click((12.0, 0.0, 6.5))])
-        self.assertValue(m, 6.5)  # pied visible et cliqué : même résultat en attendant
-        self.assertIn("lecture du cadastre", m.status())
-        answer[0] = None
-        self.tool.recompute_walls()
-        self.assertIn("aucune façade du cadastre dans la visée : pied cliqué", m.status())
 
 
 class Recorrect(Base):

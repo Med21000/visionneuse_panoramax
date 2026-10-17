@@ -96,7 +96,6 @@ class Tilt(Base):
 class CameraHeight(Base):
     def test_ground_reference(self):
         self.tool.set_mode("camera")
-        self.assertTrue(self.tool.needs_profile())
         h = 2.2  # deux traits au sol à 8 et 11 m : 3 m
         for d in (8.0, 11.0):
             text = self.tool.add_click(click(0.0, elev_to(-h, d)))
@@ -109,9 +108,7 @@ class CameraHeight(Base):
     def test_height_reference(self):
         self.ref = ("height", 4.0)
         self.tool.set_mode("camera")
-        self.assertTrue(self.tool.needs_profile())  # pied au sol
         self.tool.add_click(click(0.0, elev_to(-1.8, 10.0)))
-        self.assertFalse(self.tool.needs_profile())  # sommet
         self.tool.add_click(click(0.0, elev_to(2.2, 10.0)))
         self.assertAlmostEqual(self.tool.new_camera, 1.8, places=4)
 
@@ -128,7 +125,6 @@ class CameraHeight(Base):
 class Heading(Base):
     def test_landmark(self):
         self.tool.set_mode("heading")
-        self.assertFalse(self.tool.needs_profile())
         mark = point(0, 80)
         gps = (LON0, LAT0)
         # Clic sur une photo déjà recalée : le repère part de la position GPS d'origine

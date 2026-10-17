@@ -6,8 +6,7 @@
 Un clic ne donne qu'une direction ; le point 3D est l'intersection du rayon de
 visée avec une surface :
 - le terrain (même calcul que les mesures au sol, voir ground.py) ;
-- un plan vertical : face à la caméra et passant par le pied de l'objet (hauteur),
-  ou celui d'une façade du cadastre (voir buildings.py).
+- un plan vertical : face à la caméra et passant par le pied de l'objet (hauteur).
 
 Repère local (est, nord, altitude) en mètres, centré sur un point de référence
 (lon0, lat0). La caméra est à la position (recalée) de la photo, à la hauteur de

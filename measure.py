@@ -37,7 +37,6 @@ CROSS = QColor(255, 235, 0)  # croix jaune vif des points cliqués, comme dans l
 # cliqués, d'où une autre couleur que le trait rouge de la visionneuse
 TRACE = QColor(0, 188, 230)
 TRACE_LABEL = "perpendiculaire à la route"
-WALL = QColor(156, 39, 176)  # façade (définie dans la photo ou d'après le cadastre) : tirets violets
 CALIBRATION_COLOR = QColor(0, 0, 0)  # visées du calage du cap : noires, distinctes de la triangulation
 LAYER_NAME = "Panoramax – points triangulés"
 LAYER_FIELDS = (
@@ -177,10 +176,9 @@ def _draw_cross(painter, p, size=6.0):
 class MeasureItem(QgsMapCanvasItem):
     """Points mesurés au sol, segment éventuel et étiquette du résultat."""
 
-    def __init__(self, canvas, wall=False):
+    def __init__(self, canvas):
         super().__init__(canvas)
         self._canvas = canvas
-        self.wall = wall  # façade : tirets, sans croix (ce ne sont pas des points cliqués)
         self.points, self.label = [], ""
         self.extras = []  # points cliqués reliés en pointillés aux bouts du trait (largeur perpendiculaire)
         self._screen = []
@@ -233,9 +231,6 @@ class MeasureItem(QgsMapCanvasItem):
         # Largeur perpendiculaire : trait tracé à mi-chemin des bords cliqués (couleur TRACE),
         # bords cliqués reliés en pointillés. Sinon le trait relie les points cliqués, en rouge
         # comme dans la visionneuse.
-        if self.wall:
-            self._paint_wall(painter)
-            return
         trace = bool(self._extras)
         color = TRACE if trace else COLOR
         if len(self._screen) == 2:
@@ -262,25 +257,6 @@ class MeasureItem(QgsMapCanvasItem):
             painter.setBrush(QColor(255, 255, 255, 230))
             painter.drawRoundedRect(rect, 4, 4)
             painter.setPen(QPen(color.darker(150 if trace else 130)))
-            painter.setFont(self._canvas.font())
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.label)
-
-    def _paint_wall(self, painter):
-        if len(self._screen) == 2:
-            painter.setPen(QPen(QColor(255, 255, 255, 220), 5))
-            painter.drawLine(*self._screen)
-            painter.setPen(QPen(WALL, 2.5, Qt.PenStyle.DashLine))
-            painter.drawLine(*self._screen)
-        painter.setPen(QPen(QColor(255, 255, 255), 1.5))
-        painter.setBrush(QBrush(WALL))
-        for p in self._screen:
-            painter.drawRect(QRectF(p.x() - 3.5, p.y() - 3.5, 7, 7))
-        rect = self._label_rect()
-        if not rect.isNull():
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(255, 255, 255, 230))
-            painter.drawRoundedRect(rect, 4, 4)
-            painter.setPen(QPen(WALL.darker(130)))
             painter.setFont(self._canvas.font())
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.label)
 

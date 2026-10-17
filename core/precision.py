@@ -30,7 +30,7 @@ import math
 import statistics
 from urllib.parse import urlencode
 
-from . import host, metadata, terrain
+from . import host, metadata
 
 PRECISE_ACCURACY = 0.20  # m : précision déclarée suffisante pour la hauteur de caméra par l'altitude
 VERIFIED_ACCURACY = 0.10  # m : précision retenue pour une séquence vérifiée
@@ -53,6 +53,9 @@ OUTLIER = 4.0  # photos écartées au-delà de OUTLIER écarts médians absolus 
 MIN_MAD = 0.02  # m : écart médian minimal (photos très régulières)
 CAMERA_RANGE = (0.5, 4.0)  # hauteur de caméra plausible (m)
 ELEVATION_URL = "https://data.geopf.fr/altimetrie/1.0/calcul/alti/rest/elevation.json"
+LIDAR_RESOURCE = "ign_lidar_hd_mnt_mono_wld"  # MNT LiDAR HD 50 cm, publié département par département
+NODATA_BELOW = -9999.0  # le service IGN renvoie -99999 hors de sa couverture
+TIMEOUT_MS = 5000  # délai de réponse du service d'altimétrie
 DEGRADED_ADVICE = ("Les mesures dépendent alors de la hauteur de caméra, de l'inclinaison de la caméra et, sans "
                    "LiDAR HD, d'un sol approximatif : calez la hauteur de caméra sur une longueur connue et "
                    "l'inclinaison sur deux objets verticaux, puis contrôlez les résultats.")
@@ -63,7 +66,7 @@ def lidar_url(points):
     return ELEVATION_URL + "?" + urlencode({
         "lon": "|".join("{:.7f}".format(lon) for lon, _ in points),
         "lat": "|".join("{:.7f}".format(lat) for _, lat in points),
-        "resource": terrain.LIDAR_RESOURCE, "zonly": "true"}, safe="|")
+        "resource": LIDAR_RESOURCE, "zonly": "true"}, safe="|")
 
 
 def _ground(data):
@@ -74,7 +77,7 @@ def _ground(data):
             z = float(z["z"] if isinstance(z, dict) else z)
         except (KeyError, TypeError, ValueError):
             z = None
-        out.append(z if z is not None and z > terrain.NODATA_BELOW else None)
+        out.append(z if z is not None and z > NODATA_BELOW else None)
     return out
 
 
@@ -244,7 +247,7 @@ class PrecisionChecker:
             done(result(accuracy is not None, accuracy, lidar, reason, height=height,
                         transient=transient or bool(error)))
 
-        host.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=terrain.TIMEOUT_MS)
+        host.fetch_json(lidar_url([(lon, lat)]), got, timeout_ms=TIMEOUT_MS)
 
     def _check_sequence(self, item, sequence, lon, lat, done):
         """Portion de la séquence autour de la photo ; en cas d'échec, d'autres portions (voir
@@ -284,7 +287,7 @@ class PrecisionChecker:
                 callback("few", len(photos))
                 return
             host.fetch_json(lidar_url([(p[0], p[1]) for p in photos]),
-                           lambda data, error: got_ground(photos, data, error), timeout_ms=terrain.TIMEOUT_MS)
+                           lambda data, error: got_ground(photos, data, error), timeout_ms=TIMEOUT_MS)
 
         def got_ground(photos, data, error):
             if error:

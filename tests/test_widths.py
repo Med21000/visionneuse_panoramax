@@ -24,7 +24,7 @@ TRACK = {"axis": 0.0, "source": "séquence"}
 
 
 class FakeItem:
-    def __init__(self, canvas, wall=False):
+    def __init__(self, canvas):
         self.data = None
 
     def set_data(self, *data):

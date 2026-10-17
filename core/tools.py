@@ -264,12 +264,6 @@ class CalibrationTool:
         self.mode = mode
         self.reset()
 
-    def needs_profile(self):
-        """Le prochain clic doit-il toucher le sol ? (hauteur de caméra, sauf sommet d'un objet)"""
-        if self.mode != "camera":
-            return False
-        return self._reference()[0] == "ground" or not self.clicks
-
     def _reference(self):
         return self.reference() if self.reference else ("ground", 0.0)
 

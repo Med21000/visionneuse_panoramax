@@ -119,6 +119,30 @@ class Height(Base):
         self.assertTrue(text.startswith("Hauteur : 3,91 m"), text)
 
 
+class RtkAlert(Base):
+    def test_once_per_sequence(self):
+        self.s.set_picture(self.p1)
+        self.s.quality = None
+        self.assertIsNone(self.s.take_rtk_alert())  # vérification en cours
+        self.s.quality = {"precise": False, "lidar": None, "transient": True}
+        self.assertIsNone(self.s.take_rtk_alert())  # service en panne : pas de conclusion
+        self.s.quality = {"precise": False, "lidar": True}  # conclusion : pas de RTK
+        self.assertIn("Un GPS avec corrections RTK est requis", self.s.take_rtk_alert())
+        self.assertIsNone(self.s.take_rtk_alert())  # déjà signalée
+        self.s.set_picture(self.p2)  # même séquence
+        self.s.quality = {"precise": False, "lidar": True}
+        self.assertIsNone(self.s.take_rtk_alert())
+        other = dict(self.p2, collection="s2")
+        self.s.set_picture(other)
+        self.s.quality = {"precise": True, "lidar": True}
+        self.assertIsNone(self.s.take_rtk_alert())  # RTK vérifié
+        self.s.quality = {"precise": False, "lidar": True}
+        self.s.set_active(False)
+        self.assertIsNone(self.s.take_rtk_alert())  # hors mesure : rien
+        self.s.set_active(True)
+        self.assertIsNotNone(self.s.take_rtk_alert())
+
+
 class Width(Base):
     def test_locked_until_new_measure(self):
         # Bord A à 5 m à l'est, route nord-sud : droite de mesure est-ouest à 3 m au nord

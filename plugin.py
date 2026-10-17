@@ -20,9 +20,9 @@ from qgis.core import (
     QgsUnitTypes,
 )
 from qgis.gui import QgsMapToolEmitPoint, QgsMapToolPan, QgsVertexMarker
-from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
+from qgis.PyQt.QtCore import QTimer, QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QAction, QColor, QDesktopServices, QIcon
-from qgis.PyQt.QtWidgets import QPushButton
+from qgis.PyQt.QtWidgets import QMessageBox, QPushButton
 
 from . import api, filters, layers, qgis_host
 from .cursor import ViewCursor
@@ -567,6 +567,9 @@ class PanoramaxPlugin:
         self._update_edit_tool()
         if s.waiting_map():
             self._start_landmark_tool()
+        alert = s.take_rtk_alert()  # séquence sans RTK : une fenêtre, une fois par séquence
+        if alert:  # après ce rafraîchissement (la fenêtre modale relance la boucle d'événements)
+            QTimer.singleShot(0, lambda: QMessageBox.warning(self.iface.mainWindow(), "Visionneuse Panoramax", alert))
 
     def _frame(self, focus):
         """Carte cadrée sur la mesure en cours (Session.focus), seulement quand ces points changent

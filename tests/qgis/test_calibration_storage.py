@@ -15,14 +15,14 @@ from qgis_support import TMP, module
 from qgis.core import QgsProject, QgsSettings
 
 plugin = module("plugin")
-calibration = module("calibration")
+calibration = module("core.calibration")
 
 
 def new_plugin():
     """Plugin réduit à son calage : sans interface QGIS ni panneau."""
     p = plugin.PanoramaxPlugin.__new__(plugin.PanoramaxPlugin)
     p.iface = mock.Mock()
-    p.calibrator = p.dock = None
+    p.session = p.dock = None
     p.calibration = calibration.Calibration()
     p._saved_auto = None
     p.calibration.changed = p._save_calibration

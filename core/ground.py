@@ -116,8 +116,8 @@ def measure_height(camera_height, base, top):
 
     Le sommet est pris dans le plan vertical face à la caméra qui passe par le pied :
     pour un objet fin (poteau), c'est à la même distance que le pied ; pour un mur
-    face à la caméra, le sommet peut être cliqué un peu de côté. Même modèle que la
-    mesure libre sur le plan vertical face à la caméra (geometry.py).
+    face à la caméra, le sommet peut être cliqué un peu de côté. Même modèle que
+    measures.py (plan vertical face à la caméra, voir geometry.py).
     """
     if base.get("pic") != top.get("pic"):
         raise GroundError("Le pied et le sommet doivent être cliqués sur la même photo.")

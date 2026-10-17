@@ -10,9 +10,9 @@ from urllib.parse import parse_qs, urlsplit
 from support import LAT0, LON0, install_qgis_stub, module
 
 install_qgis_stub()
-terrain = module("terrain")
-ground = module("ground")
-triangulation = module("triangulation")
+terrain = module("core.terrain")
+ground = module("core.ground")
+triangulation = module("core.triangulation")
 
 
 def line(slope, z0, dists):
@@ -126,10 +126,6 @@ class FakeServices:
                 z = self.z(lon, lat, self.slope) if self.lidar or not lidar else -99999.0
                 pts.append({"lon": lon, "lat": lat, "z": z})
             callback({"elevations": pts}, None)
-        elif host == "api.opentopodata.org":
-            locs = [tuple(map(float, p.split(","))) for p in query["locations"].split("|")]
-            callback({"status": "OK", "results": [{"elevation": self.z(lon, lat, self.coarse_slope)}
-                                                  for lat, lon in locs]}, None)
         elif host == "api.open-meteo.com":
             lats = [float(v) for v in query["latitude"].split(",")]
             lons = [float(v) for v in query["longitude"].split(",")]
@@ -143,7 +139,7 @@ class Provider(unittest.TestCase):
         provider = terrain.TerrainProvider()
         provider.bridge = bridge
         results = []
-        with mock.patch.object(terrain.api, "fetch_json", services):
+        with mock.patch.object(terrain.host, "fetch_json", services):
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
         self.assertEqual(len(results), 1)
         return results[0]
@@ -169,11 +165,9 @@ class Provider(unittest.TestCase):
 
     def test_fallbacks(self):
         prof, label, warning = self.run_profile(FakeServices(down={"data.geopf.fr"}))
-        self.assertEqual(label, terrain.OPENTOPODATA_LABEL)
+        self.assertEqual(label, terrain.OPENMETEO_LABEL)
         self.assertIn("IGN", warning)
         self.assertSlope(prof, 0.05)
-        prof, label, _ = self.run_profile(FakeServices(down={"data.geopf.fr", "api.opentopodata.org"}))
-        self.assertEqual(label, terrain.OPENMETEO_LABEL)
 
     def test_window_close_to_the_photo(self):
         # Rue plate sur 15 m devant la photo, puis relief qui monte de 8 % (colline derrière les
@@ -209,7 +203,7 @@ class Provider(unittest.TestCase):
         self.assertEqual(label, ground.FLAT)
         self.assertEqual(prof, ground.flat_profile())
         self.assertIn("invraisemblable", warning)
-        self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"])
+        self.assertEqual(services.calls, ["lidar", "data.geopf.fr", "api.open-meteo.com"])
 
 
 
@@ -218,7 +212,7 @@ class Cache(unittest.TestCase):
 
     def profile(self, provider, services, yaw=0.0, lon=LON0, lat=LAT0):
         results = []
-        with mock.patch.object(terrain.api, "fetch_json", services):
+        with mock.patch.object(terrain.host, "fetch_json", services):
             provider.profile(lon, lat, yaw, lambda *r: results.append(r))
         return results
 
@@ -234,7 +228,7 @@ class Cache(unittest.TestCase):
     def test_concurrent_requests_shared(self):
         provider, pending, results = terrain.TerrainProvider(), [], []
         services = FakeServices(lidar=True)
-        with mock.patch.object(terrain.api, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
+        with mock.patch.object(terrain.host, "fetch_json", lambda url, cb, **kw: pending.append((url, cb))):
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
             provider.profile(LON0, LAT0, 0.0, lambda *r: results.append(r))
         self.assertEqual(len(pending), 1)
@@ -254,7 +248,7 @@ class Cache(unittest.TestCase):
 
     def test_services_down_retried(self):
         provider = terrain.TerrainProvider()
-        down = FakeServices(down={"data.geopf.fr", "api.opentopodata.org", "api.open-meteo.com"})
+        down = FakeServices(down={"data.geopf.fr", "api.open-meteo.com"})
         (prof, label, warning), = self.profile(provider, down)
         self.assertEqual(label, ground.FLAT)
         services = FakeServices(lidar=True)

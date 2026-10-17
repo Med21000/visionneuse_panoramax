@@ -5,7 +5,7 @@
 
 La direction du véhicule à la caméra n'est pas celle de la route au point mesuré, 10 à 20 m
 plus loin : en courbe, l'écart y atteint 3 à 5° (8 à 16° en courbe serrée), et aux carrefours
-où le véhicule tourne, la trajectoire coupe la route. Tests sur 419 points de la séquence CD21
+où le véhicule tourne, la trajectoire coupe la route. Tests sur 419 points de la séquence imajbox
 de Pouilly-en-Auxois (12/10/2026) : les tronçons de la BD TOPO s'accordent avec la trajectoire
 à 0,4° en ligne droite et 0,8° en courbe, et suivent la route aux carrefours.
 
@@ -25,7 +25,7 @@ import math
 import time
 from urllib.parse import urlencode
 
-from . import api, triangulation
+from . import host, metadata, triangulation
 
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 LAYER = "BDTOPO_V3:troncon_de_route"
@@ -180,7 +180,7 @@ class RoadAxisProvider:
             return res
         key = (sequence, cell)
         track = self._get(("track",) + key, self._tracks, key,
-                          lambda: api.search_url(lon, lat, TRACK_RADIUS + 10, 20, sequence), lambda data: data)
+                          lambda: metadata.search_url(lon, lat, TRACK_RADIUS + 10, 20, sequence, host.api_url), lambda data: data)
         if track is PENDING:
             return PENDING
         return trajectory_axis(track, sequence, lon, lat) if track else None
@@ -204,5 +204,5 @@ class RoadAxisProvider:
             if self.ready is not None:
                 self.ready()
 
-        api.fetch_json(url(), done, timeout_ms=15000)
+        host.fetch_json(url(), done, timeout_ms=15000)
         return PENDING if key in self._pending else self._get(key, cache, cache_key, url, parse)

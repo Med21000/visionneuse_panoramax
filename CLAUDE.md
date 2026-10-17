@@ -2,12 +2,21 @@
 
 Plugin QGIS 4 (Python, Qt6) qui intègre la visionneuse Panoramax et permet des mesures à
 l'écran (largeurs, hauteurs, distances 3D, triangulation, calage des photos). Auteur :
-Cédric COCHART. Utilisé dans un contexte de conseil départemental (voirie).
+Cédric COCHART. Usage : mesures sur les photos Panoramax, notamment de voirie.
 
 Historique des décisions, revue de code et feuille de route : `docs/feuille-de-route.md`.
 À lire avant tout travail de fond sur le plugin ou sur l'application web envisagée.
 
 ## Règles du projet
+
+- **Cœur de calcul sans QGIS** (`core/`) : aucun import de `qgis` (vérifié par
+  `tests/test_core.py`) ; il sert aussi à l'application web web-measures (Pyodide). Ce qui
+  dépend de l'hôte passe par `core/host.py` (réseau, altitude NGF, décodage d'une photo,
+  tâches de fond), rempli par `qgis_host.py`. Les outils (`measures.MeasureTool`,
+  `tools.Triangulator`, `tools.CalibrationTool`) et la conversion d'un clic dans la photo
+  (`tools.photo_click`, `tools.photo_sighting`), le filtre des photos (`filters`) et le calcul
+  de la capture HD (`capture`) y sont aussi : le plugin les sous-classe pour
+  le dessin (`new_item`) et l'enregistrement (`measure_tool.py`, `measure.py`, `output.py`).
 
 - Nom : « Visionneuse Panoramax » partout. Jamais « Panoramax Viewer » (nom d'un autre plugin).
 - QGIS 4.0 minimum, Qt6 : énumérations qualifiées (`Qt.MouseButton.LeftButton`,
@@ -15,7 +24,8 @@ Historique des décisions, revue de code et feuille de route : `docs/feuille-de-
 - Français partout : interface, messages, docstrings, commentaires, messages de commit.
   Typographie française (« », espace avant `:`, `;`, `?`).
 - En-tête SPDX dans chaque fichier Python (`GPL-2.0-or-later`, © Cédric COCHART).
-- Réseau : uniquement par `api.fetch` / `api.fetch_json` (asynchrone, `QgsNetworkAccessManager`).
+- Réseau : uniquement par `api.fetch` / `api.fetch_json` (asynchrone, `QgsNetworkAccessManager`) ;
+  dans le cœur, par `host.fetch` / `host.fetch_json`.
   Minimiser les appels à l'API : caches de `api.py` (photo courante + voisines),
   `terrain.TerrainProvider` (profils, zones sans données), `precision.PrecisionChecker`
   (par séquence), `autotilt.TiltChecker` (inclinaison par photo, conservée dans le calage),

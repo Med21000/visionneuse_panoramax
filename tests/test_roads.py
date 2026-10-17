@@ -13,7 +13,7 @@ from unittest import mock
 from support import install_qgis_stub, module, point
 
 install_qgis_stub()
-roads = module("roads")
+roads = module("core.roads")
 
 
 def section(*pts, name="D16"):
@@ -131,7 +131,7 @@ class Provider(unittest.TestCase):
         self.provider.ready = lambda: self.ready.append(1)
 
     def lookup(self, services, at=(0.0, 0.0), crossing=90.0):
-        with mock.patch.object(roads.api, "fetch_json", services):
+        with mock.patch.object(roads.host, "fetch_json", services):
             return self.provider.lookup(*point(*at), crossing, "seq")
 
     def test_bdtopo_then_cache(self):

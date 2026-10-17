@@ -5,7 +5,7 @@
 
 Couche temporaire ou GeoPackage, tables partagées, structure incompatible, ajout et
 mise à jour d'entités, boîte de dialogue du choix ; enregistrement de bout en bout de
-mesures (MeasureTool) et de points triangulés (Triangulator).
+mesures (MeasureTool) et de points triangulés (measure.save_points).
 """
 
 import math
@@ -23,7 +23,7 @@ from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 output = module("output")
 measure = module("measure")
 measure_tool = module("measure_tool")
-triangulation = module("triangulation")
+triangulation = module("core.triangulation")
 
 FIELDS = "field=nom:string&field=valeur:double"
 LON0, LAT0 = 5.0415, 47.3220
@@ -277,13 +277,18 @@ class EndToEnd(Base):
             x, y = triangulation._local(target[0], target[1], photo[0], photo[1])
             tri.add({"pic": pic, "lon": photo[0], "lat": photo[1], "heading": math.degrees(math.atan2(x, y)),
                      "accuracy": 2.0, "precise": False})
-        ok, message = tri.save()
-        self.assertTrue(ok, message)
+        # Point gardé par la session (voir core/session.py) : nom et attributs de la triangulation
+        values = dict({"nom": "A"}, **tri.attributes(), commentaire="")
+        saved = set()
+        added, error = measure.save_points([(tri.result["lon"], tri.result["lat"], values)], saved)
+        self.assertEqual((added, error), (1, None))
+        self.assertEqual(measure.save_points([(tri.result["lon"], tri.result["lat"], values)], saved), (0, None))
         layer = output.find_layer("triangulation")
         self.assertIn("layername=points_triangules", layer.source())
         p = next(layer.getFeatures()).geometry().asPoint()
         self.assertLess(math.hypot(*triangulation._local(p.x(), p.y(), *target)), 0.01)
         self.assertEqual(next(layer.getFeatures())["nb_visees"], 2)
+        self.assertEqual(next(layer.getFeatures())["nom"], "A")
 
 
 if __name__ == "__main__":

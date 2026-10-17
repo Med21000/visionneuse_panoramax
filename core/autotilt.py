@@ -4,7 +4,7 @@
 """Inclinaison d'une photo 360° calculée d'après ses verticales, sans clic.
 
 Une caméra montée sur un véhicule penche avec lui (pente de la route, dévers, virages) : 1 à
-3° sur les photos imajbox du CD21, autant d'erreur de visée. Sur une photo équirectangulaire
+3° sur les photos imajbox, autant d'erreur de visée. Sur une photo équirectangulaire
 de niveau, les arêtes verticales du monde (angles de façades, poteaux, encadrements) restent
 verticales dans l'image ; la caméra penchée, elles s'inclinent selon une loi connue.
 
@@ -22,13 +22,13 @@ Validé à Pouilly-en-Auxois (photos imajbox) : une inclinaison imposée de 1° 
 verticales, voir terrain_tilt pour l'estimation par le LiDAR HD).
 
 Calculs numpy seuls (pas d'OpenCV dans QGIS) ; la photo est décodée réduite et rognée à la
-bande utile (voir read_band), en arrière-plan.
+bande utile (host.decode_band), en arrière-plan (host.run_task).
 """
 
 import importlib.util
 import math
 
-from . import api, calibration, precision
+from . import calibration, host, metadata, precision
 
 HAS_NUMPY = importlib.util.find_spec("numpy") is not None  # calcul des verticales
 
@@ -46,37 +46,6 @@ EDGE_BIN = 0.3  # degrés de cap : segments d'une même arête (incertitude)
 FLOOR = math.radians(0.05)  # dispersion minimale des segments retenus (radians)
 
 
-def read_band(data, width=WIDTH):
-    """Photo (octets JPEG) décodée en niveaux de gris, réduite à `width` de large et rognée à
-    la bande ELEV_MIN..ELEV_MAX. Retourne (tableau numpy, première ligne, hauteur et largeur
-    de l'image entière) ou None. Utilisable hors du fil principal (pas de widget)."""
-    import numpy as np
-    from qgis.PyQt.QtCore import QBuffer, QByteArray, QIODevice, QRect, QSize
-    from qgis.PyQt.QtGui import QImage, QImageReader
-
-    buf = QBuffer()
-    buf.setData(QByteArray(data))
-    buf.open(QIODevice.OpenModeFlag.ReadOnly)
-    reader = QImageReader(buf)
-    size = reader.size()
-    if not size.isValid() or size.width() < 2 * size.height() - 2:
-        return None  # pas une photo équirectangulaire
-    w = min(width, size.width())
-    h = round(w * size.height() / size.width())
-    row0, row1 = int((90 - ELEV_MAX) / 180 * h), int((90 - ELEV_MIN) / 180 * h)
-    reader.setScaledSize(QSize(w, h))
-    reader.setScaledClipRect(QRect(0, row0, w, row1 - row0))
-    img = reader.read()
-    if img.isNull():
-        return None
-    img = img.convertToFormat(QImage.Format.Format_Grayscale8)
-    bpl = img.bytesPerLine()
-    ptr = img.constBits()
-    ptr.setsize(img.height() * bpl)
-    band = np.frombuffer(ptr, np.uint8).reshape(img.height(), bpl)[:, :img.width()].astype(np.float32)
-    return band, row0, h, w
-
-
 def segments(band, row0, height, width, azimuth):
     """Segments quasi verticaux de la bande : liste de ((cap, élév.) bas, (cap, élév.) haut),
     directions brutes (cap de la photo `azimuth` ajouté, comme les clics)."""
@@ -88,6 +57,23 @@ def segments(band, row0, height, width, azimuth):
     gx[:, 1:-1] = band[:, 2:] - band[:, :-2]
     slopes = np.linspace(-SLOPE_RANGE, SLOPE_RANGE, SLOPES)
     offs = np.arange(rows) - (rows - 1) / 2.0
+    # Somme le long de x + b·(r − milieu), interpolée entre deux colonnes : pour chaque pente,
+    # la ligne r est lue décalée de base[r] (poids 1 − frac[r]) et de base[r] + 1 (frac[r]).
+    # Les décalages entiers possibles sont peu nombreux : chaque fenêtre est décalée une fois
+    # pour chacun, puis chaque pente lit d'un coup ses lignes dans ces copies et en fait la
+    # somme pondérée (einsum). Mêmes calculs qu'une ligne après l'autre, en 2 appels à numpy
+    # par pente au lieu de 4 par ligne : environ 3 fois plus rapide en Python natif, et bien
+    # plus dans le navigateur (Pyodide, où chaque appel coûte cher et où le produit matriciel
+    # n'est pas optimisé).
+    plan = []
+    for b in slopes:
+        shift = b * offs
+        base = np.floor(shift).astype(int)
+        frac = (shift - base).astype(np.float32)
+        plan.append((np.stack([base, base + 1]), np.stack([1 - frac, frac])))
+    low = min(int(p[0].min()) for p in plan)
+    high = max(int(p[0].max()) for p in plan)
+    lines = np.arange(rows)
     out = []
 
     def direction(px, py):
@@ -95,16 +81,10 @@ def segments(band, row0, height, width, azimuth):
 
     for top in range(0, band.shape[0] - rows + 1, rows // 2):
         win = gx[top:top + rows]
+        shifted = np.stack([np.roll(win, -d, axis=1) for d in range(low, high + 1)])  # (décalage, ligne, x)
         acc = np.empty((SLOPES, width), np.float32)
-        for k, b in enumerate(slopes):
-            shift = b * offs
-            base = np.floor(shift).astype(int)
-            frac = (shift - base).astype(np.float32)
-            s = np.zeros(width, np.float32)
-            for r in range(rows):  # somme le long de x + b·(r − milieu), interpolée
-                row = win[r]
-                s += (1 - frac[r]) * np.roll(row, -base[r]) + frac[r] * np.roll(row, -base[r] - 1)
-            acc[k] = s
+        for k, (shifts, weights) in enumerate(plan):
+            acc[k] = np.einsum("kr,krx->x", weights, shifted[shifts - low, lines])
         acc = np.abs(acc)
         best = acc.argmax(axis=0)
         peak = acc[best, np.arange(width)]
@@ -207,8 +187,9 @@ def fit(pairs):
 
 
 def estimate(data, azimuth):
-    """Inclinaison de la photo (octets JPEG, cap du centre de l'image) : dict de fit, ou None."""
-    band = read_band(data)
+    """Inclinaison de la photo (octets JPEG, cap du centre de l'image) : dict de fit, ou None.
+    Photo décodée par l'hôte (host.decode_band), réduite à WIDTH et rognée à la bande utile."""
+    band = host.decode_band(data, WIDTH, ELEV_MIN, ELEV_MAX)
     if band is None:
         return None
     return fit(segments(*band, azimuth))
@@ -230,25 +211,6 @@ def is_360(item):
     return (props.get("exif") or {}).get("Xmp.GPano.ProjectionType") == "equirectangular"
 
 
-def _run_task(function, args, done):
-    """function(*args) en arrière-plan (tâche QGIS), puis done(résultat ou None) dans le fil
-    principal."""
-    from qgis.core import QgsApplication, QgsTask
-
-    def work(task, *a):
-        return function(*a)
-
-    def finished(exception, result=None):
-        _tasks.discard(task)
-        done(None if exception else result)
-
-    task = QgsTask.fromFunction("Visionneuse Panoramax : inclinaison de la photo", work, *args,
-                                on_finished=finished, flags=QgsTask.Flag.Silent)
-    _tasks.add(task)  # gardée tant qu'elle tourne
-    QgsApplication.taskManager().addTask(task)
-
-
-_tasks = set()
 
 
 class TiltChecker:
@@ -263,7 +225,7 @@ class TiltChecker:
         self._pending = {}  # photo -> rappels en attente
         self._replies = {}  # photo -> téléchargement de la photo HD en cours
         self.current = None  # dernière photo demandée
-        self.run = _run_task  # remplaçable dans les tests
+        self.run = None  # calcul en arrière-plan : host.run_task, ou celui-ci (tests)
 
     def pending(self, pic):
         return pic in self._pending
@@ -283,8 +245,8 @@ class TiltChecker:
         if pic in self._pending:
             self._pending[pic] += callbacks
             return
-        heading = api.precise_heading(item)
-        heading = api.item_heading(item) if heading is None else heading
+        heading = metadata.precise_heading(item)
+        heading = metadata.item_heading(item) if heading is None else heading
         try:
             lon, lat = (float(v) for v in item["geometry"]["coordinates"][:2])
         except (KeyError, TypeError, ValueError):
@@ -327,17 +289,17 @@ class TiltChecker:
             if error or not data:
                 analysed(None)
             else:
-                self.run(estimate, (bytes(data), float(heading)), analysed)
+                (self.run or host.run_task)(estimate, (bytes(data), float(heading)), analysed)
 
         def analysed(res):
             state["verticals"] = ({"up": list(res["up"]), "count": res["count"], "sigma": res["sigma"]}
                                   if res else None)
             finish()
 
-        api.fetch_json(lidar_url(lon, lat, heading), got_lidar)
+        host.fetch_json(lidar_url(lon, lat, heading), got_lidar)
         href = ((item.get("assets") or {}).get("hd") or {}).get("href")
         if href and HAS_NUMPY:
-            self._replies[pic] = api.fetch(href, got_image, prefer_cache=True)
+            self._replies[pic] = host.fetch(href, got_image, prefer_cache=True)
         else:
             analysed(None)
 

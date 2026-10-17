@@ -17,8 +17,8 @@ from support import LAT0, LON0, install_qgis_stub, module
 from test_calibration import seen
 
 install_qgis_stub()
-autotilt = module("autotilt")
-calibration = module("calibration")
+autotilt = module("core.autotilt")
+calibration = module("core.calibration")
 HAS_NUMPY = importlib.util.find_spec("numpy") is not None
 W, H = 2048, 1024  # image entière (degré : 0,176 px⁻¹)
 
@@ -243,8 +243,8 @@ class Checker(unittest.TestCase):
         runs = []
         checker.run = lambda function, args, done: runs.append(args) or done(result)
         done = []
-        with mock.patch.object(autotilt.api, "fetch_json", network.fetch_json), \
-                mock.patch.object(autotilt.api, "fetch", network.fetch), \
+        with mock.patch.object(autotilt.host, "fetch_json", network.fetch_json), \
+                mock.patch.object(autotilt.host, "fetch", network.fetch), \
                 mock.patch.object(autotilt, "HAS_NUMPY", True):
             checker.check(item, cal, lambda: done.append(1))
         self.assertEqual(done, [1])
@@ -297,8 +297,8 @@ class Checker(unittest.TestCase):
 
         checker.run = lambda function, args, cb: runs.append(args) or cb(None)
         other = dict(ITEM, id="autre")
-        with mock.patch.object(autotilt.api, "fetch_json", lambda url, cb, **kw: pending.__setitem__("lidar", cb)), \
-                mock.patch.object(autotilt.api, "fetch", fetch), mock.patch.object(autotilt, "HAS_NUMPY", True):
+        with mock.patch.object(autotilt.host, "fetch_json", lambda url, cb, **kw: pending.__setitem__("lidar", cb)), \
+                mock.patch.object(autotilt.host, "fetch", fetch), mock.patch.object(autotilt, "HAS_NUMPY", True):
             checker.check(ITEM, cal)
             first_lidar = pending["lidar"]
             checker.check(other, cal)  # on passe à une autre photo
@@ -313,8 +313,8 @@ class Checker(unittest.TestCase):
     def test_requests_shared(self):
         cal, checker, pending, done = calibration.Calibration(), autotilt.TiltChecker(), [], []
         checker.run = lambda function, args, cb: cb(None)
-        with mock.patch.object(autotilt.api, "fetch_json", lambda url, cb, **kw: pending.append(cb)), \
-                mock.patch.object(autotilt.api, "fetch", lambda url, cb, **kw: pending.append(cb)), \
+        with mock.patch.object(autotilt.host, "fetch_json", lambda url, cb, **kw: pending.append(cb)), \
+                mock.patch.object(autotilt.host, "fetch", lambda url, cb, **kw: pending.append(cb)), \
                 mock.patch.object(autotilt, "HAS_NUMPY", True):
             checker.check(ITEM, cal, lambda: done.append("a"))
             self.assertTrue(checker.pending("pic"))

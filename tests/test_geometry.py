@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Tests de geometry.py : points 3D sur une surface, triangulation 3D, décomposition."""
+"""Tests de geometry.py : points 3D sur le sol ou un plan, décomposition."""
 
 import math
 import unittest
 
 from support import LAT0, LON0, module, point
 
-geometry = module("geometry")
+geometry = module("core.geometry")
 GeometryError = geometry.GeometryError
 ORIGIN = (LON0, LAT0)
 
@@ -51,14 +51,6 @@ class Basics(unittest.TestCase):
         d = geometry.decompose((0, 0, 0), (3, 4, 0), axis=90)
         self.assertAlmostEqual(d["along"], 3)
         self.assertAlmostEqual(d["across"], 4)
-
-    def test_solve3(self):
-        a = [[4.0, 1.0, 2.0], [1.0, 3.0, 0.0], [2.0, 0.0, 5.0]]
-        x = (1.0, -2.0, 3.0)
-        b = [sum(a[i][j] * x[j] for j in range(3)) for i in range(3)]
-        self.assertPoint(geometry._solve3(a, b), x)
-        with self.assertRaises(GeometryError):
-            geometry._solve3([[1, 2, 3], [2, 4, 6], [0, 0, 1]], [1, 2, 3])
 
 
 class Surfaces(Basics):
@@ -110,28 +102,6 @@ class Surfaces(Basics):
             geometry.vertical_plane((1, 1, 0), (1.1, 1, 0))
         with self.assertRaises(GeometryError):
             geometry.facing_plane((0, 0, 2), (0.05, 0, 0))
-
-
-class Triangulate3D(Basics):
-    def test_exact(self):
-        target = (12.0, 25.0, 6.0)
-        cams = [(0.0, 0.0, 2.0), (15.0, 0.0, 2.2), (30.0, 10.0, 1.9)]
-        rays = [(c, geometry.direction(*aim(c, target))) for c in cams]
-        p, ranges, crossing = geometry.triangulate(rays)
-        self.assertPoint(p, target)
-        for r, c in zip(ranges, cams):
-            self.assertAlmostEqual(r, math.dist(c, target), places=6)
-        self.assertGreater(crossing, geometry.MIN_CROSSING)
-
-    def test_errors(self):
-        u = geometry.direction(0, 0)
-        with self.assertRaises(GeometryError):  # visées parallèles
-            geometry.triangulate([((0, 0, 2), u), ((1, 0, 2), u)])
-        target = (5.0, 10.0, 2.0)
-        cams = [(0.0, 0.0, 2.0), (10.0, 0.0, 2.0)]
-        rays = [(c, tuple(-v for v in geometry.direction(*aim(c, target)))) for c in cams]
-        with self.assertRaises(GeometryError):  # croisement derrière les photos
-            geometry.triangulate(rays)
 
 
 if __name__ == "__main__":

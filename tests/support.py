@@ -68,7 +68,7 @@ def module(name):
     return importlib.import_module(PACKAGE + "." + name)
 
 
-triangulation = module("triangulation")
+triangulation = module("core.triangulation")
 
 LON0, LAT0 = 5.0415, 47.3220  # Dijon
 

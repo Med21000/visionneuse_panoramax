@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Tests du panneau (viewer_dock.py et ses modules) avec le vrai QGIS, hors écran.
 
-La visionneuse web (QtWebEngine) ne fonctionne pas hors écran : le panneau est testé avec
-la visionneuse de secours (native_viewer.py). Les services sont simulés : liste des
-instances, fiches et images des photos, vérification de la précision GPS.
+La visionneuse web (QtWebEngine) ne fonctionne pas hors écran : le panneau est testé sans
+elle (message des composants manquants, pas de mesure) ; les files de la visionneuse web
+(clics, touches, bouton « Valider ») sont simulées. Les services sont simulés : liste des instances, fiches et images
+des photos, vérification de la précision GPS.
 """
 
 import json
+import math
 import unittest
 from unittest import mock
 
@@ -20,8 +22,8 @@ from qgis.PyQt.QtWidgets import QAbstractButton
 
 viewer_dock = module("viewer_dock")
 api = module("api")
-calibration = module("calibration")
-precision = module("precision")
+calibration = module("core.calibration")
+precision = module("core.precision")
 filters = module("filters")
 
 
@@ -38,7 +40,7 @@ def png():
 IMAGE = png()
 
 
-def item(pid, sequence="seq", prev=None, nxt=None, producer=("prod-1", "CD21")):
+def item(pid, sequence="seq", prev=None, nxt=None, producer=("prod-1", "Producteur A")):
     links = [{"rel": rel, "href": "https://x/api/collections/{}/items/{}".format(sequence, p)}
              for rel, p in (("prev", prev), ("next", nxt)) if p]
     return {"id": pid, "collection": sequence, "geometry": {"type": "Point", "coordinates": [5.0415, 47.322]},
@@ -97,13 +99,11 @@ class Base(unittest.TestCase):
         self.dock.calibration = calibration.Calibration()
         self.dock.precision = FakeChecker()
         self.dock.tilts = FakeTilts()
-        self.popups = []
-        self.dock._show_degraded_popup = lambda reasons: self.popups.append(reasons) or False
         self.signals = []
-        for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoClicked", "aimRequested",
+        for name in ("pictureChanged", "measureToggled", "measureModeChanged", "photoPointed", "keyPressed",
+                     "keepRequested", "newReferenceRequested", "itemChanged",
                      "measureSaveRequested", "measureClearRequested", "measureClearAllRequested",
-                     "cameraHeightChanged", "surfaceChanged", "planeHeightChanged", "terrainChanged",
-                     "filterChanged", "message", "tiltChanged", "wallChanged", "wallFacadeRequested"):
+                     "cameraHeightChanged", "filterChanged", "message", "tiltChanged", "viewChanged"):
             getattr(self.dock, name).connect(lambda *args, n=name: self.signals.append((n, args)))
         self.dock.resize(1092, 990)
         self.dock.show()
@@ -130,60 +130,67 @@ class MeasureModes(Base):
         mp = self.dock.measure_box
         self.dock.btn_measure.setChecked(True)
         self.assertTrue(self.emitted("measureToggled"))
-        expected = {  # mode : (Viser, Caméra à, ligne Terrain, référence, ligne Surface)
-            "road": (False, True, True, False, False), "width": (False, True, True, False, False),
-            "height": (False, True, True, False, False), "tri": (True, False, False, False, False),
-            "free": (False, True, True, False, True), "tilt": (False, False, False, False, False),
-            "heading": (False, False, False, False, False), "camera": (False, False, True, True, False)}
+        expected = {  # mode : (Nouveau point de référence, Caméra à, ligne de la hauteur proposée)
+            "road": (False, True, True), "height": (False, True, True), "tri": (False, False, False),
+            "tilt": (False, False, False), "heading": (False, False, False)}
         for i in range(mp.cmb_measure.count()):
             mp.cmb_measure.setCurrentIndex(i)
             mode = self.dock.measure_mode()
-            shown = tuple(self.visible(w) for w in (mp.btn_aim, mp.spin_camera, mp.terrain_row, mp.spin_reference,
-                                                    mp.free_row))
+            shown = tuple(self.visible(w) for w in (mp.btn_new_reference, mp.spin_camera, mp.terrain_row))
             self.assertEqual(shown, expected[mode], mode)
-        self.assertEqual([a[0] for a in self.emitted("measureModeChanged")],
-                         ["width", "height", "tri", "free", "tilt", "heading", "camera"])
-
-    def test_free_surfaces(self):
-        mp = self.dock.measure_box
-        self.dock.btn_measure.setChecked(True)
-        mp.cmb_measure.setCurrentIndex(mp.cmb_measure.findData("free"))
-        for i in range(mp.cmb_surface.count()):
-            mp.cmb_surface.setCurrentIndex(i)
-            surface = self.dock.surface()
-            self.assertEqual(self.visible(mp.btn_facade), surface == "facade")
-            self.assertEqual(self.visible(mp.spin_plane), surface == "horizontal")
-        self.assertEqual(len(self.emitted("surfaceChanged")), mp.cmb_surface.count() - 1)
+        self.assertEqual([a[0] for a in self.emitted("measureModeChanged")], ["height", "tri", "tilt", "heading"])
+        # Point de référence validé : « Nouveau point de référence » proposé en hauteur et en largeur
+        mp.set_reference_state(True)
+        for mode, shown in (("road", True), ("height", True), ("tri", False)):
+            mp.cmb_measure.setCurrentIndex(mp.cmb_measure.findData(mode))
+            self.assertEqual(self.visible(mp.btn_new_reference), shown, mode)
 
     def test_settings_and_buttons(self):
         mp = self.dock.measure_box
         self.dock.spin_camera.setValue(2.2)
-        self.dock.spin_plane.setValue(1.5)
-        mp.chk_bridge.setChecked(True)
         self.assertEqual(self.emitted("cameraHeightChanged"), [(2.2,)])
-        self.assertEqual(self.emitted("planeHeightChanged"), [(1.5,)])
-        self.assertTrue(self.dock.on_bridge())
-        self.assertEqual(len(self.emitted("terrainChanged")), 1)
+        mp.set_reference_state(True)
         for text, signal in (("Effacer", "measureClearRequested"), ("Tout effacer", "measureClearAllRequested"),
-                             ("Enregistrer les mesures", "measureSaveRequested")):
+                             ("Enregistrer les mesures", "measureSaveRequested"),
+                             ("Nouveau point de référence", "newReferenceRequested")):
             self.button(text).click()
             self.assertEqual(len(self.emitted(signal)), 1, text)
 
 
-class CadastreWall(Base):
-    def test_controls(self):
-        box = self.dock.measure_box
-        self.dock.btn_measure.setChecked(True)
-        for mode, surface, chk, btn in (("road", None, False, False), ("height", None, True, False),
-                                        ("free", "facade", False, True), ("free", "ground", False, False)):
-            box.cmb_measure.setCurrentIndex(box.cmb_measure.findData(mode))
-            if surface:
-                box.cmb_surface.setCurrentIndex(box.cmb_surface.findData(surface))
-            self.assertEqual((self.visible(box.chk_wall), self.visible(box.btn_wall_facade)), (chk, btn), mode)
-        box.chk_wall.setChecked(True)
-        self.assertEqual(self.emitted("wallChanged"), [(True,)])
-        box.btn_wall_facade.click()
-        self.assertEqual(len(self.emitted("wallFacadeRequested")), 1)
+class ViewerQueues(Base):
+    """Files de la visionneuse web (viewer_js.CLICKS_JS), relues par le panneau."""
+
+    def test_clicks_keys_and_keep(self):
+        dock = self.dock
+        dock.btn_measure.setChecked(True)
+        dock.show_picture("p1", 5.0415, 47.322)
+        # Direction fournie par la visionneuse (repère de la photo), clic droit
+        dock._on_viewer_clicks(json.dumps({"c": [{"pic": "p1", "pyaw": 0.5, "ppitch": -0.1, "right": True}],
+                                           "k": ["left", "enter"], "a": ["keep"]}))
+        self.assertEqual(self.emitted("photoPointed"), [(0.5, -0.1, True)])
+        self.assertEqual(self.emitted("keyPressed"), [("left",), ("enter",)])
+        self.assertEqual(len(self.emitted("keepRequested")), 1)
+        # Clic sur une autre photo que celle de la fiche : refusé
+        dock._on_viewer_clicks(json.dumps({"c": [{"pic": "p2", "pyaw": 0.5, "ppitch": -0.1}]}))
+        self.assertEqual(len(self.emitted("photoPointed")), 1)
+        self.assertIn("Photo en cours de chargement", self.emitted("message")[-1][0])
+
+    def test_screen_click_on_precise_heading(self):
+        # Clic calculé depuis l'écran (sans position fournie par la visionneuse) : la visionneuse
+        # s'oriente sur le cap arrondi ; la direction émise est dans le repère de la photo, orientée
+        # sur le cap précis (EXIF), comme celles que fournit la visionneuse
+        dock = self.dock
+        dock.btn_measure.setChecked(True)
+        dock.show_picture("p1", 5.0415, 47.322)
+        props = dock._current_item.setdefault("properties", {})
+        props["view:azimuth"] = 90
+        props["exif"] = {"Exif.GPSInfo.GPSImgDirection": "9040/100"}
+        dock._on_viewer_clicks(json.dumps({"c": [{"x": 120.0, "y": -10.0, "vfov": 60, "dx": 0, "dy": 0,
+                                                  "h": 600, "w": 800}]}))
+        yaw, pitch, right = self.emitted("photoPointed")[-1]
+        self.assertAlmostEqual(math.degrees(yaw), 30.0, places=6)  # 120 + 0,4 - 90,4
+        self.assertAlmostEqual(math.degrees(pitch), -10.0, places=6)
+        self.assertFalse(right)
 
 
 class Compact(Base):
@@ -196,7 +203,9 @@ class Compact(Base):
         self.assertFalse(self.visible(dock.instance_row))
         self.assertFalse(self.visible(dock.options_row))
         self.assertFalse(self.visible(dock.measure_box.measure_status))
-        self.assertEqual(dock.btn_measure.toolTip(), "Cliquez au pied du premier bord.")  # aide dans la bulle
+        # Sans la visionneuse web : pas de mesure, la bulle le dit (avec elle, la bulle reprend la
+        # ligne d'aide)
+        self.assertIn("QtWebEngine ou WebGL", dock.btn_measure.toolTip())
         heights = {b.height() for b in dock._labels}
         self.assertLessEqual(max(heights) - min(heights), 2)  # boutons alignés (🖼 compris)
         dock.btn_compact.setChecked(False)
@@ -216,7 +225,7 @@ class Filter(Base):
         row.cmb_producer.setCurrentIndex(row.cmb_producer.findData("prod-1"))
         row.cmb_producer.activated.emit(row.cmb_producer.currentIndex())
         flt = self.dock.photo_filter()
-        self.assertEqual((flt.kind, flt.producer), ("360", ("prod-1", "CD21")))
+        self.assertEqual((flt.kind, flt.producer), ("360", ("prod-1", "Producteur A")))
         self.assertTrue(self.dock.btn_filter.text().startswith("Filtre ●"))
         self.assertEqual(self.emitted("filterChanged")[-1][0], flt)
         self.button("Aucun filtre").click()
@@ -224,50 +233,37 @@ class Filter(Base):
         self.assertEqual(self.dock.btn_filter.text(), "Filtre")
 
 
-class NativeViewer(Base):
-    def test_picture_and_navigation(self):
+class Unavailable(Base):
+    """Sans QtWebEngine : message d'explication à la place de la visionneuse, pas de mesure."""
+
+    def test_message(self):
+        dock = self.dock
+        text = dock.unavailable_label.text()
+        self.assertIn("QtWebEngine", text)
+        self.assertIn("PyQt6-WebEngine", text)
+        self.assertIn("redémarrer QGIS", text)
+        self.button("🌐 Ouvrir la visionneuse dans le navigateur")
+        self.assertFalse(dock.btn_measure.isEnabled())
+        self.assertIn("QtWebEngine ou WebGL", dock.btn_measure.toolTip())
+
+    def test_picture_still_followed(self):
+        # La carte (curseur de vue, filtre, précision) suit encore la photo choisie
         dock = self.dock
         dock.show_picture("p1", 5.0415, 47.322)
-        self.assertIn("Photo p1", dock.native.meta.text())
         self.assertEqual(self.emitted("pictureChanged")[-1][0], "p1")
-        self.assertTrue(dock.native.btn_next.isEnabled())
-        self.assertFalse(dock.native.btn_prev.isEnabled())
-        dock.native.btn_next.click()
-        self.assertEqual(self.requests[-1], "p2")
-        self.assertIn("Photo p2", dock.native.meta.text())
-        dock.show_location(5.0, 47.0)
-        self.assertEqual(dock.native.meta.text(), "")
+        self.assertEqual(self.emitted("itemChanged")[-1][0]["id"], "p1")
+        self.assertTrue(self.emitted("viewChanged"))
+        self.assertIn("p1", dock.current_url)
 
-    def test_click_and_aim(self):
-        dock = self.dock
-        dock.show_picture("p1", 5.0415, 47.322)
-        dock.btn_measure.setChecked(True)
-        mp = dock.measure_box
-        mp.cmb_measure.setCurrentIndex(mp.cmb_measure.findData("width"))
-        dock._on_native_click(95.0, -10.0)
-        click = self.emitted("photoClicked")[-1][0]
-        self.assertEqual((click["pic"], click["sequence"], click["raw"]), ("p1", "seq", [95.0, -10.0]))
-        self.assertEqual(click["accuracy"], 4.0)
-        self.assertIsNone(click["camera_alt"])  # position non vérifiée : pas d'altitude de caméra
-        mp.cmb_measure.setCurrentIndex(mp.cmb_measure.findData("tri"))
-        dock.img.current_view = lambda: (91.0, 70.0)
-        self.button("🎯 Viser").click()
-        sighting = self.emitted("aimRequested")[-1][0]
-        self.assertEqual((sighting["pic"], sighting["heading"]), ("p1", 91.0))
+    def test_no_photo_nearby(self):
+        self.dock.show_location(5.0, 47.0)
+        self.assertEqual(self.emitted("message")[-1][0], "Aucune photo Panoramax à proximité de ce point.")
 
-    def test_screen_click_on_precise_heading(self):
-        # Clic calculé depuis l'écran (sans position fournie par la visionneuse) : la visionneuse
-        # s'oriente sur le cap arrondi, la direction est ramenée au cap précis (EXIF)
+    def test_webgl_missing(self):
         dock = self.dock
-        dock.btn_measure.setChecked(True)
-        dock.show_picture("p1", 5.0415, 47.322)
-        props = dock._current_item.setdefault("properties", {})
-        props["view:azimuth"] = 90
-        props["exif"] = {"Exif.GPSInfo.GPSImgDirection": "9040/100"}
-        dock._on_viewer_clicks(json.dumps([{"x": 120.0, "y": -10.0, "vfov": 60, "dx": 0, "dy": 0, "h": 600, "w": 800}]))
-        raw = self.emitted("photoClicked")[-1][0]["raw"]
-        self.assertAlmostEqual(raw[0], 120.4, places=6)
-        self.assertAlmostEqual(raw[1], -10.0, places=6)
+        dock._switch_to_unavailable()
+        self.assertIn("WebGL", dock.unavailable_label.text())
+        self.assertIn("pilote de la carte graphique", dock.unavailable_label.text().replace("<b>", "").replace("</b>", ""))
 
     def test_calibration_line(self):
         dock = self.dock
@@ -285,7 +281,8 @@ class StableImage(Base):
 
     def photo_top(self):
         APP.processEvents()
-        return self.dock.img.mapTo(self.dock, self.dock.img.rect().topLeft()).y()
+        view = self.dock.unavailable_label  # à la place de la visionneuse web
+        return view.mapTo(self.dock, view.rect().topLeft()).y()
 
     def test_status_and_calibration_lines(self):
         dock = self.dock
@@ -317,46 +314,15 @@ class StableImage(Base):
         self.assertEqual(self.photo_top(), top)
 
 
-class DegradedMode(Base):
-    def test_popup_when_measuring(self):
+class QualityLine(Base):
+    def test_state_line(self):
         dock = self.dock
         dock.show_picture("p1", 5.0415, 47.322)
-        self.assertEqual(self.popups, [])  # pas de fenêtre hors mesure
         dock.btn_measure.setChecked(True)
-        self.assertEqual(self.popups, [["position GPS non vérifiée au décimètre (pas de correction différentielle "
-                                        "déclarée)"]])
         self.assertTrue(dock.measure_box.lbl_quality.text().startswith("⚠ Position GPS non vérifiée"))
-        dock.show_picture("p2", 5.0415, 47.322)
-        self.assertEqual(len(self.popups), 1)  # changement de photo pendant la mesure : pas de nouvelle fenêtre
-        dock.btn_measure.setChecked(False)
-        dock.btn_measure.setChecked(True)
-        self.assertEqual(len(self.popups), 2)  # à chaque activation
-
-    def test_do_not_show_again(self):
-        dock = self.dock
-        dock._show_degraded_popup = lambda reasons: self.popups.append(reasons) or True  # case cochée
-        dock.show_picture("p1", 5.0415, 47.322)
-        dock.btn_measure.setChecked(True)
-        dock.btn_measure.setChecked(False)
-        dock.btn_measure.setChecked(True)
-        self.assertEqual(len(self.popups), 1)
-
-    def test_full_mode_and_pending_check(self):
-        dock = self.dock
         dock.show_picture("q1", 5.0415, 47.322)
-        dock.btn_measure.setChecked(True)
-        self.assertEqual(self.popups, [])
         self.assertEqual(dock.measure_box.lbl_quality.text(), "⚠ Position GPS vérifiée (±0,10 m) · LiDAR HD · "
                                                               "inclinaison non calée : calez-la sur deux objets verticaux")
-        dock._on_native_click(95.0, -10.0)
-        self.assertEqual(self.emitted("photoClicked")[-1][0]["accuracy"], 0.1)
-        dock.btn_measure.setChecked(False)
-        dock.precision.later = []  # vérification encore en cours au clic sur Mesure
-        dock.show_picture("p1", 5.0415, 47.322)
-        dock.btn_measure.setChecked(True)
-        self.assertEqual(self.popups, [])
-        dock.precision.later.pop()()  # résultat arrivé
-        self.assertEqual(len(self.popups), 1)
 
     def test_camera_height_suggested(self):
         dock = self.dock
@@ -373,7 +339,7 @@ class DegradedMode(Base):
         self.assertEqual(btn.text(), "Caméra à 1,87 m d'après l'altitude GPS : utiliser")
         self.assertIn("médiane de 20 photos", btn.toolTip())
         box.cmb_measure.setCurrentIndex(box.cmb_measure.findData("tri"))
-        self.assertFalse(self.visible(btn))  # triangulation : pas de hauteur de caméra
+        self.assertFalse(self.visible(btn))  # mesure libre : pas de hauteur de caméra
         box.cmb_measure.setCurrentIndex(box.cmb_measure.findData("road"))
         self.assertTrue(self.visible(btn))
         btn.click()
@@ -418,11 +384,6 @@ class AutomaticTilt(Base):
         self.assertEqual(dock.measure_box.lbl_quality.text(), "Position GPS vérifiée (±0,10 m) · LiDAR HD · "
                                                               "inclinaison calée (verticales de la photo, ±0,1°)")
         self.assertIn("corrigée automatiquement", dock.measure_box.lbl_calibration.text())
-        # Clic suivant : direction corrigée de l'inclinaison
-        dock._on_native_click(95.0, -10.0)
-        click = self.emitted("photoClicked")[-1][0]
-        self.assertEqual(click["raw"], [95.0, -10.0])
-        self.assertNotAlmostEqual(click["elev"], -10.0, places=2)
         # Photo suivante pendant la mesure : analysée à son tour
         dock.show_picture("p1", 5.0415, 47.322)
         self.assertEqual(tilts.checked, ["q1", "p1"])

@@ -3,7 +3,7 @@
 Journal des revues et des choix d'architecture, à lire avant un travail de fond. Le plus
 récent en premier. Non livré avec le plugin (exclu du zip de release).
 
-## 2026-10-12 — Revue de code, corrections, application web pour les agents
+## 2026-10-12 — Revue de code, corrections, application web
 
 ### Revue de code (version 1.2.0)
 
@@ -24,9 +24,9 @@ Corrigé dans la PR #17 (`fix/revue-robustesse` → `dev`) :
   - Fiches arrivées dans le désordre : ignorées (`api.requested_id()`), sans effet sur le cache.
   - Changement d'instance : réponses d'avant ignorées (génération du cache).
   - `api.abort_all()` au déchargement ; lecture de la page suspendue fenêtre réduite.
-- **Précision GPS** (`precision.py`) : un résultat obtenu malgré une panne n'est plus gardé
+- **Précision GPS** (`core/precision.py`) : un résultat obtenu malgré une panne n'est plus gardé
   pour la session (champ `transient`) ; photos sans séquence vérifiées chacune.
-- **Terrain** (`terrain.py`) : cache des profils par visée (lon/lat à 1e-6, cap au dixième de degré),
+- **Terrain** (`core/terrain.py`) : cache des profils par visée (lon/lat à 1e-6, cap au dixième de degré),
   requêtes simultanées regroupées, source sans données mémorisée par maille de ~100 m
   (`COVERAGE_CELL`) ; les pannes ne sont pas mémorisées.
 - **Plugin** : réponses tardives ignorées après `unload` ; `QgsCsException` interceptée au
@@ -65,9 +65,9 @@ explore.panoramax.fr — page HTML locale chargeant `@panoramax/web-viewer`, dia
 Python par QWebChannel (événements au lieu d'interrogations), API publique au lieu
 d'internes.
 
-### Application web pour les agents (au bureau)
+### Application web (au bureau, sans QGIS)
 
-Besoin : des agents qui n'utilisent pas QGIS, au bureau (poste fixe, grand écran, souris,
+Besoin : des utilisateurs sans QGIS, au bureau (poste fixe, grand écran, souris,
 connexion filaire), pour préparer et vérifier leurs interventions. Pas de tablette ni de
 4G à prévoir.
 
@@ -84,7 +84,7 @@ Choix proposés :
   gênait.)
 - Interface réduite : largeur, hauteur, longueur, position d'un objet ; calage avancé
   seulement si nécessaire.
-- **Indicateur de fiabilité** très visible, d'après `precision.py` : vert (position RTK
+- **Indicateur de fiabilité** très visible, d'après `core/precision.py` : vert (position RTK
   vérifiée + LiDAR HD, ex. imajbox), orange (à caler), rouge (mesure indicative).
 - Export CSV / GeoJSON des mesures ; écriture dans une base partagée plus tard.
 
@@ -92,18 +92,22 @@ Condition préalable, utile au plugin quelle que soit la suite : **séparer le c
 
 - Déjà indépendants : `triangulation`, `geometry`, `ground`, `calibration`.
 - À découpler : `terrain` et `precision` (passent par `api.py`, réseau QGIS) et la logique
-  de mesure de `measure_tool.py` (mêlée au dessin sur la carte).
+  de mesure de `core/measures.py` (mêlée au dessin sur la carte).
 - Cible : un paquet `core` sans import QGIS, recevant une fonction d'accès réseau en
   paramètre, et des adaptateurs fins (QGIS : `QgsNetworkAccessManager` ; web : `fetch`).
 
-À vérifier tôt : depuis un poste d'agent, que le proxy ou le pare-feu du département laisse
+À vérifier tôt : depuis un poste d'entreprise, que le proxy ou le pare-feu laisse
 passer, depuis le navigateur, Panoramax, la Géoplateforme IGN et les services d'altitude de
-secours (OpenTopoData, Open-Meteo), y compris leurs en-têtes CORS.
+secours (Open-Meteo), y compris leurs en-têtes CORS.
 
 Étapes :
 
-1. Séparer le cœur de QGIS dans le plugin (PR sans changement de comportement, tests verts),
-   sur une branche partant de la PR #17.
+1. Séparer le cœur de QGIS dans le plugin (sans changement de comportement, tests verts) :
+   **fait le 13/10/2026** (branche `core`). Paquet `core/` sans import de QGIS
+   (triangulation, géométrie, sol, calage, métadonnées des photos, terrain, précision, axe de
+   la route, façades, inclinaison automatique, logique de mesure) ; services de l'hôte dans
+   `core/host.py` (réseau, altitude NGF, décodage d'une photo, tâches de fond), remplis par
+   `qgis_host.py` dans le plugin.
 2. Maquette web : MapLibre, visionneuse officielle, cœur dans Pyodide, largeur, hauteur,
    export CSV/GeoJSON.
 3. Indicateur de fiabilité, puis triangulation.

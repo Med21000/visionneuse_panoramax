@@ -15,6 +15,7 @@ from qgis.core import (
     QgsCsException,
     QgsPointXY,
     QgsProject,
+    QgsRectangle,
     QgsSettings,
     QgsUnitTypes,
 )
@@ -23,15 +24,12 @@ from qgis.PyQt.QtCore import QUrl, Qt, pyqtSignal
 from qgis.PyQt.QtGui import QAction, QColor, QDesktopServices, QIcon
 from qgis.PyQt.QtWidgets import QPushButton
 
-from . import api, filters, layers
+from . import api, filters, layers, qgis_host
 from .cursor import ViewCursor
-from .calibration import Calibration
-from .measure import CalibrationTool, Triangulator
-from .measure_tool import MeasureTool
-from .measure_panel import GROUND_MODES
-from .buildings import BuildingProvider
-from .roads import RoadAxisProvider
-from .terrain import PRECISE_LABELS, TerrainProvider
+from .core.calibration import Calibration
+from .core.session import CALIBRATION_MODES, GROUND_MODES, Session
+from .measure import CalibrationTool, PointsItem, Triangulator, save_points
+from .measure_tool import MeasureTool, save_links
 from .viewer_dock import PanoramaxDock
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
@@ -80,9 +78,9 @@ class LandmarkTool(QgsMapToolPan):
 
 
 class MeasureMapTool(QgsMapToolPan):
-    """Outil de la carte pendant les mesures : glisser un point rouge d'une mesure (ou une
-    extrémité de façade) le recale à l'endroit lâché ; glisser ailleurs déplace la carte ;
-    un simple clic ailleurs ouvre la photo la plus proche."""
+    """Outil de la carte pendant les mesures : glisser le point d'une mesure le recale à
+    l'endroit lâché ; glisser ailleurs déplace la carte ; un simple clic ailleurs ouvre la
+    photo la plus proche."""
 
     clicked = pyqtSignal(object)  # QgsPointXY, dans le SCR de la carte
     CLICK_TOLERANCE = 4  # pixels : au-delà, c'est un glisser
@@ -143,21 +141,18 @@ class PanoramaxPlugin:
         self.dock = None
         self.tool = None
         self.cursor = None
-        self.triangulator = None
-        self.measures = None  # largeurs, hauteur et mesure libre 3D (MeasureTool)
-        self.calibrator = None
+        self.session = None  # session de mesure du cœur (core/session.py), créée avec le panneau
+        self.points_item = None  # points triangulés gardés, distances, droite de mesure (measure.PointsItem)
+        self._saved_points, self._saved_links = set(), set()  # déjà enregistrés dans les couches
+        self._framed = None  # points cadrés sur la carte en dernier (voir _frame)
         self.edit_tool = None  # outil de la carte pendant les mesures (voir MeasureMapTool)
         self._before_edit = None  # outil de la carte avant les mesures
+        qgis_host.install()  # réseau, altitude NGF, photos et tâches de QGIS pour le cœur de calcul
         self.calibration = Calibration()  # conservé dans le profil QGIS
         self._saved_auto = None  # inclinaisons automatiques telles qu'enregistrées (texte)
         self.calibration.changed = self._save_calibration
         self.landmark_tool = None  # clic du repère sur la carte (calage du cap)
         self._previous_tool = None
-        self.terrain = TerrainProvider()
-        self.roads = RoadAxisProvider()  # axe de la route au point mesuré (largeur perpendiculaire)
-        self.roads.ready = self._on_road_axis
-        self.buildings = BuildingProvider()  # façade du cadastre visée (hauteur, mesure libre)
-        self.buildings.ready = self._on_buildings
         self._unloaded = False  # plugin déchargé : les réponses tardives sont ignorées
 
     # ------------------------------------------------------------------
@@ -215,10 +210,13 @@ class PanoramaxPlugin:
         self._end_landmark_tool()
         self.landmark_tool = None
         self._clear_marker()
-        for tool in (self.triangulator, self.measures, self.calibrator):
-            if tool is not None:
+        if self.session is not None:
+            for tool in (self.session.triangulator, self.session.tool, self.session.calibrator):
                 tool.remove()
-        self.triangulator = self.measures = self.calibrator = None
+            self.session = None
+        if self.points_item is not None:
+            self.points_item.remove()
+            self.points_item = None
         self._end_edit_tool()
         self.edit_tool = None
         if self.dock is not None:
@@ -249,23 +247,19 @@ class PanoramaxPlugin:
             self.dock.viewChanged.connect(self._on_view_changed)
             self.dock.message.connect(self._show_message)
             self.dock.measureToggled.connect(self._on_measure_toggled)
-            self.dock.aimRequested.connect(self._on_aim)
             self.dock.measureSaveRequested.connect(self._on_measure_save)
             self.dock.measureClearRequested.connect(self._on_measure_clear)
             self.dock.measureClearAllRequested.connect(self._on_measure_clear_all)
             self.dock.measureModeChanged.connect(self._on_measure_mode)
-            self.dock.photoClicked.connect(self._on_photo_clicked)
+            self.dock.keepRequested.connect(self._on_keep)
+            self.dock.newMeasureRequested.connect(self._on_new_measure)
+            self.dock.newReferenceRequested.connect(self._on_new_reference)
+            self.dock.photoPointed.connect(self._on_photo_pointed)
+            self.dock.keyPressed.connect(self._on_key)
+            self.dock.itemChanged.connect(self._on_item_changed)
             self.dock.cameraHeightChanged.connect(self._on_camera_height)
-            self.dock.terrainChanged.connect(self._on_terrain_changed)
-            self.dock.referenceChanged.connect(self._on_reference_changed)
-            self.dock.surfaceChanged.connect(self._on_surface_changed)
-            self.dock.facadeRequested.connect(self._on_facade_requested)
-            self.dock.wallFacadeRequested.connect(self._on_wall_facade_requested)
-            self.dock.wallChanged.connect(self._on_wall_changed)
-            self.dock.planeHeightChanged.connect(self._on_plane_height)
             self.dock.filterChanged.connect(self._on_filter_changed)
-            self.dock.tiltChanged.connect(self._on_tilt_changed)
-            self.terrain.bridge = self.dock.on_bridge()
+            self.dock.tiltChanged.connect(lambda pic: self._refresh())
             self.dock.visibilityChanged.connect(self.act_viewer.setChecked)
             self.iface.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.dock)
         return self.dock
@@ -341,12 +335,11 @@ class PanoramaxPlugin:
                 level=Qgis.MessageLevel.Info, duration=6)
 
     def _calibration_updated(self):
-        if self.calibrator is not None:
-            self.calibrator.reset()  # clics en attente et visées vers les repères
+        if self.session is not None:
+            self.session.calibrator.reset()  # clics en attente et visées vers les repères
         if self.dock is not None:
             self.dock.update_calibration_label()
-            if self.dock.btn_measure.isChecked():
-                self._show_measure(self._active_measure().status())
+            self._refresh()
 
     def toggle_viewer(self, checked=True):
         dock = self._ensure_dock()
@@ -501,69 +494,100 @@ class PanoramaxPlugin:
             self.cursor = None
 
     # ------------------------------------------------------------------
-    # Mesures : triangulation, largeur, hauteur
+    # Mesures : session du cœur (core/session.py), reliée au panneau, à la visionneuse et à la carte
     # ------------------------------------------------------------------
-    def _ensure_triangulator(self):
-        if self.triangulator is None:
-            self.triangulator = Triangulator(self.canvas)
-        return self.triangulator
+    def _ensure_session(self):
+        if self.session is None:
+            dock = self._ensure_dock()
+            self.session = Session(
+                notify=self._refresh,
+                tool=MeasureTool(self.canvas), triangulator=Triangulator(self.canvas),
+                calibrator=CalibrationTool(self.canvas, self.calibration,
+                                           lambda: self.session.current_ids() if self.session else (None, None)),
+                calibration_store=self.calibration, precision_checker=dock.precision, tilt_checker=dock.tilts)
+            self.session.set_camera_height(dock.camera_height())
+            self.session.set_mode(dock.measure_mode())
+            self.points_item = PointsItem(self.canvas)
+            if dock._current_item:
+                self.session.set_picture(dock._current_item)
+        return self.session
 
-    def _ensure_measures(self):
-        if self.measures is None:
-            self.measures = MeasureTool(self.canvas)
-            self.measures.camera_height = self.dock.camera_height()
-            self.measures.calibration = self.dock.calibration
-            self.measures.plane_height = self.dock.spin_plane.value()
-            self.measures.surface = self.dock.surface()
-            self.measures.road_lookup = self.roads.lookup
-            self.measures.wall_lookup = self.buildings.lookup
-            self.measures.use_wall = self.dock.measure_box.chk_wall.isChecked()
-        return self.measures
+    # Consigne courte en haut de la visionneuse, comme l'application web
+    HINTS = {
+        "tri": "Mesure libre : visez chaque point depuis plusieurs photos (flèches), puis « Valider le point triangulé »",
+        ("height", True): "Hauteur, étape 1 : visez le pied depuis plusieurs photos (flèches), puis « Valider le point "
+                          "triangulé »",
+        ("height", False): "Hauteur, étape 2 : cliquez le sommet (le pied est le point visé) ; autre photo : par la carte",
+        ("road", True): "Largeur, étape 1 : visez le premier bord depuis plusieurs photos (flèches), puis « Valider le "
+                        "point triangulé »",
+        ("road", False): "Largeur, étape 2 : cliquez le bord opposé ; autre photo, prise avant ou après : par la carte",
+        "tilt": "Calage de l'inclinaison : pied puis sommet de deux objets verticaux, à 90° l'un de l'autre",
+        "heading": "Calage du cap : un repère dans la photo, puis le même sur la carte (3 pour la position)",
+    }
 
-    def _ensure_calibrator(self):
-        if self.calibrator is None:
-            self.calibrator = CalibrationTool(self.canvas, self.dock.calibration, self.dock.current_ids,
-                                              self.dock.reference)
-        return self.calibrator
+    def _refresh(self):
+        """Redessine tout d'après la session : ligne d'aide, repères et habillage de la
+        visionneuse, points et droite sur la carte, cadrage, outil de la carte."""
+        if self._unloaded or self.dock is None or self.session is None:
+            return
+        s, dock = self.session, self.dock
+        state = s.state()
+        measuring = dock.btn_measure.isChecked()
+        dock.set_measure_status(s.status())
+        dock.update_calibration_label()
+        dock.set_measure_marks(s.viewer_marks())
+        dock.set_aiming(state["aiming"])
+        dock.measure_box.set_reference_state(s.ref_point is not None)
+        mode = s.mode
+        kind = ("calage" if mode in CALIBRATION_MODES else "visee" if state["aiming"]
+                else "prise" if mode in GROUND_MODES else "") if measuring else ""
+        hint = self.HINTS.get(mode) or self.HINTS.get((mode, state["aiming"]), "")
+        if state["new_measure"]:
+            hint = ("{} faite : cliquez une de ses croix pour l'ajuster ; autre {} : « Nouvelle mesure depuis {} »").format(
+                *(("Hauteur", "hauteur") if mode == "height" else ("Largeur", "largeur")), state["new_measure"])
+        if state["waiting_map"]:
+            hint = "Cliquez maintenant ce repère sur la carte QGIS (Échap pour annuler)."
+        dock.set_overlay({
+            "kind": kind, "hint": hint if measuring else "",
+            "label": {"visee": "Triangulation en cours", "prise": "Mesure en cours"}.get(kind, ""),
+            "point": measuring and state["aiming"] and state["point"],
+            "new_measure": state["new_measure"] if measuring else None,
+            "tilted": dict(state["lights"]).get("Inclinaison") == "ok", "grab": state["point_sel"]})
+        # Carte : points triangulés gardés, distances (au mètre près), droite de mesure de la largeur
+        points = [(lon, lat, v["nom"]) for lon, lat, v in s.points]
+        links = [(s.points[i][:2], s.points[j][:2], "{}↔{} {} m".format(
+            s.points[i][2]["nom"], s.points[j][2]["nom"], round(v["valeur_m"]))) for i, j, v in s.links]
+        road = (s.ref_point or {}).get("road") if measuring and mode == "road" else None
+        guide = None
+        if road:
+            from .core import widths
+            guide = widths.guide(s.ref_point, road["axis"])
+        self.points_item.set_data(points, links, guide)
+        self._frame(s.focus())
+        self._update_edit_tool()
+        if s.waiting_map():
+            self._start_landmark_tool()
 
-    def _active_measure(self):
-        mode = self.dock.measure_mode()
-        if mode == "tri":
-            return self._ensure_triangulator()
-        if mode in ("tilt", "heading", "camera"):
-            tool = self._ensure_calibrator()
-            if tool.mode != mode:
-                tool.set_mode(mode)
-            return tool
-        measures = self._ensure_measures()
-        measures.set_mode(mode)
-        return measures
-
-    def _show_measure(self, text):
-        """Texte de la mesure dans le panneau et repères dans la visionneuse."""
-        self.dock.set_measure_status(text)
-        self.dock.update_calibration_label()
-        mode = self.dock.measure_mode()
-        tool = None
-        if self.dock.btn_measure.isChecked():
-            tool = self.measures if mode in GROUND_MODES else self.calibrator if mode != "tri" else None
-        # Mesures terminées, gardées à l'écran jusqu'à « Tout effacer », puis mesure en cours
-        marks = self.measures.done_marks() if self.measures is not None else []
-        current = tool.viewer_marks() if tool is not None else None
-        if current and current["points"]:
-            marks = marks + [current]
-        self.dock.set_measure_marks(marks)
-
-    def _clear_measures(self):
-        """Termine les mesures en cours (réussies, largeurs et hauteurs restent affichées) ;
-        le calage déjà fait est conservé."""
-        self._end_landmark_tool()
-        if self.triangulator is not None:
-            self.triangulator.clear()
-        if self.measures is not None:
-            self.measures.finish()  # réussie, la mesure en cours reste affichée
-        if self.calibrator is not None:
-            self.calibrator.reset()
+    def _frame(self, focus):
+        """Carte cadrée sur la mesure en cours (Session.focus), seulement quand ces points changent
+        et si « Centrer la carte QGIS sur la photo » est coché : la carte reste libre entre-temps."""
+        if focus == self._framed:
+            return
+        self._framed = list(focus)
+        points = [p for p in focus if isinstance(p, list)]
+        if len(points) < 2 or not self.dock.chk_follow.isChecked():
+            return
+        ct = QgsCoordinateTransform(WGS84, self.canvas.mapSettings().destinationCrs(), QgsProject.instance())
+        try:
+            pts = [ct.transform(QgsPointXY(lon, lat)) for lon, lat in points]
+        except QgsCsException:
+            return
+        xs, ys = [p.x() for p in pts], [p.y() for p in pts]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        metre = 1.0 / self._meters_per_map_unit()
+        half = max(max(xs) - min(xs), max(ys) - min(ys)) / 2 * (1.5 if focus[-1] == "segment" else 1.3) + 3 * metre
+        self.canvas.setExtent(QgsRectangle(cx - half, cy - half, cx + half, cy + half))
+        self.canvas.refresh()
 
     # Repère du calage de cap : clic sur la carte, puis retour à l'outil précédent
     def _start_landmark_tool(self):
@@ -572,8 +596,7 @@ class PanoramaxPlugin:
             self.canvas.setMapTool(self.landmark_tool)
 
     def _end_landmark_tool(self):
-        """Fin d'un pointage sur la carte (repère de calage, recalage, façade) : retour à
-        l'outil précédent."""
+        """Fin d'un pointage du repère sur la carte : retour à l'outil précédent."""
         tool = self.canvas.mapTool()
         if tool is not None and tool is self.landmark_tool:
             if self._previous_tool is not None:
@@ -587,14 +610,15 @@ class PanoramaxPlugin:
                                    QgsProject.instance()).transform(point)
         return p.x(), p.y()
 
-    # Outil de la carte pendant les largeurs, hauteurs et mesures libres : glisser un point
-    # rouge ou une extrémité de façade le recale, glisser ailleurs déplace la carte
+    # Outil de la carte pendant les hauteurs et largeurs : glisser un point le recale, glisser
+    # ailleurs déplace la carte
     def _update_edit_tool(self):
         active = (self.dock is not None and self.dock.btn_measure.isChecked()
                   and self.dock.measure_mode() in GROUND_MODES)
         if active and self.edit_tool is not None and self.canvas.mapTool() is not self.edit_tool:
-            if self.canvas.mapTool() is not self.landmark_tool:
-                self._before_edit = self.canvas.mapTool()
+            if self.canvas.mapTool() is self.landmark_tool:
+                return
+            self._before_edit = self.canvas.mapTool()
             self.canvas.setMapTool(self.edit_tool)
         elif not active:
             self._end_edit_tool()
@@ -608,183 +632,114 @@ class PanoramaxPlugin:
         self._before_edit = None
 
     def _find_handle(self, point):
-        """Poignée (point de mesure, extrémité de façade) à moins de 10 pixels du point de la carte."""
-        if self.measures is None:
+        """N° de la poignée (point de mesure) à moins de 10 pixels du point de la carte, ou None."""
+        if self.session is None:
             return None
         ct = QgsCoordinateTransform(WGS84, self.canvas.mapSettings().destinationCrs(), QgsProject.instance())
         best, best_d = None, 10.0 * self.canvas.mapUnitsPerPixel()
-        for key, lon, lat in self.measures.handles():
+        for index, (lon, lat) in enumerate(self.session.handles()):
             q = ct.transform(QgsPointXY(lon, lat))
             d = math.hypot(q.x() - point.x(), q.y() - point.y())
             if d < best_d:
-                best, best_d = key, d
+                best, best_d = index, d
         return best
 
-    def _move_handle(self, key, point):
-        self._show_measure(self.measures.move_handle(key, *self._to_wgs(point)))
+    def _move_handle(self, index, point):
+        self.session.move_handle(index, *self._to_wgs(point))
+        self._refresh()
 
     def _on_landmark_cancelled(self):
         self._end_landmark_tool()
-        if self.calibrator is not None:
-            self.calibrator.reset()
-            self._show_measure(self.calibrator.status())
+        if self.session is not None:
+            self.session.cancel_landmark()
+            self._refresh()
 
     def _on_landmark_clicked(self, point):
-        if self.calibrator is None:
+        if self.session is None:
             return
-        to_wgs = QgsCoordinateTransform(self.canvas.mapSettings().destinationCrs(), WGS84,
-                                        QgsProject.instance())
-        p = to_wgs.transform(point)
         self._end_landmark_tool()
-        self._show_measure(self.calibrator.add_map_point(p.x(), p.y()))
+        self.session.map_click(*self._to_wgs(point))
+        self._refresh()
+
+    # Panneau et visionneuse -------------------------------------------------------------
+    def _on_item_changed(self, item):
+        if self.session is not None:
+            self.session.set_picture(item)
+            self._refresh()
 
     def _on_measure_toggled(self, checked):
-        self._update_edit_tool()
+        self._ensure_session().set_active(checked)
         if not checked:
-            self._clear_measures()
-            if self.calibrator is not None:
-                self.calibrator.remove()  # visées vers les repères, redessinées au besoin
-        self._show_measure(self._active_measure().status())
+            self._end_landmark_tool()
+        self._refresh()
 
     def _on_measure_mode(self, mode):
-        self._clear_measures()
-        self._update_edit_tool()
-        self._show_measure(self._active_measure().status())
-
-    def _on_aim(self, sighting):
-        self._show_measure(self._ensure_triangulator().add(sighting))
-
-    def _on_photo_clicked(self, click):
-        tool = self._active_measure()
-        if isinstance(tool, MeasureTool) and tool.select_near(click):
-            self._show_measure(tool.status())  # repère d'un point cliqué : sélection pour le viser à nouveau
-            return
-        if not isinstance(tool, (MeasureTool, CalibrationTool)) or not tool.needs_profile():
-            self._show_measure(tool.add_click(click))  # sommet d'un objet ou calage : pas de terrain
-            if isinstance(tool, CalibrationTool):
-                if tool.waiting_map():
-                    self._start_landmark_tool()
-                else:
-                    self._end_landmark_tool()
-            return
-        self._show_measure("Altitude du terrain le long de la visée…")
-        mode = tool.mode
-
-        def done(profile, label, warning):
-            if self._unloaded or self.dock is None or self.dock.measure_mode() != mode or tool.mode != mode:
-                return  # mesure effacée ou mode changé entre-temps
-            click.update(profile=profile, terrain=label, precise_ground=label in PRECISE_LABELS)
-            self._show_measure(tool.add_click(click, warning))
-            self._report_camera_height(tool)
-
-        self.terrain.profile(click["lon"], click["lat"], click["yaw"], done)
-
-    def _report_camera_height(self, tool):
-        """Hauteur de caméra juste calée : reportée dans le réglage du panneau, qui l'enregistre."""
-        height = getattr(tool, "new_camera", None)
-        if height is not None and self.dock is not None:
-            tool.new_camera = None
-            spin = self.dock.spin_camera
-            spin.setValue(min(spin.maximum(), max(spin.minimum(), round(height, 2))))
-
-    def _on_buildings(self):
-        """Cadastre ou LiDAR lu : hauteurs sur la façade du cadastre recalculées, façade en
-        attente définie."""
-        if self._unloaded or self.measures is None or self.dock is None:
-            return
-        self.measures.recompute_walls()
-        if self.dock.btn_measure.isChecked():
-            self._show_measure(self._active_measure().status())
-
-    def _on_wall_changed(self, checked):
-        self._ensure_measures().set_use_wall(checked)
-        if self.dock.btn_measure.isChecked():
-            self._show_measure(self._active_measure().status())
-
-    def _on_wall_facade_requested(self):
         self._end_landmark_tool()
-        self._ensure_measures().start_wall_facade()
-        self._show_measure(self.measures.status())
+        self._ensure_session().set_mode(mode)
+        self._refresh()
 
-    def _on_road_axis(self):
-        """Axe de la route lu (BD TOPO ou trajectoire) : largeurs perpendiculaires recalculées."""
-        if self._unloaded or self.measures is None or self.dock is None:
-            return
-        if self.measures.recompute_roads() and self.dock.btn_measure.isChecked():
-            self._show_measure(self._active_measure().status())
+    def _on_photo_pointed(self, yaw, pitch, right):
+        """Clic dans la photo : visée, mesure, ou sélection d'un point (clic droit, ou clic sur
+        sa croix)."""
+        session = self._ensure_session()
+        if right:
+            session.select_point(yaw, pitch)
+        else:
+            session.click(yaw, pitch)
+        self._refresh()
 
-    def _on_tilt_changed(self, pic):
-        """Inclinaison automatique arrivée après des clics sur la photo : ils sont corrigés."""
-        if self._unloaded or self.measures is None:
-            return
-        cal = self.dock.calibration
+    def _on_key(self, key):
+        session = self._ensure_session()
+        if key == "enter":
+            session.finish_point()
+        else:
+            session.nudge_point(key)
+        self._refresh()
 
-        def correct(c):
-            gps = c.get("gps") or [None, None]
-            return cal.correct(pic, c.get("sequence"), c["raw"][0], c["raw"][1], gps[0], gps[1])
+    def _on_keep(self):
+        self._ensure_session().keep_point()
+        self._refresh()
 
-        if self.measures.recorrect(pic, correct) and self.dock.btn_measure.isChecked():
-            self._show_measure(self._active_measure().status())
+    def _on_new_measure(self):
+        self._ensure_session().new_measure()
+        self._refresh()
 
-    def _on_terrain_changed(self):
-        self.terrain.bridge = self.dock.on_bridge()
-        if self.measures is not None:
-            self.measures.clear()  # les profils des clics viennent de l'ancienne source
-        if self.calibrator is not None:
-            self.calibrator.reset()
-        if self.dock.btn_measure.isChecked():
-            self._show_measure(self._active_measure().status())
-
-    def _on_reference_changed(self):
-        if self.calibrator is not None and self.dock.measure_mode() == "camera":
-            self.calibrator.reset()  # clics en attente faits pour l'ancienne référence
-            self._show_measure(self.calibrator.status())
+    def _on_new_reference(self):
+        self._ensure_session().new_reference()
+        self._refresh()
 
     def _on_camera_height(self, value):
-        self._ensure_measures().set_camera_height(value)
-        if self.dock.measure_mode() in GROUND_MODES:
-            self._show_measure(self._active_measure().status())
-
-    def _on_surface_changed(self, surface):
-        self._ensure_measures().set_surface(surface)
-        if self.dock.measure_mode() == "free":
-            self._show_measure(self.measures.status())
-
-    def _on_facade_requested(self):
-        self._end_landmark_tool()
-        self._ensure_measures().start_facade()
-        self._show_measure(self.measures.status())
-
-    def _on_plane_height(self, value):
-        self._ensure_measures().set_plane_height(value)
-        if self.dock.measure_mode() == "free":
-            self._show_measure(self.measures.status())
+        self._ensure_session().set_camera_height(value)
+        self._refresh()
 
     def _on_measure_save(self):
-        """« Enregistrer » : point triangulé, ou mesures terminées affichées."""
-        tool = self._ensure_triangulator() if self.dock.measure_mode() == "tri" else self._ensure_measures()
-        ok, msg = tool.save(self.iface.mainWindow())
-        if msg:  # None : création de la couche annulée
+        """« Enregistrer les mesures » : hauteurs et largeurs terminées, points triangulés gardés et
+        distances entre eux."""
+        session, parent = self._ensure_session(), self.iface.mainWindow()
+        ok, msg = session.tool.save(parent)
+        n_points, error_points = save_points(session.points, self._saved_points, parent)
+        n_links, error_links = save_links(session.points, session.links, self._saved_links, parent)
+        parts = [msg] if ok and msg else []
+        if n_points:
+            parts.append("{} point{} triangulé{} enregistré{}".format(n_points, *(("s",) * 3 if n_points > 1 else ("",) * 3)))
+        if n_links:
+            parts.append("{} distance{} enregistrée{}".format(n_links, *(("s",) * 2 if n_links > 1 else ("",) * 2)))
+        errors = [e for e in (error_points, error_links) if e] + ([msg] if not ok and msg and not
+                                                                  (n_points or n_links) else [])
+        if parts or errors:
             self.iface.messageBar().pushMessage(
-                "Panoramax", msg, level=Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Warning, duration=6)
-        self._show_measure(tool.status())
+                "Panoramax", " ; ".join(parts + errors),
+                level=Qgis.MessageLevel.Warning if errors else Qgis.MessageLevel.Success, duration=6)
+        self._refresh()
 
     def _on_measure_clear_all(self):
-        """« Tout effacer » : mesures terminées et en cours, visées de triangulation."""
+        """« Tout effacer » : mesures terminées et en cours, points gardés, visées."""
         self._end_landmark_tool()
-        if self.triangulator is not None:
-            self.triangulator.clear()
-        if self.measures is not None:
-            self.measures.clear_all()
-        if self.calibrator is not None:
-            self.calibrator.reset()
-        self._show_measure(self._active_measure().status())
+        self._ensure_session().clear_all()
+        self._saved_points, self._saved_links = set(), set()
+        self._refresh()
 
     def _on_measure_clear(self):
         self._end_landmark_tool()
-        tool = self._active_measure()
-        if isinstance(tool, MeasureTool) and tool.cancel_selection():
-            self._show_measure(tool.status())  # « Effacer » avec un point sélectionné : annule la sélection
-            return
-        tool.clear()
-        self._show_measure(tool.status())
+        self._ensure_session().clear()
+        self._refresh()

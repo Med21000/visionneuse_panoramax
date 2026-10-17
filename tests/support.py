@@ -5,7 +5,7 @@
 
 Le dossier du dépôt est enregistré comme paquet « visionneuse_panoramax », quel que
 soit son nom sur le disque, pour que les imports relatifs des modules fonctionnent.
-Les modules qui importent QGIS (terrain.py, measure_tool.py) se chargent avec un faux
+Les modules qui importent QGIS (measure_tool.py…) se chargent avec un faux
 paquet qgis (voir install_qgis_stub) : leurs calculs s'exécutent, l'affichage et le
 réseau sont remplacés dans les tests.
 """

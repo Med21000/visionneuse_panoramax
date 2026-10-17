@@ -105,8 +105,8 @@ def feature(m, layer):
 class MeasureTool(measures.MeasureTool):
     """Outil de mesure du cœur, dessiné sur le canevas de la carte QGIS."""
 
-    def new_item(self, wall=False):
-        return MeasureItem(self.canvas, wall=wall)
+    def new_item(self):
+        return MeasureItem(self.canvas)
 
     def save(self, parent=None):
         """Enregistre dans la couche « Panoramax – mesures » les mesures affichées terminées

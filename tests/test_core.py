@@ -12,8 +12,8 @@ import unittest
 
 from support import module, point
 
-CORE = ("host", "metadata", "triangulation", "geometry", "ground", "calibration", "terrain", "precision",
-        "roads", "buildings", "autotilt", "measures", "tools", "filters", "capture")
+CORE = ("host", "metadata", "triangulation", "geometry", "ground", "calibration", "precision",
+        "roads", "autotilt", "measures", "tools", "filters", "capture")
 
 
 class WithoutQgis(unittest.TestCase):

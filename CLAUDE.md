@@ -27,10 +27,9 @@ Historique des décisions, revue de code et feuille de route : `docs/feuille-de-
 - Réseau : uniquement par `api.fetch` / `api.fetch_json` (asynchrone, `QgsNetworkAccessManager`) ;
   dans le cœur, par `host.fetch` / `host.fetch_json`.
   Minimiser les appels à l'API : caches de `api.py` (photo courante + voisines),
-  `terrain.TerrainProvider` (profils, zones sans données), `precision.PrecisionChecker`
-  (par séquence), `autotilt.TiltChecker` (inclinaison par photo, conservée dans le calage),
-  `roads.RoadAxisProvider` (tronçons BD TOPO par maille), `buildings.BuildingProvider`
-  (bâtiments du cadastre et grilles MNS/MNT LiDAR par maille). Ne jamais mettre en cache un résultat obtenu malgré une panne.
+  `precision.PrecisionChecker` (par séquence, sol LiDAR HD), `autotilt.TiltChecker`
+  (inclinaison par photo, conservée dans le calage), `roads.RoadAxisProvider` (tronçons
+  BD TOPO par maille). Ne jamais mettre en cache un résultat obtenu malgré une panne.
 - Réglages QGIS sous le préfixe `visionneuse_panoramax/`.
 - Couches de résultats : `output.write_feature` ne réécrit jamais `fid` ni `commentaire`
   à la mise à jour ; un fid de mesure n'est valable que dans sa couche (`Measure.layer_id`).

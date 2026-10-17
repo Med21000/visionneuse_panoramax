@@ -56,7 +56,7 @@ Pendant les visées, un clic dans la photo vise l'objet (croix bleue) ; les flè
   1. Viser le **premier bord** (pied de bordure, marquage…) depuis au moins deux photos, puis « Valider le point triangulé ». Le plugin trace la **droite de mesure**, perpendiculaire à l'axe de la route en ce point (tronçon de la BD TOPO de l'IGN, sinon trajectoire de la séquence), en bleu dans la photo et sur la carte.
   2. Cliquer le **bord opposé** depuis une photo prise quelques mètres avant ou après le point, pas juste en face : seule la direction du clic compte, le bord est là où elle coupe la droite.
 
-  Chaque clic donne une largeur depuis le même point, jusqu'à « Nouveau point de référence ».
+  Une fois la largeur faite, les clics ne servent plus qu'à l'ajuster (clic sur une de ses croix, puis nouveau clic ou flèches : 1 cm le long de la droite de mesure). Pour une autre largeur depuis le même point, cliquer « ↺ Nouvelle mesure depuis A » dans la visionneuse ; pour un autre point, « Nouveau point de référence ».
 - **Mesure libre (points triangulés)** : viser chaque point depuis au moins deux photos, puis « Valider le point triangulé » ; à partir du deuxième, la distance horizontale au point précédent s'affiche, et la carte se cadre sur le segment.
 
 À l'étape 2 de la hauteur et de la largeur, les flèches de navigation sont masquées (elles gênent les clics de mesure) : on change de photo par la carte.

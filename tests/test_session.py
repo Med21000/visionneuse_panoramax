@@ -84,6 +84,39 @@ class Height(Base):
         self.assertFalse(self.s.state()["point_sel"])
 
 
+class Width(Base):
+    def test_locked_until_new_measure(self):
+        # Bord A à 5 m à l'est, route nord-sud : droite de mesure est-ouest à 3 m au nord
+        a = (5.0, 3.0, 0.0)
+        self.s.set_mode("road")
+        self.aim(self.p1, 0.0, a)
+        self.aim(self.p2, 6.0, a)
+        self.s.keep_point()
+        self.assertIsNone(self.s.state()["new_measure"])
+        text = self.s.click(*direction(6.0, (-3.0, 3.0, 0.0)))
+        self.assertIn("Nouvelle mesure depuis A", text)
+        self.assertEqual(self.s.state()["new_measure"], "A")
+        # Autre clic hors des croix : pas d'autre largeur, consigne d'ajustement
+        text = self.s.click(*direction(6.0, (-6.0, 3.0, 0.0)))
+        self.assertTrue(text.startswith("Largeur mesurée depuis le point A"), text)
+        self.assertEqual(len(self.s._widths()), 1)
+        # Les points restent ajustables : croix du bord, flèche, Entrée
+        self.s.click(*direction(6.0, (-3.0, 3.0, 0.0)))
+        self.assertTrue(self.s.state()["point_sel"])
+        self.s.nudge_point("up")
+        self.s.finish_point()
+        self.assertEqual(len(self.s._widths()), 1)
+        # « Nouvelle mesure depuis A » : le clic suivant donne une seconde largeur
+        self.s.new_measure()
+        self.assertIsNone(self.s.state()["new_measure"])
+        self.s.click(*direction(6.0, (-6.0, 3.0, 0.0)))
+        self.assertEqual(len(self.s._widths()), 2)
+        self.assertEqual(self.s.state()["new_measure"], "A")
+        # Nouveau point de référence : plus de verrou
+        self.s.new_reference()
+        self.assertIsNone(self.s.state()["new_measure"])
+
+
 class FreeMeasure(Base):
     def test_distance_between_points(self):
         a, b = (5.0, 3.0, 0.0), (5.0, 7.0, 0.0)

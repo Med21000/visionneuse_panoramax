@@ -369,9 +369,11 @@ NAV_BLOCK_JS = r"""
 # Habillage de la visionneuse pendant une mesure, comme l'application web : liseré (bleu pendant
 # les visées, jaune pendant la prise de mesure, orange en calage), état animé en haut à gauche,
 # consigne en haut au centre, bouton « ✔ Valider le point triangulé » (halo) dessous quand les
-# visées donnent un point, pointeur de mesure (cercle de la couleur du liseré, vert en mesure si
-# l'inclinaison est calée) ; rien hors mesure. state : {kind: "visee" | "prise" | "calage" | "",
-# label, hint, point, tilted, grab} ; grab : un point est sélectionné (flèches et Entrée captées).
+# visées donnent un point, ou « Nouvelle mesure depuis A » une fois la largeur faite, pointeur de
+# mesure (cercle de la couleur du liseré, vert en mesure si l'inclinaison est calée) ; rien hors
+# mesure. state : {kind: "visee" | "prise" | "calage" | "", label, hint, point, new_measure (nom du
+# point de référence ou null), tilted, grab} ; grab : un point est sélectionné (flèches et Entrée
+# captées).
 OVERLAY_JS = r"""
 (function(state){
   window.__qgisKeyGrab = !!state.grab;
@@ -391,6 +393,9 @@ OVERLAY_JS = r"""
       + 'color:#fff;font:600 14px sans-serif;cursor:pointer;text-shadow:0 0 2px rgba(0,0,0,.6);'
       + 'animation:qgishalo 1.6s ease-in-out infinite}'
       + '#qgis-keep:hover{background:#0098bb;border-color:#0098bb}'
+      + '#qgis-new{pointer-events:auto;padding:6px 14px;border:2px solid #ffeb00;border-radius:5px;background:#ffeb00;'
+      + 'color:#202124;font:600 14px sans-serif;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,.5)}'
+      + '#qgis-new:hover{background:#e6d200;border-color:#e6d200}'
       + '@keyframes qgishalo{0%,100%{box-shadow:0 1px 4px rgba(0,0,0,.5),0 0 0 0 rgba(0,188,230,.55)}'
       + '50%{box-shadow:0 1px 4px rgba(0,0,0,.5),0 0 10px 5px rgba(0,188,230,.55)}}'
       + '#qgis-state{position:fixed;top:8px;left:10px;display:flex;align-items:center;padding:3px 8px;'
@@ -410,7 +415,7 @@ OVERLAY_JS = r"""
   border.style.display = color ? 'block' : 'none';
   border.style.borderColor = color;
   var top = el('qgis-top', 'div', body);
-  top.style.display = state.hint || state.point ? 'flex' : 'none';
+  top.style.display = state.hint || state.point || state.new_measure ? 'flex' : 'none';
   var hint = el('qgis-hint', 'p', top);
   hint.textContent = state.hint || '';
   hint.style.display = state.hint ? 'block' : 'none';
@@ -422,6 +427,16 @@ OVERLAY_JS = r"""
     keep.addEventListener('click', function(e){
       e.stopPropagation();
       (window.__qgisActions = window.__qgisActions || []).push('keep');
+    });
+  }
+  var again = el('qgis-new', 'button', top);
+  again.textContent = '↺ Nouvelle mesure depuis ' + (state.new_measure || '');
+  again.style.display = state.new_measure ? 'inline-block' : 'none';
+  if (!again.__qgis) {
+    again.__qgis = true;
+    again.addEventListener('click', function(e){
+      e.stopPropagation();
+      (window.__qgisActions = window.__qgisActions || []).push('new_measure');
     });
   }
   var lab = el('qgis-state', 'div', body);

@@ -144,6 +144,7 @@ class PanoramaxDock(QDockWidget):
     measureClearAllRequested = pyqtSignal()  # efface toutes les mesures conservées à l'écran
     measureModeChanged = pyqtSignal(str)
     keepRequested = pyqtSignal()  # « Valider le point triangulé » (bouton de la visionneuse)
+    newMeasureRequested = pyqtSignal()  # « Nouvelle mesure depuis A » (bouton de la visionneuse)
     newReferenceRequested = pyqtSignal()
     # Clic dans la photo affichée pendant une mesure : (cap, élévation) dans le repère de la photo
     # (radians, comme la visionneuse), clic droit ?
@@ -432,7 +433,8 @@ class PanoramaxDock(QDockWidget):
     def set_overlay(self, state):
         """Habillage de la visionneuse pendant une mesure (voir viewer_js.OVERLAY_JS) : kind
         ("visee", "prise", "calage" ou ""), label (état animé), hint (consigne), point (bouton
-        « Valider le point triangulé »), tilted, grab (point sélectionné : flèches captées)."""
+        « Valider le point triangulé »), new_measure (nom du point de référence : bouton « Nouvelle
+        mesure depuis A »), tilted, grab (point sélectionné : flèches captées)."""
         self._overlay = dict(state or {})
         if self.web is not None:
             self.web.page().runJavaScript(self._overlay_js())
@@ -550,7 +552,8 @@ class PanoramaxDock(QDockWidget):
 
     def _on_viewer_clicks(self, value):
         """Files de la visionneuse (voir viewer_js.CLICKS_JS) : clics dans la photo (émis en
-        cap et élévation dans le repère de la photo), touches, bouton « Valider »."""
+        cap et élévation dans le repère de la photo), touches, boutons « Valider » et « Nouvelle
+        mesure »."""
         from .core.ground import view_direction
 
         try:
@@ -560,6 +563,8 @@ class PanoramaxDock(QDockWidget):
         for action in data.get("a") or []:
             if action == "keep":
                 self.keepRequested.emit()
+            elif action == "new_measure":
+                self.newMeasureRequested.emit()
         for key in data.get("k") or []:
             self.keyPressed.emit(key)
         item = self._current_item or {}

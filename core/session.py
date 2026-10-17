@@ -81,6 +81,9 @@ class Session:
         # (new_reference) ; None : à trianguler d'abord
         self.ref_point = None
         self.width_sel = None  # largeur : (mesure, 0 pour le point de référence ou 1 pour le bord) à recaler
+        # Largeur faite depuis le point de référence : seuls ses points s'ajustent (sur la droite de
+        # mesure) jusqu'à « Nouvelle mesure depuis A » (new_measure)
+        self.width_done = False
         self.last_free = None  # mesure libre : n° du dernier point gardé, relié au suivant
         self.point_views = {}  # nom d'un point gardé -> {photo : [cap, élévation] de sa visée (radians)}
         self._handles = []  # clés des poignées de la carte, dans l'ordre de handles()
@@ -140,6 +143,7 @@ class Session:
         self.mode = mode
         self.ref_point = None
         self.width_sel = None
+        self.width_done = False
         self.message = ""
         self._active()
         self._check_tilt()  # en quittant la triangulation
@@ -307,6 +311,9 @@ class Session:
         if near is not None:  # clic sur la croix d'un point : sélectionné
             self.width_sel = near
             return self.status()
+        if self._width_locked():  # pas d'autre largeur sans « Nouvelle mesure depuis A »
+            self.message = self._locked_text()
+            return self.status()
         ref = self.ref_point
         if ref.get("road") is None:
             self._road_at_reference()
@@ -319,10 +326,18 @@ class Session:
             self.message = m.error
             return self.status()
         self.tool.done.append(m)
+        self.width_done = True
         self.message = (m.status() + self._rtk_warning(ref["sequences"] + [click.get("sequence")])
-                        + " Autre largeur depuis ce point : cliquez un autre bord ; sinon « Nouveau point de référence »."
-                          " Clic sur une croix : la recaler.")
+                        + " Pour l'ajuster, cliquez une de ses croix. Autre largeur depuis ce point : « Nouvelle mesure "
+                          "depuis {} ».".format(ref["name"]))
         return self.status()
+
+    def _locked_text(self):
+        name = self.ref_point["name"]
+        return ("Largeur mesurée depuis le point {0} : cliquez une de ses croix pour l'ajuster (nouveau clic ou "
+                "flèches du clavier, 1 cm le long de la droite de mesure ; Entrée pour terminer). Autre largeur "
+                "depuis ce point : « Nouvelle mesure depuis {0} » ; autre point : « Nouveau point de "
+                "référence ».").format(name)
 
     def _width_points(self, m):
         """Repères du point de référence et du bord d'une largeur dans la photo affichée :
@@ -581,8 +596,24 @@ class Session:
         self.triangulator.clear()
         self.ref_point = None
         self.width_sel = None
+        self.width_done = False
         self.message = ""
         return self.status()
+
+    def new_measure(self):
+        """Largeur : « Nouvelle mesure depuis A » ; la largeur faite reste, le clic suivant sur le
+        bord opposé en donne une autre depuis le même point de référence."""
+        self.width_sel = None
+        self.width_done = False
+        self.message = ""
+        return self.status()
+
+    def _width_locked(self):
+        """Largeur faite depuis le point de référence (et toujours là) : les clics ne servent plus
+        qu'à ajuster ses points, jusqu'à new_measure."""
+        ref = self.ref_point
+        return (self.mode == "road" and self.width_done and ref is not None
+                and any(w.edge is ref for w in self._widths()))
 
     def _reference_foot(self):
         """Hauteur : clic du pied pris dans la visée du point de référence faite depuis la photo
@@ -746,6 +777,7 @@ class Session:
         self.last_free, self.point_views = None, {}
         self.ref_point = None
         self.width_sel = None
+        self.width_done = False
         self.message = ""
         return self.status()
 
@@ -809,6 +841,9 @@ class Session:
                     "photos (une visée par photo, flèches pour changer de photo). " + text)
             if self.triangulator.result is not None:
                 text += " Puis « Valider le point triangulé »."
+        elif self._width_locked():
+            text = self._locked_text()
+            sequences = self.ref_point["sequences"]
         elif self.mode == "road":
             road = self.ref_point.get("road")
             text = ("Largeur, étape 2/2 (point {}) : cliquez le bord opposé, au sol, depuis une photo prise quelques "
@@ -884,6 +919,8 @@ class Session:
             "point": self.triangulator.result is not None,
             "aiming": self._aiming(),
             "point_sel": self.width_sel is not None or (self.mode == "height" and self.tool.selected is not None),
+            # bouton « Nouvelle mesure depuis A » : nom du point de référence, ou None
+            "new_measure": self.ref_point["name"] if self._width_locked() else None,
             "active": self.active,
             "lights": self._lights(pic) if item else [],
         })

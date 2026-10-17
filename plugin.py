@@ -252,6 +252,7 @@ class PanoramaxPlugin:
             self.dock.measureClearAllRequested.connect(self._on_measure_clear_all)
             self.dock.measureModeChanged.connect(self._on_measure_mode)
             self.dock.keepRequested.connect(self._on_keep)
+            self.dock.newMeasureRequested.connect(self._on_new_measure)
             self.dock.newReferenceRequested.connect(self._on_new_reference)
             self.dock.photoPointed.connect(self._on_photo_pointed)
             self.dock.keyPressed.connect(self._on_key)
@@ -541,12 +542,16 @@ class PanoramaxPlugin:
         kind = ("calage" if mode in CALIBRATION_MODES else "visee" if state["aiming"]
                 else "prise" if mode in GROUND_MODES else "") if measuring else ""
         hint = self.HINTS.get(mode) or self.HINTS.get((mode, state["aiming"]), "")
+        if state["new_measure"]:
+            hint = ("Largeur faite : cliquez une de ses croix pour l'ajuster ; autre largeur : « Nouvelle mesure "
+                    "depuis {} »").format(state["new_measure"])
         if state["waiting_map"]:
             hint = "Cliquez maintenant ce repère sur la carte QGIS (Échap pour annuler)."
         dock.set_overlay({
             "kind": kind, "hint": hint if measuring else "",
             "label": {"visee": "Triangulation en cours", "prise": "Mesure en cours"}.get(kind, ""),
             "point": measuring and state["aiming"] and state["point"],
+            "new_measure": state["new_measure"] if measuring else None,
             "tilted": dict(state["lights"]).get("Inclinaison") == "ok", "grab": state["point_sel"]})
         # Carte : points triangulés gardés, distances (au mètre près), droite de mesure de la largeur
         points = [(lon, lat, v["nom"]) for lon, lat, v in s.points]
@@ -693,6 +698,10 @@ class PanoramaxPlugin:
 
     def _on_keep(self):
         self._ensure_session().keep_point()
+        self._refresh()
+
+    def _on_new_measure(self):
+        self._ensure_session().new_measure()
         self._refresh()
 
     def _on_new_reference(self):

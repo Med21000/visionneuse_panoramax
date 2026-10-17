@@ -221,7 +221,8 @@ CLICKS_OFF_JS = r"""
 # Repères de mesure dans la visionneuse (module de repères du moteur 360°), accrochés à la
 # photo : croix jaunes des points de mesure (bleues pour les visées de triangulation), trait
 # rouge et étiquette du résultat ; lignes guides en tirets, sans croix et sous les traits :
-# droite de mesure d'une largeur (bleue), verticale d'une hauteur (verte). Point sélectionné :
+# droite de mesure d'une largeur (bleue), verticale d'une hauteur (verte) ; nom d'un point
+# triangulé (A, B…), étiquette seule au-dessus à gauche de sa croix. Point sélectionné :
 # cercle autour de sa croix. Redessinés seulement si l'état ou la photo change, ou si la
 # visionneuse les a effacés (elle vide ses repères en changeant de photo).
 MARKS_JS = r"""
@@ -233,6 +234,7 @@ MARKS_JS = r"""
   // Repères de la photo affichée : ceux d'autres photos attendent
   var measures = (state.measures || []).map(function(m){
     return {label: m.label, beside: m.beside, guide: !!m.guide, vertical: !!m.vertical, sighting: !!m.sighting,
+            name: !!m.name,
             pts: (m.points || []).filter(function(p){ return p.pic === pic && p.yaw !== null && p.pitch !== null; })};
   }).filter(function(m){ return m.pts.length; });
   // Étiquette à côté du trait (hauteur) : du côté du centre de la vue
@@ -262,7 +264,7 @@ MARKS_JS = r"""
   });
   var cross = 'M0 9H18M9 0V18';
   measures.forEach(function(m, k){
-    if (m.guide) return;
+    if (m.guide || m.name) return;
     m.pts.forEach(function(p, i){
       add({id: 'qgis-m' + k + '-p' + i, position: {yaw: p.yaw, pitch: p.pitch}, path: cross, zIndex: 1,
            anchor: 'center center', svgStyle: {stroke: m.sighting ? '#00bce6' : '#ffeb00', strokeWidth: '1.5px', fill: 'none'}});
@@ -273,7 +275,7 @@ MARKS_JS = r"""
   });
   var lines = [];
   measures.forEach(function(m, k){
-    if (m.guide || m.pts.length !== 2) return;
+    if (m.guide || m.name || m.pts.length !== 2) return;
     var id = 'qgis-m' + k + '-line';
     add({id: id, polyline: [[m.pts[0].yaw, m.pts[0].pitch], [m.pts[1].yaw, m.pts[1].pitch]], zIndex: 2,
          svgStyle: {stroke: '#ff5f52', strokeWidth: '2.5px', fill: 'none'}});
@@ -288,6 +290,13 @@ MARKS_JS = r"""
     var pts = m.pts, prefix = 'qgis-m' + k + '-';
     if (m.guide || !m.label) return;
     var at = pts[0];
+    if (m.name) {  // nom du point : au-dessus à gauche de sa croix, bordeaux comme sur la carte
+      add({id: prefix + 'name', position: {yaw: at.yaw, pitch: at.pitch}, anchor: 'bottom right', zIndex: 100,
+           html: '<div style="margin:0 6px 6px 0;padding:1px 6px;border-radius:4px;background:rgba(142,27,27,.92);'
+             + 'color:#fff;font:600 13px sans-serif;white-space:nowrap;box-shadow:0 1px 3px rgba(0,0,0,.4)">'
+             + String(m.label).replace(/[&<>]/g, '') + '</div>'});
+      return;
+    }
     if (pts.length === 2) {  // milieu du trait (moyenne des directions)
       var x = 0, y = 0, z = 0;
       pts.forEach(function(p){

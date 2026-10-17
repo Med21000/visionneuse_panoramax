@@ -967,6 +967,28 @@ class Session:
             sequences = self.ref_point["sequences"]
         return text + self._rtk_warning(sequences)
 
+    def _name_marks(self, marks):
+        """Étiquettes des noms des points triangulés dans la photo affichée, sans croix (« name ») :
+        point de référence des largeurs et des hauteurs, à sa croix (repère du point de référence
+        en cours, point 0 de ses mesures) ; points gardés de la mesure libre."""
+        pic = self.item.get("id")
+        at = {}  # nom -> repère
+        ref = self.ref_point
+        if ref is not None and self.active and self.mode in REF_MODES:
+            mark = self._reference_mark()
+            if mark:
+                at[ref["name"]] = mark["points"][0]
+        for w in self._widths():
+            at.setdefault(w.edge.get("name"), self._width_points(w)[0])
+        for m in self._heights():
+            if m.reference and m.reference.get("name"):
+                at.setdefault(m.reference["name"], self._height_points(m)[0])
+        for k, (_, _, values) in enumerate(self.points):
+            if values["nom"] not in at:
+                at[values["nom"]] = self._free_mark_point(k)
+        return [{"points": [dict(p, pic=pic, sel=False)], "label": name, "name": True}
+                for name, p in at.items() if name and p is not None]
+
     def _calibration_text(self):
         """Consigne des modes de calage, étape par étape, avec ce qui est déjà fait."""
         tool, pic = self.calibrator, (self.item or {}).get("id")
@@ -1082,6 +1104,8 @@ class Session:
             marks = marks + [self.calibrator.viewer_marks()]
         if self.active and self.mode in REF_MODES and self.ref_point and self.item:
             marks = marks + [m for m in [self._reference_mark()] if m]
+        if self.item:  # noms des points triangulés (A, B…) à côté de leur croix
+            marks = marks + self._name_marks(marks)
         road = (self.ref_point or {}).get("road") if self.active and self.mode == "road" else None
         if road and self.item:  # en premier : dessinée sous les traits rouges des largeurs
             marks = [self._guide_mark(road)] + marks
@@ -1094,7 +1118,7 @@ class Session:
                 out.append({"points": [[p["yaw"], p["pitch"], bool(p.get("sel"))] for p in points],
                             "label": m.get("label", ""), "beside": m.get("beside", False),
                             "sighting": m.get("sighting", False), "guide": m.get("guide", False),
-                            "vertical": m.get("vertical", False)})
+                            "vertical": m.get("vertical", False), "name": m.get("name", False)})
         return out
 
     def focus(self):

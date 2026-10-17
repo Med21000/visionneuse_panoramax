@@ -56,10 +56,13 @@ class Height(Base):
         self.assertIn("Valider le point triangulé", text)
         self.assertIn("Point de référence A validé", self.s.keep_point())
         self.assertFalse(self.s._aiming())
+        names = lambda: [(m["label"], len(m["points"])) for m in self.s.viewer_marks() if m["name"]]
+        self.assertEqual(names(), [("A", 1)])  # nom du point de référence à côté de sa croix
         # Seul le sommet se clique : le pied est la visée faite depuis cette photo
         text = self.s.click(*direction(6.0, top))
         self.assertTrue(text.startswith("Hauteur : 4,00 m"), text)
         self.assertIn("calée sur le point triangulé A", text)
+        self.assertEqual(names(), [("A", 1)])  # toujours au pied, une fois la hauteur faite
         # Hauteur faite : un autre clic ne mesure pas, seules ses croix s'ajustent
         self.assertEqual(self.s.state()["new_measure"], "A")
         text = self.s.click(*direction(6.0, (5.0, 3.0, 2.0)))
@@ -191,6 +194,7 @@ class FreeMeasure(Base):
             self.aim(self.p2, 6.0, target)
             text = self.s.keep_point()
         self.assertIn("Distance A–B : 4,00 m", text)
+        self.assertEqual(sorted(m["label"] for m in self.s.viewer_marks() if m["name"]), ["A", "B"])
         self.assertEqual([r["kind"] for r in self.s.results()], ["point", "point", "distance"])
         # Carte cadrée sur le segment qui vient d'être mesuré
         self.assertEqual(self.s.focus()[-1], "segment")

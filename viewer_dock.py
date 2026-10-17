@@ -492,7 +492,7 @@ class PanoramaxDock(QDockWidget):
         """Repères de la photo affichée (Session.viewer_marks) : liste de {"points": [[cap,
         élévation (radians, repère de la photo), sélectionné]], "label", "beside", "sighting"
         (visée : croix bleue), "guide" (ligne en tirets : droite de mesure, ou verticale si
-        "vertical")}. Visionneuse web seulement."""
+        "vertical"), "name" (nom d'un point triangulé, sans croix)}. Visionneuse web seulement."""
         pic = self._current_pic
         self._marks = [dict(m, points=[{"pic": pic, "yaw": p[0], "pitch": p[1], "sel": bool(p[2])}
                                        for p in m.get("points", [])]) for m in (marks or [])]

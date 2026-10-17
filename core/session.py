@@ -1161,16 +1161,30 @@ class Session:
         return pts
 
     def _vertical_mark(self):
-        """Hauteur : verticale passant par le point de référence, dans la photo affichée
-        (repère de la visionneuse, tracé vert) : du sol supposé plat, à la hauteur de caméra du
-        réglage, jusqu'à VERTICAL_LENGTH m."""
-        lon, lat = (float(v) for v in self.item["geometry"]["coordinates"][:2])
-        x, y = triangulation._local(self.ref_point["lon"], self.ref_point["lat"], lon, lat)
-        d = max(math.hypot(x, y), 0.5)
-        yaw = math.radians((math.degrees(math.atan2(x, y)) - self._heading() + 540) % 360 - 180)
-        height = self.tool.camera_height
-        points = [{"pic": self.item.get("id"), "yaw": yaw, "pitch": math.atan2(k * VERTICAL_LENGTH / 24 - height, d)}
-                  for k in range(25)]
+        """Hauteur : verticale vraie passant par le point de référence, dans la photo affichée
+        (repère de la visionneuse, tracé vert) : depuis la croix du pied (là où il a été visé
+        depuis cette photo, sinon projeté au sol) jusqu'à VERTICAL_LENGTH m au-dessus. Tracée
+        dans le monde puis ramenée dans la photo par le calage (inclinaison, cap) : sur une photo
+        penchée et calée, elle suit les objets verticaux et non le bord de l'image."""
+        item, cal = self.item, self.calibration
+        pic, sequence = item.get("id"), item.get("collection")
+        lon, lat = (float(v) for v in item["geometry"]["coordinates"][:2])
+        heading = self._heading()
+        view = self._ref_view(pic)
+        if view is None:
+            p = self._project(self.ref_point["lon"], self.ref_point["lat"])
+            view = [p["yaw"], p["pitch"]]
+        # Pied dans le monde : cap et élévation vrais ; la verticale garde ce cap
+        bearing, elev = cal.correct(pic, sequence, (math.degrees(view[0]) + heading) % 360,
+                                    math.degrees(view[1]), lon, lat)
+        d = self._ref_distance()
+        z0 = d * math.tan(math.radians(max(-89.0, min(89.0, elev))))
+        points = []
+        for k in range(25):
+            e = math.degrees(math.atan2(z0 + k * VERTICAL_LENGTH / 24, d))
+            yaw, pitch = cal.uncorrect(pic, sequence, bearing, e, lon, lat)
+            points.append({"pic": pic, "yaw": math.radians((yaw - heading + 540) % 360 - 180),
+                           "pitch": math.radians(pitch)})
         return {"points": points, "guide": True, "vertical": True}
 
     def _guide_mark(self, road):

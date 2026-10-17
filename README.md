@@ -8,10 +8,10 @@ Plugin QGIS 4 qui intègre la visionneuse [Panoramax](https://panoramax.fr) avec
 
 ## Fonctionnalités
 
-- Mesures (bouton « 📐 Mesure »), appuyées sur des points **triangulés** (visés depuis au moins deux photos) :
+- Mesures (bouton « 📐 Mesure », au milieu de la barre, orange quand la mesure est active), appuyées sur des points **triangulés** (visés depuis au moins deux photos) :
   - hauteur d'un objet, largeur perpendiculaire à la chaussée, mesure libre (distance entre points triangulés) ;
-  - points, traits et valeurs affichés dans la visionneuse (sur toutes les photos) et sur la carte, conservés à l'écran jusqu'à « Tout effacer » ;
-  - recalage d'un point par un clic sur sa croix, puis un nouveau clic ou les flèches du clavier (pas de 1 cm) ;
+  - points (avec leur nom : A, B…), traits et valeurs affichés dans la visionneuse (sur toutes les photos) et sur la carte, conservés à l'écran jusqu'à « Tout effacer » ;
+  - une mesure faite ne s'ajuste plus que sur sa droite de mesure (largeur) ou sa verticale (hauteur) : clic sur une croix, puis nouveau clic ou flèches du clavier (pas de 1 cm) ; une autre mesure depuis le même point passe par « ↺ Nouvelle mesure depuis A » ;
   - enregistrement des mesures, des points triangulés et des distances dans des couches QGIS, dans un fichier GeoPackage ou en couche temporaire ;
   - calage des photos : correction de l'inclinaison de la caméra (automatique ou sur des objets verticaux), recalage du cap et de la position sur des repères de la carte.
 - Visionneuse Panoramax dans un panneau ancré, avec choix de l'instance.
@@ -61,12 +61,12 @@ Pendant les visées, un clic dans la photo vise l'objet (croix bleue) ; les flè
 
 À l'étape 2 de la hauteur et de la largeur, les flèches de navigation sont masquées (elles gênent les clics de mesure) : on change de photo par la carte.
 
-**Repères visuels** : liseré de la visionneuse, étiquette animée en haut à gauche et cercle du pointeur **bleus** pendant les visées, **jaunes** pendant la prise de mesure (cercle vert si l'inclinaison de la photo est calée), **orange** en calage ; consigne en haut au centre. Points, traits et étiquettes restent visibles sur toutes les photos : là où ils ont été cliqués, ou projetés au sol (à la hauteur de caméra du réglage « Caméra à ») sur les autres photos. Sur la carte : points triangulés gardés (disque rouge et nom), distances entre eux, droite de mesure (bande bleue), visées du calage du cap en pointillés noirs.
+**Repères visuels** : liseré de la visionneuse, étiquette animée en haut à gauche et cercle du pointeur **bleus** pendant les visées, **jaunes** pendant la prise de mesure (cercle vert si l'inclinaison de la photo est calée), **orange** en calage ; consigne en haut au centre. Le nom de chaque point triangulé (A, B…) s'affiche en bordeaux à côté de sa croix, du côté opposé à la mesure pour ne pas la masquer. Points, traits et étiquettes restent visibles sur toutes les photos : là où ils ont été cliqués, ou projetés au sol (à la hauteur de caméra du réglage « Caméra à ») sur les autres photos. Sur la carte : points triangulés gardés (disque rouge et nom), distances entre eux, droite de mesure (bande bleue), visées du calage du cap en pointillés noirs.
 
 **Recaler un point** : un clic (gauche ou droit) sur sa croix le sélectionne (cercle jaune), puis :
 
 - clic : nouvelle position (largeur : bord ou point de référence, là où la direction du clic coupe la droite de mesure, dont ils ne sortent jamais ; le point de référence se recale ainsi dès qu'il est validé ; hauteur : sur la photo de la mesure) ;
-- flèches du clavier, par pas de 1 cm : largeur, le long de la droite de mesure (← → dans le sens vu sur la photo, ↑ ↓ en s'éloignant ou en se rapprochant de la caméra) ; hauteur, ↑ ↓ montent ou descendent le point ;
+- flèches du clavier, par pas de 1 cm : largeur, le long de la droite de mesure (← → dans le sens vu sur la photo, ↑ ↓ en s'éloignant ou en se rapprochant de la caméra) ; hauteur (pied, sommet ou point de référence), ↑ ↓ montent ou descendent le point ;
 - **Entrée** pour terminer.
 
 Le pied d'une hauteur peut aussi être glissé sur la carte QGIS : la hauteur perd alors son calage sur le point triangulé. « Effacer » supprime la mesure en cours (ou la sélection), « Tout effacer » toutes les mesures et tous les points affichés.

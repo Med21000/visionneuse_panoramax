@@ -3,9 +3,9 @@ name=Visionneuse Panoramax
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 supportsQt6=True
-description=Visionneuse Panoramax dans QGIS avec mesures à l'écran : largeurs, longueurs, hauteurs et position d'objets par triangulation.
-about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement). Mesures directement dans la photo : largeurs, longueurs, hauteur d'un objet, triangulation d'un objet visé depuis plusieurs photos et placé sur la carte. Mesures et points triangulés enregistrés dans des couches (GeoPackage ou couche temporaire). Points recalables en les glissant sur la carte QGIS, calage des photos (inclinaison, cap et position, hauteur de caméra). Filtre des photos (date, 360° ou classiques, précision GPS, producteur). Synchronisation carte-visionneuse avec curseur de vue, choix de l'instance, captures Full HD et vignette. Nécessite QtWebEngine avec WebGL : s'ils manquent, le panneau explique comment les installer.
-version=1.3.0
+description=Visionneuse Panoramax dans QGIS avec mesures à l'écran appuyées sur des points triangulés : hauteurs, largeurs de chaussée, distances.
+about=Visionneuse Panoramax dans QGIS (QGIS 4 et plus uniquement). Mesures directement dans la photo, toutes appuyées sur des points triangulés (visés depuis plusieurs photos) : hauteur d'un objet, largeur perpendiculaire à la chaussée, distance entre points. Mesures et points triangulés enregistrés dans des couches (GeoPackage ou couche temporaire). Points ajustables dans la photo (clic, clavier au centimètre) ou sur la carte QGIS, calage des photos (inclinaison, cap et position). Filtre des photos (date, 360° ou classiques, précision GPS, producteur). Synchronisation carte-visionneuse avec curseur de vue, choix de l'instance, captures Full HD et vignette. Nécessite QtWebEngine avec WebGL : s'ils manquent, le panneau explique comment les installer.
+version=1.4.0
 author=Cédric COCHART
 email=cedric.cochart@gmail.com
 homepage=https://github.com/medlab-code/visionneuse_panoramax
@@ -16,7 +16,16 @@ category=Web
 icon=icon.png
 experimental=False
 deprecated=False
-changelog=1.3.0
+changelog=1.4.0
+    - Mesures refondues : toutes s'appuient sur des points triangulés (visés depuis au moins deux photos), la profondeur ne dépend plus du terrain ni de la hauteur de caméra
+    - Hauteur : le pied est le point de référence triangulé, seul le sommet se clique ; largeur : premier bord triangulé, bord opposé sur la droite perpendiculaire à la route ; mesure libre : distances entre points triangulés
+    - Mesure faite ajustable seulement sur sa droite de mesure ou sa verticale (clic, flèches au centimètre, Entrée) ; autre mesure par « ↺ Nouvelle mesure depuis A » ; point de référence recalable dès sa validation
+    - Visionneuse : liseré et état de la mesure (bleu en visée, jaune en mesure, orange en calage), consignes en haut, bouton « Valider le point triangulé », nom des points à côté de leur croix
+    - Bouton « Mesure » au milieu de la barre, orange quand il est actif
+    - Sans QtWebEngine ou WebGL, le panneau explique ce qui manque et comment l'installer (visionneuse de secours retirée)
+    - Retirés : longueur parallèle à la route, calage de la hauteur de caméra, façade du cadastre, mesure sur un pont, fenêtre du mode dégradé
+    - Avertissement quand les photos n'ont pas de position RTK vérifiée (mesures probablement incohérentes)
+    1.3.0
     - Inclinaison automatique des photos 360° d'après leurs verticales (façades, poteaux), en arrière-plan pendant la mesure ; à défaut, pente et dévers du LiDAR HD sous le véhicule ; ligne d'état qui l'indique, ou avertit quand elle n'est pas calée
     - Largeur perpendiculaire mesurée perpendiculairement à la route à l'endroit mesuré (tronçons de la BD TOPO), et non plus à la direction du véhicule
     - Hauteur d'un bâtiment au pied caché : façade du cadastre, contrôlée par le LiDAR HD ; façade d'un seul clic en mesure libre

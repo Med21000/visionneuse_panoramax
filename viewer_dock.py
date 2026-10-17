@@ -97,6 +97,9 @@ except Exception:
 # Résultat du test WebGL pour la session (None = pas encore testé)
 WEBGL_OK = None
 
+# Bouton « Mesure » actif : orange, comme le liseré de la visionneuse en calage
+MEASURE_ON_STYLE = "QToolButton#btn_measure:checked { background-color: #f39c12; color: #000000; }"
+
 NO_WEBENGINE_TEXT = (
     "<h3>Visionneuse Panoramax indisponible</h3>"
     "<p>Le composant <b>QtWebEngine</b> (module Python <b>PyQt6-WebEngine</b>) n'est pas "
@@ -177,19 +180,36 @@ class PanoramaxDock(QDockWidget):
         self._root, self._layout = root, layout
         layout.setContentsMargins(4, 4, 4, 4)
 
-        # Barre d'outils du panneau
+        # Barre d'outils du panneau : deux groupes de même largeur de part et d'autre du bouton
+        # « Mesure », qui reste ainsi au milieu
         bar = QHBoxLayout()
+        left_box, right_box = QWidget(), QWidget()
+        left, right = QHBoxLayout(left_box), QHBoxLayout(right_box)
+        left.setContentsMargins(0, 0, 0, 0)
+        right.setContentsMargins(0, 0, 0, 0)
         self.btn_pick = QPushButton("Choisir sur la carte")
         self.btn_pick.setToolTip("Cliquez ensuite sur la carte QGIS pour ouvrir la photo la plus proche")
         self.btn_pick.clicked.connect(self.pickToolRequested)
-        bar.addWidget(self.btn_pick)
+        left.addWidget(self.btn_pick)
         self.btn_filter = QToolButton()
         self.btn_filter.setCheckable(True)
         self.btn_filter.setToolTip("Filtrer les photos du filaire et du clic sur la carte : date, type de caméra, "
                                    "précision GPS, producteur")
         self.btn_filter.toggled.connect(lambda on: self.filter_row.setVisible(on))
-        bar.addWidget(self.btn_filter)
-        bar.addStretch(1)
+        left.addWidget(self.btn_filter)
+        left.addStretch(1)
+        bar.addWidget(left_box, 1)
+        # Mesure au milieu de la barre, orange quand elle est active
+        self.btn_measure = QToolButton()
+        self.btn_measure.setObjectName("btn_measure")
+        self.btn_measure.setText("📐 Mesure")
+        self.btn_measure.setCheckable(True)
+        self.btn_measure.setToolTip("Hauteur, largeur ou mesure libre, appuyées sur des points triangulés")
+        self.btn_measure.setStyleSheet(MEASURE_ON_STYLE)
+        self.btn_measure.toggled.connect(self._on_measure_toggled)
+        bar.addWidget(self.btn_measure)
+        bar.addWidget(right_box, 1)
+        right.addStretch(1)
         # Capture Full HD de la vue affichée (menu : dossier de destination)
         self.btn_capture = QToolButton()
         self.btn_capture.setText("📷 Capture HD")
@@ -202,28 +222,22 @@ class PanoramaxDock(QDockWidget):
         menu.addAction("Ouvrir le dossier des captures",
                        lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(capture_dir())))
         self.btn_capture.setMenu(menu)
-        bar.addWidget(self.btn_capture)
+        right.addWidget(self.btn_capture)
         # \ufe0f : 🖼 en emoji couleur, comme 📷 et 📐 (sinon police de secours plus haute)
         btn_thumb = QPushButton("🖼\ufe0f Capture vignette")
         btn_thumb.setToolTip("Enregistrer la visionneuse telle qu'affichée (avec les mesures) en image PNG, "
                              "copiée aussi dans le presse-papiers")
         btn_thumb.clicked.connect(self.capture_thumbnail)
-        bar.addWidget(btn_thumb)
-        self.btn_measure = QToolButton()
-        self.btn_measure.setText("📐 Mesure")
-        self.btn_measure.setCheckable(True)
-        self.btn_measure.setToolTip("Hauteur, largeur ou mesure libre, appuyées sur des points triangulés")
-        self.btn_measure.toggled.connect(self._on_measure_toggled)
-        bar.addWidget(self.btn_measure)
+        right.addWidget(btn_thumb)
         btn_browser = QPushButton("Navigateur")
         btn_browser.setToolTip("Ouvrir la vue actuelle dans le navigateur")
         btn_browser.clicked.connect(self.open_in_browser)
-        bar.addWidget(btn_browser)
+        right.addWidget(btn_browser)
         self.btn_compact = QToolButton()
         self.btn_compact.setAutoRaise(True)
         self.btn_compact.setCheckable(True)
         self.btn_compact.toggled.connect(self._set_compact)
-        bar.addWidget(self.btn_compact)
+        right.addWidget(self.btn_compact)
         layout.addLayout(bar)
         # Libellés complets et réduits (mode compact) des boutons de la barre
         self._labels = {self.btn_pick: ("Choisir sur la carte", "📍"), self.btn_filter: ("Filtre", "🔎"),

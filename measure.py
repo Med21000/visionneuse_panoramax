@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2026 Cédric COCHART
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Mesures dans QGIS : triangulation, largeur et hauteur.
+"""Dessin des mesures sur la carte QGIS et enregistrement des points triangulés.
 
-- Triangulation : viser un objet au centre de la visionneuse, changer de photo,
-  le viser à nouveau ; le point d'intersection s'affiche sur la carte et peut
-  être enregistré dans la couche « Panoramax – points triangulés ».
-- Largeur / hauteur : deux clics dans la photo, prolongés jusqu'au terrain
-  (voir core/ground.py et core/terrain.py) ; les points s'affichent sur la carte.
-- Calage : inclinaison de la photo et cap de la séquence (voir core/calibration.py),
-  appliqués ensuite à toutes les mesures.
+La logique des mesures est celle de la session du cœur (core/session.py) :
+- visées de triangulation (pointillés rouges) et visées du calage du cap (pointillés noirs) ;
+- mesures (hauteur, largeur) : points, trait et étiquette du résultat ;
+- points triangulés gardés (disque rouge et nom), distances entre eux, droite de mesure
+  d'une largeur (bande bleue) ;
+- points et distances enregistrés dans les couches « Panoramax – points triangulés » et
+  « Panoramax – mesures ».
 """
 
 import math
@@ -29,7 +29,6 @@ from qgis.PyQt.QtGui import QBrush, QColor, QFont, QFontMetricsF, QPainter, QPen
 
 from . import output
 from .core import tools
-from .core.measures import _num
 
 WGS84 = QgsCoordinateReferenceSystem("EPSG:4326")
 COLOR = QColor(229, 57, 53)  # rouge, distinct du bleu du curseur et de l'orange du filaire
@@ -39,20 +38,23 @@ CROSS = QColor(255, 235, 0)  # croix jaune vif des points cliqués, comme dans l
 TRACE = QColor(0, 188, 230)
 TRACE_LABEL = "perpendiculaire à la route"
 WALL = QColor(156, 39, 176)  # façade (définie dans la photo ou d'après le cadastre) : tirets violets
+CALIBRATION_COLOR = QColor(0, 0, 0)  # visées du calage du cap : noires, distinctes de la triangulation
 LAYER_NAME = "Panoramax – points triangulés"
 LAYER_FIELDS = (
-    "field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
+    "field=nom:string&field=nb_visees:integer&field=angle:double&field=incert_m:double&field=ecart_m:double"
     "&field=dist_max_m:double&field=gps_m:double&field=photos:string&field=date_mesure:string&field=commentaire:string")
 
 
 
 
 class SightingsItem(QgsMapCanvasItem):
-    """Visées (pointillés) et point triangulé dessinés sur la carte."""
+    """Visées (pointillés) et point triangulé dessinés sur la carte ; en noir pour les visées du
+    calage du cap, à ne pas prendre pour une triangulation."""
 
-    def __init__(self, canvas):
+    def __init__(self, canvas, color=COLOR):
         super().__init__(canvas)
         self._canvas = canvas
+        self.color = color
         self.rays = []  # [(lon0, lat0, lon1, lat1)]
         self.point = None  # (lon, lat)
         self._lines, self._origins, self._target = [], [], None
@@ -91,21 +93,21 @@ class SightingsItem(QgsMapCanvasItem):
     def paint(self, painter, option=None, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         halo = QPen(QColor(255, 255, 255, 200), 4)
-        dash = QPen(COLOR, 2, Qt.PenStyle.DashLine)
+        dash = QPen(self.color, 2, Qt.PenStyle.DashLine)
         for p0, p1 in self._lines:
             painter.setPen(halo)
             painter.drawLine(p0, p1)
             painter.setPen(dash)
             painter.drawLine(p0, p1)
         painter.setPen(QPen(QColor(255, 255, 255), 1.5))
-        painter.setBrush(QBrush(COLOR))
+        painter.setBrush(QBrush(self.color))
         for p in self._origins:
             painter.drawEllipse(p, 4, 4)
         if self._target is not None:
             c = self._target
             painter.setPen(QPen(QColor(255, 255, 255), 2.5))
             painter.drawEllipse(c, 7, 7)
-            painter.setPen(QPen(COLOR, 2))
+            painter.setPen(QPen(self.color, 2))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawEllipse(c, 7, 7)
             painter.drawLine(QPointF(c.x() - 11, c.y()), QPointF(c.x() + 11, c.y()))
@@ -118,7 +120,7 @@ class SightingsItem(QgsMapCanvasItem):
 
 
 class Triangulator(tools.Triangulator):
-    """Visées dessinées sur la carte QGIS, point enregistré dans la couche."""
+    """Visées dessinées sur la carte QGIS."""
 
     def __init__(self, canvas):
         super().__init__()
@@ -127,28 +129,32 @@ class Triangulator(tools.Triangulator):
     def new_item(self):
         return SightingsItem(self.canvas)
 
-    def save(self, parent=None):
-        """Enregistre le point courant. Retourne (succès, message) ; message None si
-        l'utilisateur a renoncé à créer la couche."""
-        if self.result is None:
-            return False, self.error or "Il faut au moins deux visées qui se croisent."
-        layer, error = output.ensure_layer("triangulation", LAYER_NAME, "points_triangules", "Point",
-                                           LAYER_FIELDS, _style_points, parent)
-        if layer is None:
-            return False, error
-        r = self.result
-        geom = QgsGeometry.fromPointXY(QgsPointXY(r["lon"], r["lat"]))
-        geom.transform(QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance()))
-        values = self.attributes()
+
+def save_points(points, saved, parent=None):
+    """Enregistre dans la couche « Panoramax – points triangulés » les points gardés de la session
+    (lon, lat, attributs) qui ne le sont pas encore ; saved : ensemble des noms déjà enregistrés,
+    complété. Retourne (nombre ajouté, message d'erreur ou None ; None aussi si l'utilisateur a
+    renoncé à créer la couche, alors (0, "")."""
+    todo = [p for p in points if p[2]["nom"] not in saved]
+    if not todo:
+        return 0, None
+    layer, error = output.ensure_layer("triangulation", LAYER_NAME, "points_triangules", "Point",
+                                       LAYER_FIELDS, _style_points, parent)
+    if layer is None:
+        return 0, error or ""
+    to_layer = QgsCoordinateTransform(WGS84, layer.crs(), QgsProject.instance())
+    for lon, lat, values in todo:
+        geom = QgsGeometry.fromPointXY(QgsPointXY(lon, lat))
+        geom.transform(to_layer)
         feat = QgsFeature(layer.fields())
         feat.setGeometry(geom)
         for name, value in values.items():
             if layer.fields().indexOf(name) >= 0:
                 feat.setAttribute(name, value)
         if output.write_feature(layer, feat) is None:
-            return False, "Impossible d'ajouter le point à la couche « {} ».".format(layer.name())
-        self.clear()
-        return True, "Point enregistré dans « {} » (incertitude ±{} m).".format(layer.name(), _num(r["uncertainty"]))
+            return 0, "Impossible d'ajouter le point {} à la couche « {} ».".format(values["nom"], layer.name())
+        saved.add(values["nom"])
+    return len(todo), None
 
 
 def _style_points(layer):
@@ -314,7 +320,7 @@ class MeasureItem(QgsMapCanvasItem):
 # Calage : inclinaison et cap
 # --------------------------------------------------------------------------
 class CalibrationTool(tools.CalibrationTool):
-    """Visées vers les repères dessinées sur la carte QGIS."""
+    """Visées vers les repères dessinées sur la carte QGIS, en noir."""
 
     MAP_NAME = "la carte QGIS"
 
@@ -323,4 +329,91 @@ class CalibrationTool(tools.CalibrationTool):
         self.canvas = canvas
 
     def new_item(self):
-        return SightingsItem(self.canvas)
+        return SightingsItem(self.canvas, CALIBRATION_COLOR)
+
+
+# --------------------------------------------------------------------------
+# Points triangulés gardés, distances, droite de mesure
+# --------------------------------------------------------------------------
+POINT_LABEL = QColor(142, 27, 27)  # fond de l'étiquette d'un point triangulé (bordeaux, comme son disque rouge)
+
+
+class PointsItem(QgsMapCanvasItem):
+    """Points triangulés gardés par la session (disque rouge, nom dessous), distances entre eux
+    (trait rouge et étiquette) et droite de mesure de la largeur (bande bleue)."""
+
+    def __init__(self, canvas):
+        super().__init__(canvas)
+        self._canvas = canvas
+        self.points, self.links, self.guide = [], [], None
+        self._points, self._links, self._guide = [], [], None
+        self._rect = QRectF()
+        self.setZValue(985)  # sous les mesures et les visées
+
+    def set_data(self, points, links, guide=None):
+        """points : [(lon, lat, nom)] ; links : [((lon, lat), (lon, lat), étiquette)] ; guide :
+        extrémités (lon, lat) de la droite de mesure, ou None."""
+        self.points, self.links, self.guide = list(points), list(links), guide
+        self.updatePosition()
+
+    def updatePosition(self):  # noqa: N802
+        ct = QgsCoordinateTransform(WGS84, self._canvas.mapSettings().destinationCrs(), QgsProject.instance())
+
+        def screen(lon, lat):
+            return self.toCanvasCoordinates(ct.transform(QgsPointXY(lon, lat)))
+
+        try:
+            self._points = [(screen(lon, lat), name) for lon, lat, name in self.points]
+            self._links = [(screen(*a), screen(*b), label) for a, b, label in self.links]
+            self._guide = [screen(*p) for p in self.guide] if self.guide else None
+        except Exception:  # hors du domaine du SCR de la carte
+            self._points, self._links, self._guide = [], [], None
+        pts = [p for p, _ in self._points] + [p for a, b, _ in self._links for p in (a, b)] + (self._guide or [])
+        self.prepareGeometryChange()
+        self.setPos(0, 0)
+        if pts:
+            xs, ys = [p.x() for p in pts], [p.y() for p in pts]
+            self._rect = QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)).adjusted(-90, -40, 90, 50)
+        else:
+            self._rect = QRectF()
+        self.update()
+
+    def boundingRect(self):  # noqa: N802
+        return self._rect
+
+    def _label(self, painter, centre, text, background, color):
+        size = QFontMetricsF(self._canvas.font()).size(0, text)
+        rect = QRectF(centre.x() - size.width() / 2 - 5, centre.y() - size.height() / 2 - 2,
+                      size.width() + 10, size.height() + 4)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(background)
+        painter.drawRoundedRect(rect, 3, 3)
+        painter.setPen(QPen(color))
+        painter.setFont(self._canvas.font())
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+
+    def paint(self, painter, option=None, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self._guide:
+            pen = QPen(QColor(TRACE.red(), TRACE.green(), TRACE.blue(), 205), 7)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(*self._guide)
+        for a, b, label in self._links:
+            painter.setPen(QPen(QColor(255, 255, 255, 220), 5))
+            painter.drawLine(a, b)
+            painter.setPen(QPen(COLOR, 2.5))
+            painter.drawLine(a, b)
+            self._label(painter, QPointF((a.x() + b.x()) / 2, (a.y() + b.y()) / 2 - 16), label,
+                        QColor(21, 76, 121, 235), QColor(255, 255, 255))
+        for p, name in self._points:
+            painter.setPen(QPen(COLOR, 1.5))
+            painter.setBrush(QColor(COLOR.red(), COLOR.green(), COLOR.blue(), 153))
+            painter.drawEllipse(p, 6.5, 6.5)
+            self._label(painter, QPointF(p.x(), p.y() + 26), name, QColor(POINT_LABEL.red(), POINT_LABEL.green(),
+                                                                            POINT_LABEL.blue(), 235), QColor(255, 255, 255))
+
+    def remove(self):
+        scene = self._canvas.scene()
+        if scene is not None:
+            scene.removeItem(self)

@@ -16,8 +16,8 @@ calibration = module("core.calibration")
 
 
 class FakeItem:
-    def __init__(self, canvas):
-        self.data = None
+    def __init__(self, canvas, color=None):
+        self.data, self.color = None, color
 
     def set_data(self, *data):
         self.data = data

@@ -217,8 +217,9 @@ def lidar_model(entries):
     return {"offset": (mf, mr), "sigma": max(sigma, LIDAR_MIN_SIGMA), "count": n}
 
 
-def untilt(up, yaw, elev):
-    """Direction corrigée : rotation qui ramène la verticale `up` au zénith."""
+def untilt(up, yaw, elev, inverse=False):
+    """Direction corrigée : rotation qui ramène la verticale `up` au zénith. inverse : la
+    rotation contraire, d'une direction vraie à la direction vue par la caméra penchée."""
     v = vector(yaw, elev)
     k = (up[1], -up[0], 0.0)  # up × zénith
     s = math.hypot(k[0], k[1])
@@ -226,6 +227,8 @@ def untilt(up, yaw, elev):
         return yaw % 360, elev
     k = (k[0] / s, k[1] / s, 0.0)
     c = up[2]
+    if inverse:
+        s = -s
     kxv, kv = _cross(k, v), _dot(k, v)
     r = tuple(v[i] * c + kxv[i] * s + k[i] * kv * (1 - c) for i in range(3))  # Rodrigues
     return angles(r)
@@ -657,6 +660,14 @@ class Calibration:
         if pose:
             yaw = (yaw + pose["offset"]) % 360
         return yaw, elev
+
+    def uncorrect(self, pic, sequence, yaw, elev, lon=None, lat=None):
+        """Inverse de correct : direction vue dans la photo (brute) d'une direction vraie."""
+        pose = self.pose(sequence, lon, lat)
+        if pose:
+            yaw = (yaw - pose["offset"]) % 360
+        t = self.tilt(pic)
+        return untilt(t["up"], yaw, elev, inverse=True) if t else (yaw % 360, elev)
 
     def position(self, sequence, lon, lat):
         """Position recalée de la photo : (lon, lat, précision en m), ou None si la

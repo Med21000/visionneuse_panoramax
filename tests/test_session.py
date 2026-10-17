@@ -95,6 +95,39 @@ class Height(Base):
         self.assertFalse(self.s.state()["point_sel"])
 
 
+    def test_vertical_follows_tilt(self):
+        # Photo p2 penchée de 4°, inclinaison calée : la verticale verte passe par la croix du
+        # pied et suit un vrai objet vertical vu par la caméra penchée, pas le bord de l'image
+        calibration = module("core.calibration")
+        up = calibration.vector(60.0, 86.0)  # verticale vraie dans le repère de la caméra penchée
+
+        def seen(target):
+            yaw, elev = direction(6.0, target)
+            return calibration.untilt(up, math.degrees(yaw), math.degrees(elev), inverse=True)
+
+        def tilted(target):
+            yaw, elev = seen(target)
+            return math.radians((yaw + 180) % 360 - 180), math.radians(elev)
+
+        for k, east in enumerate((5.0, -5.0)):  # deux objets verticaux pour le calage
+            self.s.calibration.add_vertical("p2", seen((east, 3.0 + 4 * k, 0.0)), seen((east, 3.0 + 4 * k, 3.0)))
+        foot = (5.0, 3.0, 0.0)
+        self.s.set_mode("height")
+        self.aim(self.p1, 0.0, foot)
+        self.s.set_picture(self.p2)
+        self.s.click(*tilted(foot))
+        self.s.keep_point()
+        line = next(m for m in self.s.viewer_marks() if m.get("vertical"))["points"]
+        self.assertAlmostEqual(line[0][0], tilted(foot)[0], places=6)  # depuis la croix du pied
+        self.assertAlmostEqual(line[0][1], tilted(foot)[1], places=6)
+        for z in (1.0, 2.5, 4.0):  # points du vrai objet vertical : sur la ligne tracée
+            yaw, pitch = tilted((5.0, 3.0, z))
+            k = min(range(len(line) - 1), key=lambda i: abs(line[i][1] - pitch))
+            (y0, p0, _), (y1, p1, _) = line[k], line[k + 1]
+            t = (pitch - p0) / (p1 - p0)
+            self.assertAlmostEqual(y0 + t * (y1 - y0), yaw, delta=math.radians(0.05))
+        self.assertGreater(abs(line[-1][0] - line[0][0]), math.radians(0.5))  # penchée dans l'image
+
     def test_reference_recaled_on_its_vertical(self):
         # Pied A recalé depuis la visionneuse avant la hauteur : il ne quitte pas sa verticale
         foot = (5.0, 3.0, 0.0)

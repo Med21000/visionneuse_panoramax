@@ -51,6 +51,12 @@ class Vectors(unittest.TestCase):
         self.assertAlmostEqual(y, 123.0)
         self.assertAlmostEqual(e, -4.0)
 
+    def test_untilt_inverse(self):
+        up = tilted_up(4.0, 200.0)
+        for yaw, elev in ((10, 0), (130, -20), (250, 35)):
+            self.assertEqual(tuple(round(v, 9) for v in calibration.untilt(up, yaw, elev, inverse=True)),
+                             tuple(round(v, 9) for v in seen(up, yaw, elev)))
+
     def test_untilt_inverts_tilt(self):
         up = tilted_up(3.0, 40.0)
         for yaw, elev in ((0, 0), (130, -20), (250, 15)):
@@ -194,6 +200,19 @@ class Landmarks(unittest.TestCase):
         self.assertFalse(pose["positioned"])
         self.assertIsNone(self.cal.position("seq", *point(0, 0)))
         self.assertEqual(self.notified, 1)
+
+    def test_uncorrect_inverts_correct(self):
+        # Inclinaison calée et cap recalé : uncorrect ramène la direction vraie dans la photo
+        self.add((0, 80), heading_bias=2.0)
+        up = tilted_up(3.0, 70.0)
+        self.cal.add_vertical("p1", *vertical_object(up, 20.0, 8.0))
+        self.cal.add_vertical("p1", *vertical_object(up, 110.0, 8.0))
+        lon, lat = point(0, 0)
+        for yaw, elev in ((15.0, -10.0), (200.0, 25.0)):
+            raw = self.cal.uncorrect("p1", "seq", yaw, elev, lon, lat)
+            y, e = self.cal.correct("p1", "seq", *raw, lon, lat)
+            self.assertAlmostEqual((y - yaw + 180) % 360 - 180, 0.0, places=6)
+            self.assertAlmostEqual(e, elev, places=6)
 
     def test_heading_and_position(self):
         marks = [(40, 30), (-35, 40), (-30, -45), (45, -35), (0, 60)]

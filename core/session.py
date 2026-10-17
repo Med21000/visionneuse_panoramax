@@ -40,6 +40,9 @@ NUDGE_WORDS = {"left": "vers la gauche", "right": "vers la droite", "up": "en s'
 # Triangulation et mesures qui s'y appuient : acceptées hors RTK, mais signalées
 RTK_WARNING = (" ⚠ Photo sans position GPS RTK vérifiée : mesure probablement incohérente "
                "(la triangulation demande des positions précises).")
+# Fenêtre d'avertissement, une fois par séquence sans RTK vérifié (voir Session.take_rtk_alert)
+RTK_ALERT = ("La localisation des images de cette séquence est trop imprécise pour fonctionner. "
+             "Un GPS avec corrections RTK est requis.")
 
 
 class Session:
@@ -94,6 +97,7 @@ class Session:
         self._handles = []  # clés des poignées de la carte, dans l'ordre de handles()
         self.calibration_version = 0  # augmente à chaque changement du calage (à enregistrer)
         self.active = False  # bouton « Mesure » : clics dans la photo pour mesurer
+        self.rtk_alerted = set()  # séquences sans RTK déjà signalées par une fenêtre (take_rtk_alert)
         self.epoch = 0  # change quand les clics en cours sont abandonnés
 
     def current_ids(self):
@@ -1241,6 +1245,20 @@ class Session:
             del self.links[ident]
             self.message = "Distance effacée."
         return self.status()
+
+    def take_rtk_alert(self):
+        """RTK_ALERT à afficher en fenêtre d'avertissement, une seule fois par séquence : mesure
+        activée sur une photo dont la vérification a conclu à l'absence de position RTK ; None
+        sinon (vérification en cours ou sans conclusion, RTK vérifié, séquence déjà signalée,
+        mesure désactivée)."""
+        res, item = self.quality, self.item or {}
+        if not self.active or res is None or res.get("precise") or res.get("transient"):
+            return None  # transient : service en panne pendant la vérification, pas de conclusion
+        sequence = item.get("collection") or item.get("id")
+        if sequence in self.rtk_alerted:
+            return None
+        self.rtk_alerted.add(sequence)
+        return RTK_ALERT
 
     def take_proposal(self):
         """Distance proposée après un effacement ([n°, n°, « A », « C »] ou None), une

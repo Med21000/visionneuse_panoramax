@@ -60,7 +60,14 @@ class Height(Base):
         text = self.s.click(*direction(6.0, top))
         self.assertTrue(text.startswith("Hauteur : 4,00 m"), text)
         self.assertIn("calée sur le point triangulé A", text)
-        # Le même point sert à une autre hauteur, depuis l'autre photo
+        # Hauteur faite : un autre clic ne mesure pas, seules ses croix s'ajustent
+        self.assertEqual(self.s.state()["new_measure"], "A")
+        text = self.s.click(*direction(6.0, (5.0, 3.0, 2.0)))
+        self.assertTrue(text.startswith("Hauteur mesurée depuis le point A"), text)
+        self.assertEqual(len(self.s._heights()), 1)
+        # « Nouvelle mesure depuis A » : le même point sert à une autre hauteur, depuis l'autre photo
+        self.s.new_measure()
+        self.assertIsNone(self.s.state()["new_measure"])
         self.s.set_picture(self.p1)
         text = self.s.click(*direction(0.0, (5.0, 3.0, 2.5)))
         self.assertTrue(text.startswith("Hauteur : 2,50 m"), text)
@@ -82,6 +89,30 @@ class Height(Base):
         text = self.s.finish_point()
         self.assertTrue(text.startswith("Hauteur : 4,02 m"), text)
         self.assertFalse(self.s.state()["point_sel"])
+
+
+    def test_reference_recaled_on_its_vertical(self):
+        # Pied A recalé depuis la visionneuse avant la hauteur : il ne quitte pas sa verticale
+        foot = (5.0, 3.0, 0.0)
+        self.s.set_mode("height")
+        self.aim(self.p1, 0.0, foot)
+        self.aim(self.p2, 6.0, foot)
+        self.s.keep_point()
+        self.s.click(*direction(6.0, foot))  # clic sur la croix de A : sélectionné
+        self.assertTrue(self.s.state()["point_sel"])
+        self.assertTrue(any(p[2] for m in self.s.viewer_marks() for p in m["points"]))
+        # Clic un peu à côté, 10 cm plus haut : seule l'élévation compte, le cap reste celui de A
+        yaw, pitch = direction(6.0, (5.0, 3.0, 0.10))
+        text = self.s.click(yaw + 0.01, pitch)
+        self.assertIn("recalé de 10 cm sur sa verticale", text)
+        self.s.click(*direction(6.0, (5.0, 3.0, 0.10)))
+        self.assertTrue(self.s.state()["point_sel"])
+        self.s.nudge_point("left")  # sans effet
+        self.s.nudge_point("down")
+        self.s.finish_point()
+        self.assertFalse(self.s.state()["point_sel"])
+        text = self.s.click(*direction(6.0, (5.0, 3.0, 4.0)))
+        self.assertTrue(text.startswith("Hauteur : 3,91 m"), text)
 
 
 class Width(Base):

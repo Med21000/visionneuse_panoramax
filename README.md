@@ -51,7 +51,7 @@ Pendant les visées, un clic dans la photo vise l'objet (croix bleue) ; les flè
   1. Viser le **pied** de l'objet depuis au moins deux photos, puis « Valider le point triangulé » : c'est le point de référence, et le pied de la hauteur.
   2. Cliquer seulement le **sommet**, depuis une photo qui a servi à la visée : le pied est la visée faite depuis elle. Depuis une autre photo, cliquer le pied puis le sommet.
 
-  Le même point de référence sert à plusieurs hauteurs, depuis n'importe quelle photo, jusqu'à « Nouveau point de référence ». Une verticale verte le repère dans la photo.
+  Une fois la hauteur faite, les clics ne servent plus qu'à l'ajuster (clic sur une de ses croix, puis nouveau clic sur la photo de la mesure ou flèches ↑ ↓ : 1 cm sur la verticale). Le point de référence se recale de même dès qu'il est validé, sur sa verticale (seule l'élévation du clic compte). Pour une autre hauteur depuis le même point, depuis n'importe quelle photo, cliquer « ↺ Nouvelle mesure depuis A » dans la visionneuse ; pour un autre point, « Nouveau point de référence ». Une verticale verte le repère dans la photo.
 - **Largeur perpendiculaire à la chaussée**
   1. Viser le **premier bord** (pied de bordure, marquage…) depuis au moins deux photos, puis « Valider le point triangulé ». Le plugin trace la **droite de mesure**, perpendiculaire à l'axe de la route en ce point (tronçon de la BD TOPO de l'IGN, sinon trajectoire de la séquence), en bleu dans la photo et sur la carte.
   2. Cliquer le **bord opposé** depuis une photo prise quelques mètres avant ou après le point, pas juste en face : seule la direction du clic compte, le bord est là où elle coupe la droite.

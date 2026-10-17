@@ -83,9 +83,12 @@ class Session:
         # largeur : (mesure, 0 pour le point de référence ou 1 pour le bord) à recaler ; (None, 0) :
         # point de référence sur lequel aucune largeur ne s'appuie encore
         self.width_sel = None
-        # Largeur faite depuis le point de référence : seuls ses points s'ajustent (sur la droite de
-        # mesure) jusqu'à « Nouvelle mesure depuis A » (new_measure)
-        self.width_done = False
+        # Hauteur : point de référence sélectionné (aucune hauteur ne s'y appuie encore), à recaler
+        # sur sa verticale
+        self.ref_sel = False
+        # Largeur ou hauteur faite depuis le point de référence : seuls ses points s'ajustent (sur la
+        # droite de mesure ou la verticale) jusqu'à « Nouvelle mesure depuis A » (new_measure)
+        self.measure_done = False
         self.last_free = None  # mesure libre : n° du dernier point gardé, relié au suivant
         self.point_views = {}  # nom d'un point gardé -> {photo : [cap, élévation] de sa visée (radians)}
         self._handles = []  # clés des poignées de la carte, dans l'ordre de handles()
@@ -145,7 +148,8 @@ class Session:
         self.mode = mode
         self.ref_point = None
         self.width_sel = None
-        self.width_done = False
+        self.measure_done = False
+        self.ref_sel = False
         self.message = ""
         self._active()
         self._check_tilt()  # en quittant la triangulation
@@ -248,6 +252,12 @@ class Session:
         tool = self._active()
         if self.mode == "road":
             return self._width_click(click)
+        if self.mode == "height" and self.ref_sel:  # point de référence recalé sur sa verticale
+            self.ref_sel = False
+            dz = self._recale_ref_foot(pitch)
+            self.message = ("Pied au point de référence {} recalé de {} cm sur sa verticale, sur cette photo.").format(
+                self.ref_point["name"], measures._num(abs(dz) * 100, 0))
+            return self.status()
         if self.mode == "height" and tool.selected is not None and \
                 click.get("pic") != tool.selected[0].clicks[0].get("pic"):
             self.message = ("Ce point se recale par un clic sur la photo de sa mesure (le pied et le sommet "
@@ -258,6 +268,12 @@ class Session:
             near = self._height_near(click)
             if near is not None:  # clic sur la croix d'un pied ou d'un sommet : sélectionné
                 tool.selected = near
+                return self.status()
+            if self._ref_near(click):  # croix du point de référence seule : sélectionnée
+                self.ref_sel = True
+                return self.status()
+            if self._locked():  # pas d'autre hauteur sans « Nouvelle mesure depuis A »
+                self.message = self._locked_text()
                 return self.status()
         if self.mode == "height":
             return self._height_click(click)
@@ -297,7 +313,8 @@ class Session:
             found = self.width_sel is not None
         else:
             self.tool.selected = self._height_near(click)
-            found = self.tool.selected is not None
+            self.ref_sel = self.tool.selected is None and self._ref_near(click)
+            found = self.tool.selected is not None or self.ref_sel
         if not found:
             self.message = "Aucune croix de mesure sous le clic droit."
         return self.status()
@@ -313,7 +330,7 @@ class Session:
         if near is not None:  # clic sur la croix d'un point : sélectionné
             self.width_sel = near
             return self.status()
-        if self._width_locked():  # pas d'autre largeur sans « Nouvelle mesure depuis A »
+        if self._locked():  # pas d'autre largeur sans « Nouvelle mesure depuis A »
             self.message = self._locked_text()
             return self.status()
         ref = self.ref_point
@@ -328,7 +345,7 @@ class Session:
             self.message = m.error
             return self.status()
         self.tool.done.append(m)
-        self.width_done = True
+        self.measure_done = True
         self.message = (m.status() + self._rtk_warning(ref["sequences"] + [click.get("sequence")])
                         + " Pour l'ajuster, cliquez une de ses croix. Autre largeur depuis ce point : « Nouvelle mesure "
                           "depuis {} ».".format(ref["name"]))
@@ -336,6 +353,11 @@ class Session:
 
     def _locked_text(self):
         name = self.ref_point["name"]
+        if self.mode == "height":
+            return ("Hauteur mesurée depuis le point {0} : cliquez une de ses croix pour l'ajuster (nouveau clic sur "
+                    "la photo de la mesure, ou flèches ↑ ↓ : 1 cm sur la verticale ; Entrée pour terminer). Autre "
+                    "hauteur depuis ce point : « Nouvelle mesure depuis {0} » ; autre point : « Nouveau point de "
+                    "référence ».").format(name)
         return ("Largeur mesurée depuis le point {0} : cliquez une de ses croix pour l'ajuster (nouveau clic ou "
                 "flèches du clavier, 1 cm le long de la droite de mesure ; Entrée pour terminer). Autre largeur "
                 "depuis ce point : « Nouvelle mesure depuis {0} » ; autre point : « Nouveau point de "
@@ -397,12 +419,13 @@ class Session:
             return None
         if self.mode == "height" and any((m.reference or {}).get("name") == ref["name"] for m in self._heights()):
             return None  # le pied des hauteurs qui s'y appuient le montre
-        seen = next((s for s in ref.get("sightings", []) if s["pic"] == pic and s.get("view")), None)
-        if seen is not None and self.mode != "road":
-            point = {"yaw": seen["view"][0], "pitch": seen["view"][1]}
+        view = self._ref_view(pic) if self.mode != "road" else None
+        if view is not None:
+            point = {"yaw": view[0], "pitch": view[1]}
         else:
             point = self._project(ref["lon"], ref["lat"])
-        sel = self.mode == "road" and self.width_sel == (None, 0)  # largeur : croix sélectionnée
+        # croix sélectionnée (voir width_sel, ref_sel)
+        sel = self.width_sel == (None, 0) if self.mode == "road" else self.ref_sel
         return {"points": [dict(point, pic=pic, sel=sel)], "label": "", "beside": False}
 
     def _heights(self):
@@ -430,6 +453,16 @@ class Session:
             out.append({"yaw": math.radians((bearing - heading + 540) % 360 - 180), "pitch": math.radians(elev),
                         "abs_yaw": bearing % 360, "elev": elev})
         return out
+
+    def _ref_near(self, click):
+        """Hauteur : clic sur la croix du point de référence, quand aucune hauteur ne s'y appuie
+        (sinon c'est le pied de celles-ci) ?"""
+        mark = self._reference_mark() if self.mode == "height" and self.ref_point and self.item else None
+        if not mark:
+            return False
+        p = mark["points"][0]  # comparé au clic brut (voir _nearest)
+        point = {"abs_yaw": (math.degrees(p["yaw"]) + self._heading()) % 360, "elev": math.degrees(p["pitch"])}
+        return self._nearest(click, [(None, [point])]) is not None
 
     def _height_near(self, click):
         """(hauteur, n° de point) dont le repère est le plus près du clic sur la photo
@@ -515,6 +548,15 @@ class Session:
         largeur, voir _nudge_width."""
         if key not in NUDGE_WORDS or not self.item:
             return self.status()
+        if self.mode == "height" and self.ref_sel:
+            if key in ("up", "down"):
+                self._nudge_ref_foot(NUDGE if key == "up" else -NUDGE)
+                self.message = "Pied au point de référence {} {} de 1 cm sur cette photo.".format(
+                    self.ref_point["name"], "monté" if key == "up" else "descendu")
+            else:
+                self.message = "← → sans effet : le point de référence reste sur sa verticale."
+            self.message += " Flèches ↑ ↓ : encore 1 cm ; clic : recaler ; Entrée : terminer."
+            return self.status()
         if self.mode == "height" and self.tool.selected is not None:
             m, index = self.tool.selected
             if key in ("up", "down"):
@@ -529,6 +571,10 @@ class Session:
     def finish_point(self):
         """Touche Entrée : fin du calage du point sélectionné (hauteur ou largeur), qui
         redevient un point ordinaire ; le résultat de sa mesure s'affiche."""
+        if self.ref_sel:
+            self.ref_sel = False
+            self.message = ""
+            return self.status()
         if self.mode == "height" and self.tool.selected is not None:
             m = self.tool.selected[0]
             self.tool.cancel_selection()
@@ -615,34 +661,76 @@ class Session:
         self.triangulator.clear()
         self.ref_point = None
         self.width_sel = None
-        self.width_done = False
+        self.measure_done = False
+        self.ref_sel = False
         self.message = ""
         return self.status()
 
     def new_measure(self):
-        """Largeur : « Nouvelle mesure depuis A » ; la largeur faite reste, le clic suivant sur le
-        bord opposé en donne une autre depuis le même point de référence."""
+        """« Nouvelle mesure depuis A » : la largeur ou la hauteur faite reste, le clic suivant (bord
+        opposé, sommet) en donne une autre depuis le même point de référence."""
         self.width_sel = None
-        self.width_done = False
+        self.tool.cancel_selection()
+        self.measure_done = False
+        self.ref_sel = False
         self.message = ""
         return self.status()
 
-    def _width_locked(self):
-        """Largeur faite depuis le point de référence (et toujours là) : les clics ne servent plus
-        qu'à ajuster ses points, jusqu'à new_measure."""
+    def _locked(self):
+        """Largeur ou hauteur faite depuis le point de référence (et toujours là) : les clics ne
+        servent plus qu'à ajuster ses points, jusqu'à new_measure."""
         ref = self.ref_point
-        return (self.mode == "road" and self.width_done and ref is not None
-                and any(w.edge is ref for w in self._widths()))
+        if not self.measure_done or ref is None:
+            return False
+        if self.mode == "road":
+            return any(w.edge is ref for w in self._widths())
+        return self.mode == "height" and any((m.reference or {}).get("name") == ref["name"] for m in self._heights())
+
+    def _ref_view(self, pic):
+        """Hauteur : [cap, élévation] (radians, repère de la photo pic) du pied au point de
+        référence : recalé sur cette photo (ref["feet"]), sinon sa visée depuis elle, ou None."""
+        ref = self.ref_point or {}
+        if pic in ref.get("feet", {}):
+            return ref["feet"][pic]
+        seen = next((s for s in ref.get("sightings", []) if s["pic"] == pic and s.get("view")), None)
+        return list(seen["view"]) if seen else None
+
+    def _ref_distance(self):
+        """Distance horizontale (m) de la photo affichée au point de référence."""
+        lon, lat = (float(v) for v in self.item["geometry"]["coordinates"][:2])
+        return max(math.hypot(*triangulation._local(self.ref_point["lon"], self.ref_point["lat"], lon, lat)), 0.5)
+
+    def _recale_ref_foot(self, pitch):
+        """Hauteur : pied au point de référence recalé sur la photo affichée, à l'élévation pitch
+        (radians), sur sa verticale (le cap ne change pas) ; les hauteurs suivantes depuis cette
+        photo partent de là."""
+        ref, pic = self.ref_point, self.item.get("id")
+        mark = self._reference_mark()
+        yaw = mark["points"][0]["yaw"] if mark else self._project(ref["lon"], ref["lat"])["yaw"]
+        old = self._ref_view(pic)
+        ref.setdefault("feet", {})[pic] = [yaw, pitch]
+        dz = (math.tan(pitch) - math.tan(old[1] if old else self._project(ref["lon"], ref["lat"])["pitch"])) \
+            * self._ref_distance()
+        return dz
+
+    def _nudge_ref_foot(self, dz):
+        """Hauteur : pied au point de référence monté (dz > 0) ou descendu de dz m sur la photo
+        affichée."""
+        ref, pic = self.ref_point, self.item.get("id")
+        view = self._ref_view(pic)
+        if view is None:
+            p = self._project(ref["lon"], ref["lat"])
+            view = [p["yaw"], p["pitch"]]
+        d = self._ref_distance()
+        ref.setdefault("feet", {})[pic] = [view[0], math.atan((d * math.tan(view[1]) + dz) / d)]
 
     def _reference_foot(self):
         """Hauteur : clic du pied pris dans la visée du point de référence faite depuis la photo
-        affichée (le pied est le point triangulé), ou None si elle n'a pas servi à le viser."""
-        ref = self.ref_point
-        seen = next((s for s in (ref or {}).get("sightings", [])
-                     if s["pic"] == (self.item or {}).get("id") and s.get("view")), None)
-        if seen is None:
+        affichée (le pied est le point triangulé), ou recalé sur elle ; None sinon."""
+        view = self._ref_view((self.item or {}).get("id")) if self.ref_point else None
+        if view is None:
             return None
-        yaw, pitch = seen["view"]
+        yaw, pitch = view
         return tools.photo_click(self.item, (math.degrees(yaw) + self._heading()) % 360, math.degrees(pitch),
                                  self.calibration, self.quality, [yaw, pitch], self._axis(self.item))
 
@@ -657,9 +745,9 @@ class Session:
             self.message = m.error
             return
         self.message = (m.status() + self._rtk_warning(ref["sequences"] + [c.get("sequence") for c in m.clicks])
-                        + " Autre hauteur sur ce point : cliquez un autre sommet, depuis cette photo ou une autre "
-                          "de la triangulation ; sinon « Nouveau point de référence ». Clic sur une croix : "
-                          "la recaler.")
+                        + " Pour l'ajuster, cliquez une de ses croix. Autre hauteur depuis ce point : « Nouvelle "
+                          "mesure depuis {} ».".format(ref["name"]))
+        self.measure_done = True
         self.tool.finish()  # mesure terminée : affichée avec les autres pendant les visées suivantes
 
     def _after_calibration(self, tool):
@@ -778,8 +866,8 @@ class Session:
         tool = self._active()
         if tool is self.tool and tool.cancel_selection():
             return self.status()
-        if self.width_sel is not None:
-            self.width_sel = None
+        if self.width_sel is not None or self.ref_sel:
+            self.width_sel, self.ref_sel = None, False
             return self.status()
         self.epoch += 1
         tool.clear()
@@ -796,7 +884,8 @@ class Session:
         self.last_free, self.point_views = None, {}
         self.ref_point = None
         self.width_sel = None
-        self.width_done = False
+        self.measure_done = False
+        self.ref_sel = False
         self.message = ""
         return self.status()
 
@@ -826,6 +915,10 @@ class Session:
                     "(seule la direction compte, il reste sur la droite de mesure) ; flèches du clavier : 1 cm le "
                     "long de la droite (← → dans la photo, ↑ ↓ en s'éloignant ou en se rapprochant) ; Entrée "
                     "pour terminer.")
+        if self.mode == "height" and self.ref_sel:
+            return ("Point de référence {} sélectionné : cliquez la position exacte du pied sur cette photo (il "
+                    "reste sur sa verticale), ou flèches du clavier ↑ ↓ : 1 cm ; Entrée pour terminer.").format(
+                self.ref_point["name"])
         if self.mode == "height" and self.tool.selected is not None:
             return ("{} de la hauteur sélectionné : cliquez sa position exacte sur la photo de la mesure, ou "
                     "flèches du clavier ↑ ↓ : 1 cm ; Entrée pour terminer.").format(
@@ -843,6 +936,9 @@ class Session:
                     "photo, flèches pour changer de photo). " + text)
             if self.triangulator.result is not None:
                 text += " Puis « Valider le point triangulé »."
+        elif self._locked():
+            text = self._locked_text()
+            sequences = self.ref_point["sequences"]
         elif self.mode == "height":
             current = self.tool.current
             if (current is None or len(current.clicks) >= current.needed()) and self._reference_foot() is not None:
@@ -859,7 +955,7 @@ class Session:
                     "photos (une visée par photo, flèches pour changer de photo). " + text)
             if self.triangulator.result is not None:
                 text += " Puis « Valider le point triangulé »."
-        elif self._width_locked():
+        elif self._locked():
             text = self._locked_text()
             sequences = self.ref_point["sequences"]
         elif self.mode == "road":
@@ -936,9 +1032,10 @@ class Session:
             "waiting_map": self.waiting_map(),
             "point": self.triangulator.result is not None,
             "aiming": self._aiming(),
-            "point_sel": self.width_sel is not None or (self.mode == "height" and self.tool.selected is not None),
+            "point_sel": self.width_sel is not None or self.ref_sel or (
+                self.mode == "height" and self.tool.selected is not None),
             # bouton « Nouvelle mesure depuis A » : nom du point de référence, ou None
-            "new_measure": self.ref_point["name"] if self._width_locked() else None,
+            "new_measure": self.ref_point["name"] if self._locked() else None,
             "active": self.active,
             "lights": self._lights(pic) if item else [],
         })

@@ -543,8 +543,8 @@ class PanoramaxPlugin:
                 else "prise" if mode in GROUND_MODES else "") if measuring else ""
         hint = self.HINTS.get(mode) or self.HINTS.get((mode, state["aiming"]), "")
         if state["new_measure"]:
-            hint = ("Largeur faite : cliquez une de ses croix pour l'ajuster ; autre largeur : « Nouvelle mesure "
-                    "depuis {} »").format(state["new_measure"])
+            hint = ("{} faite : cliquez une de ses croix pour l'ajuster ; autre {} : « Nouvelle mesure depuis {} »").format(
+                *(("Hauteur", "hauteur") if mode == "height" else ("Largeur", "largeur")), state["new_measure"])
         if state["waiting_map"]:
             hint = "Cliquez maintenant ce repère sur la carte QGIS (Échap pour annuler)."
         dock.set_overlay({

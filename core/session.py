@@ -80,7 +80,9 @@ class Session:
         # mesures suivantes s'y appuient, depuis n'importe quelle photo, jusqu'au prochain
         # (new_reference) ; None : à trianguler d'abord
         self.ref_point = None
-        self.width_sel = None  # largeur : (mesure, 0 pour le point de référence ou 1 pour le bord) à recaler
+        # largeur : (mesure, 0 pour le point de référence ou 1 pour le bord) à recaler ; (None, 0) :
+        # point de référence sur lequel aucune largeur ne s'appuie encore
+        self.width_sel = None
         # Largeur faite depuis le point de référence : seuls ses points s'ajustent (sur la droite de
         # mesure) jusqu'à « Nouvelle mesure depuis A » (new_measure)
         self.width_done = False
@@ -400,7 +402,8 @@ class Session:
             point = {"yaw": seen["view"][0], "pitch": seen["view"][1]}
         else:
             point = self._project(ref["lon"], ref["lat"])
-        return {"points": [dict(point, pic=pic)], "label": "", "beside": False}
+        sel = self.mode == "road" and self.width_sel == (None, 0)  # largeur : croix sélectionnée
+        return {"points": [dict(point, pic=pic, sel=sel)], "label": "", "beside": False}
 
     def _heights(self):
         return [m for m in self.tool.done if m.kind == "height" and m.result]
@@ -450,45 +453,61 @@ class Session:
     def _width_near(self, click):
         """(largeur, n° de point) dont le repère est le plus près du clic (à moins de
         measures.SELECT_ANGLE degrés), ou None."""
-        return self._nearest(click, [(m, self._width_points(m)) for m in self._widths()])
+        candidates = [(m, self._width_points(m)) for m in self._widths()]
+        ref = self.ref_point
+        if self.mode == "road" and ref is not None and not any(m.edge is ref for m in self._widths()):
+            candidates.append((None, [self._project(ref["lon"], ref["lat"])]))  # sa croix seule
+        return self._nearest(click, candidates)
+
+    def _sel_edge(self, sel=None):
+        """Point de référence de la sélection d'une largeur (sel, par défaut width_sel), et axe de
+        la route en ce point (None en cours de lecture)."""
+        m = (sel or self.width_sel)[0]
+        edge = m.edge if m is not None else self.ref_point
+        road = m.road if m is not None else edge.get("road")
+        return edge, (road or {}).get("axis")
 
     def _recale_width(self, click):
-        """Point sélectionné d'une largeur, recalé par ce clic : le bord, sur la droite de
-        mesure dans la nouvelle direction ; le point de référence, retriangulé avec cette
-        visée en plus (celle déjà faite depuis cette photo remplacée), et toutes les largeurs
-        qui s'y appuient recalculées."""
+        """Point sélectionné d'une largeur, recalé par ce clic, sans quitter la droite de mesure :
+        le bord, là où la direction du clic la coupe ; le point de référence de même, et toutes
+        les largeurs qui s'y appuient recalculées (la droite ne bouge pas : il glisse dessus)."""
         m, index = self.width_sel
         self.width_sel = None
         if index == 1:
             m.reaim(1, click)
             self.message = (m.error + " " if m.error else "") + m.status() + " Bord recalé."
             return self.status()
-        edge = m.edge
-        sighting = tools.photo_sighting(self.item, click["raw"][0], click["raw"][1], self.calibration, self.quality)
-        if sighting is None:
-            self.message = "Position de la photo inconnue : point de référence non recalé."
+        edge, axis = self._sel_edge((m, index))
+        if axis is None:
+            self.message = "Axe de la route en cours de lecture (BD TOPO) : cliquez à nouveau dans un instant."
             return self.status()
-        sighting["view"] = click.get("pos")
-        tri = tools.Triangulator()
-        tri.sightings = [s for s in edge.get("sightings", []) if s["pic"] != sighting["pic"]] + [sighting]
-        tri._compute()
-        values = tri.attributes()
-        if values is None:
-            self.message = "Point de référence non recalé : {}".format(tri.error or "il faut deux visées.")
+        cam = triangulation._local(click["lon"], click["lat"], edge["lon"], edge["lat"])
+        try:
+            _, t, _, _ = widths.cross((0.0, 0.0), axis, cam, click["yaw"])
+        except geometry.GeometryError as e:
+            self.message = "Point de référence {} non recalé : {}".format(edge["name"], e)
             return self.status()
-        r = tri.result
-        edge.update(lon=r["lon"], lat=r["lat"], uncertainty=r["uncertainty"], sightings=tri.sightings,
-                    sequences=[s.get("sequence") for s in tri.sightings])
-        for k, (_, _, v) in enumerate(self.points):  # le point gardé du même nom suit
-            if v["nom"] == edge["name"]:
-                self.points[k] = (r["lon"], r["lat"], dict(v, **values))
-        for w in self.tool.measures():
-            if isinstance(w, widths.PerpendicularWidth) and w.edge is edge:
-                w.clicks[0] = w._edge_mark(w.clicks[1])
-                w.compute()
-        self.message = "Point de référence {} retriangulé avec {} visées (±{} m) : largeurs recalculées.".format(
-            edge["name"], len(tri.sightings), measures._num(r["uncertainty"], 2))
+        refused = self._move_edge(edge, axis, t)
+        if refused:
+            self.message = refused
+            return self.status()
+        self.message = "Point de référence {} recalé de {} cm le long de la droite de mesure.".format(
+            edge["name"], measures._num(abs(t) * 100, 0))
+        if m is not None:
+            self.message += " " + m.status()
         return self.status()
+
+    def _move_edge(self, edge, axis, d):
+        """Point de référence déplacé de d m le long de la droite de mesure, ses largeurs suivent.
+        Retourne le texte du refus (au-delà d'un bord : remis en place), sinon None."""
+        mates = [w for w in self._widths() if w.edge is edge]
+        widths.move_edge(edge, axis, d)
+        self._edge_moved(edge, mates)
+        if any(w.error or w.result is None or w.result["value"] < widths.MIN_WIDTH for w in mates):
+            widths.move_edge(edge, axis, -d)
+            self._edge_moved(edge, mates)
+            return "Le point de référence ne passe pas au-delà du bord."
+        return None
 
     def nudge_point(self, key):
         """Flèches du clavier sur le point sélectionné (key : "left", "right", "up", "down"),
@@ -525,22 +544,22 @@ class Session:
         if self.width_sel is None:
             return self.status()
         m, index = self.width_sel
-        d = self._nudge_sign(m, index, key) * NUDGE  # le long de widths.perpendicular(axe)
         if index == 1:
+            d = self._nudge_sign(m.result["points"][1], m.road["axis"], key) * NUDGE
             m.nudge(d * m.side())  # vers l'extérieur du point de référence : plus large
             self.message = m.status()
         else:
-            edge = m.edge
-            mates = [w for w in self._widths() if w.edge is edge]
-            widths.move_edge(edge, m.road["axis"], d)
-            self._edge_moved(edge, mates)
-            if any(w.error or w.result["value"] < widths.MIN_WIDTH for w in mates):
-                widths.move_edge(edge, m.road["axis"], -d)  # au-delà d'un bord : refusé
-                self._edge_moved(edge, mates)
-                self.message = "Le point de référence ne passe pas au-delà du bord."
+            edge, axis = self._sel_edge()
+            if axis is None:
+                self.message = "Axe de la route en cours de lecture (BD TOPO) : réessayez dans un instant."
+                return self.status()
+            d = self._nudge_sign((edge["lon"], edge["lat"]), axis, key) * NUDGE  # le long de perpendicular(axe)
+            refused = self._move_edge(edge, axis, d)
+            if refused:
+                self.message = refused
             else:
-                self.message = "Point de référence {} déplacé de 1 cm {}. {}".format(
-                    edge["name"], NUDGE_WORDS[key], m.status())
+                self.message = "Point de référence {} déplacé de 1 cm {}.{}".format(
+                    edge["name"], NUDGE_WORDS[key], " " + m.status() if m is not None else "")
         self.message += " Flèches : encore 1 cm ; clic : recaler ; Entrée : terminer."
         return self.status()
 
@@ -550,15 +569,15 @@ class Session:
         if self.width_sel is not None:
             m = self.width_sel[0]
             self.width_sel = None
-            self.message = m.status() if m.result else ""
+            self.message = m.status() if m is not None and m.result else ""
         return self.status()
 
-    def _nudge_sign(self, m, index, key):
-        """Sens (+1 ou -1, le long de widths.perpendicular(axe)) qui déplace le point n° index
-        de la largeur m vers la droite (ou s'éloigne de la caméra) sur la photo affichée."""
+    def _nudge_sign(self, point, axis, key):
+        """Sens (+1 ou -1, le long de widths.perpendicular(axis)) qui déplace point (lon, lat)
+        vers la droite (ou s'éloigne de la caméra) sur la photo affichée."""
         lon, lat = (float(v) for v in self.item["geometry"]["coordinates"][:2])
-        x, y = triangulation._local(*m.result["points"][index], lon, lat)
-        ux, uy = widths.perpendicular(m.road["axis"])
+        x, y = triangulation._local(*point, lon, lat)
+        ux, uy = widths.perpendicular(axis)
         if key in ("up", "down"):
             sign = 1 if x * ux + y * uy > 0 else -1  # +u éloigne de la caméra
         else:
@@ -799,11 +818,10 @@ class Session:
             return self.message
         if self.width_sel is not None:
             if self.width_sel[1] == 0:
-                return ("Point de référence {} sélectionné : cliquez-le à nouveau depuis cette photo, il sera "
-                        "retriangulé avec ses autres visées ; flèches du clavier : 1 cm le long de la droite "
-                        "(← → dans la photo, ↑ ↓ en s'éloignant ou en se rapprochant) ; Entrée pour "
-                        "terminer.").format(
-                    self.width_sel[0].edge.get("name", ""))
+                return ("Point de référence {} sélectionné : cliquez sa position exacte, depuis cette photo ou une "
+                        "autre (seule la direction compte, il reste sur la droite de mesure) ; flèches du clavier : "
+                        "1 cm le long de la droite (← → dans la photo, ↑ ↓ en s'éloignant ou en se rapprochant) ; "
+                        "Entrée pour terminer.").format(self._sel_edge()[0].get("name", ""))
             return ("Bord de la largeur sélectionné : cliquez sa position exacte, depuis cette photo ou une autre "
                     "(seule la direction compte, il reste sur la droite de mesure) ; flèches du clavier : 1 cm le "
                     "long de la droite (← → dans la photo, ↑ ↓ en s'éloignant ou en se rapprochant) ; Entrée "

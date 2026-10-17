@@ -65,7 +65,7 @@ Pendant les visées, un clic dans la photo vise l'objet (croix bleue) ; les flè
 
 **Recaler un point** : un clic (gauche ou droit) sur sa croix le sélectionne (cercle jaune), puis :
 
-- clic : nouvelle position (bord d'une largeur : nouvelle direction ; point de référence d'une largeur : visée de plus, il est retriangulé ; hauteur : sur la photo de la mesure) ;
+- clic : nouvelle position (largeur : bord ou point de référence, là où la direction du clic coupe la droite de mesure, dont ils ne sortent jamais ; le point de référence se recale ainsi dès qu'il est validé ; hauteur : sur la photo de la mesure) ;
 - flèches du clavier, par pas de 1 cm : largeur, le long de la droite de mesure (← → dans le sens vu sur la photo, ↑ ↓ en s'éloignant ou en se rapprochant de la caméra) ; hauteur, ↑ ↓ montent ou descendent le point ;
 - **Entrée** pour terminer.
 
